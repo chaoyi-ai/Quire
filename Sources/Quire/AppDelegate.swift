@@ -26,23 +26,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async { ThemeManager.shared.startWatchingUserThemes() }
     }
 
-    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool {
-        // 阅读器：无文档时弹开文件面板，而不是空白窗口
-        false
+    /// 阅读器：无文档启动时弹开文件面板，而不是空白窗口（系统只在没有文件参数时调用）
+    func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        // 命令行传了路径的话由 didFinishLaunching 处理
+        if !CommandLine.arguments.dropFirst().filter({ !$0.hasPrefix("-") }).isEmpty { return true }
+        NSDocumentController.shared.openDocument(nil)
+        return true
     }
 
-    func applicationDidBecomeActive(_ notification: Notification) {
-        if NSDocumentController.shared.documents.isEmpty, NSApp.windows.allSatisfy({ !$0.isVisible }) {
-            // 首次激活且没有文档：打开文件面板（只做一次）
-            if !didShowInitialOpen {
-                didShowInitialOpen = true
-                if CommandLine.arguments.dropFirst().filter({ !$0.hasPrefix("-") }).isEmpty {
-                    NSDocumentController.shared.openDocument(nil)
-                }
-            }
-        }
+    /// Dock 点击且无窗口：弹开文件面板
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { NSDocumentController.shared.openDocument(nil) }
+        return false
     }
-    private var didShowInitialOpen = false
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 

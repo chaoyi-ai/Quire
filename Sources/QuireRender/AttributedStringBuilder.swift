@@ -131,7 +131,7 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         para.baseFont = font; para.color = style.heading
         let ic = InlineContext(para: para)
         let start = out.length
-        if let marker = ctx.marker, ctx.isFirstInItem { out.append(marker); appendRun("\t", into: out, ctx: ic) }
+        if let marker = ctx.marker, ctx.isFirstInItem { appendMarker(marker, into: out, para: para); appendRun("\t", into: out, ctx: ic) }
         appendInlines(inlines, into: out, ctx: ic)
         appendRun("\n", into: out, ctx: ic)
         out.addAttribute(QuireAttribute.headingID, value: id, range: NSRange(location: start, length: out.length - start))
@@ -142,11 +142,18 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         let para = paragraphContext(role: ctx.listDepth > 0 ? .listItem : .body, psKey: psKey, ps: ps, ctx: ctx)
         let ic = InlineContext(para: para)
         if let marker = ctx.marker, ctx.isFirstInItem {
-            out.append(marker)
+            appendMarker(marker, into: out, para: para)
             appendRun("\t", into: out, ctx: ic)
         }
         appendInlines(inlines, into: out, ctx: ic)
         appendRun("\n", into: out, ctx: ic)
+    }
+
+    /// 列表标记必须带上所在段落的段落样式（TextKit 取段首字符的样式），否则整段缩进/制表位失效
+    private func appendMarker(_ marker: NSAttributedString, into out: NSMutableAttributedString, para: ParagraphContext) {
+        let start = out.length
+        out.append(marker)
+        out.addAttributes(para.base, range: NSRange(location: start, length: marker.length)) // 1–3 个字符，便宜
     }
 
     private func bodyParagraphStyle(ctx: BlockContext) -> (String, NSParagraphStyle) {
@@ -244,8 +251,10 @@ public final class AttributedStringBuilder: @unchecked Sendable {
             p.tabStops = []; p.defaultTabInterval = style.codeFont.pointSize * 0.6 * 4
         }
         if let marker = ctx.marker, ctx.isFirstInItem {
-            out.append(marker)
-            out.append(NSAttributedString(string: "\n", attributes: [.paragraphStyle: bodyParagraphStyle(ctx: ctx).1, .font: style.bodyFont]))
+            let (psKey, bps) = bodyParagraphStyle(ctx: ctx)
+            let mpara = paragraphContext(role: .listItem, psKey: psKey, ps: bps, ctx: ctx)
+            appendMarker(marker, into: out, para: mpara)
+            appendRun("\n", into: out, ctx: InlineContext(para: mpara))
         }
         let attrs = codeAttributes(role: role, ps: ps, language: language, ctx: ctx)
         let plain = attrs[0]
@@ -472,8 +481,13 @@ public final class AttributedStringBuilder: @unchecked Sendable {
             if raw.lowercased().hasPrefix("<br") { appendRun("\u{2028}", into: out, ctx: ctx) }
             else { appendRun(raw, into: out, ctx: ctx, muted: true) }
         case .footnoteReference(let label):
+            // 用 baselineOffset + 小字号，而不是 legacy 的 .superscript（后者会干扰同一行的删除线绘制）
             var a = ctx.para.base
-            a[.font] = font(for: ctx); a[.superscript] = 1; a[.foregroundColor] = style.accent
+            let f = font(for: ctx)
+            a[.font] = NSFont(descriptor: f.fontDescriptor, size: (f.pointSize * 0.7).rounded()) ?? f
+            a[.baselineOffset] = (f.pointSize * 0.35).rounded()
+            a[.foregroundColor] = style.accent
+            a[.link] = URL(string: "#fn-\(label)") ?? "#fn-\(label)"
             out.append(NSAttributedString(string: label, attributes: a))
         }
     }

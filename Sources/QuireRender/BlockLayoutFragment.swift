@@ -21,7 +21,8 @@ public final class BlockLayoutFragment: NSTextLayoutFragment {
         guard let style else { return r }
         // 片段自身坐标系（原点 = frame.origin）：覆盖整个片段框并外扩内边距，装饰才不会被裁掉
         let pad = style.codeBlockPadding + 2
-        let full = CGRect(x: -pad, y: -2, width: layoutFragmentFrame.width + pad * 2, height: layoutFragmentFrame.height + 4)
+        let w = textLayoutManager?.textContainer?.size.width ?? layoutFragmentFrame.width
+        let full = CGRect(x: -pad - layoutFragmentFrame.minX, y: -2, width: w + pad * 2, height: layoutFragmentFrame.height + 4)
         return r.union(full)
     }
 
@@ -31,8 +32,9 @@ public final class BlockLayoutFragment: NSTextLayoutFragment {
         let role = self.role
         let ps = attrs[.paragraphStyle] as? NSParagraphStyle
         let frame = layoutFragmentFrame
-        // 片段坐标：以 point 为原点（对应 frame.origin）
-        let width = frame.width
+        // point 对应 frame.origin，而 frame.minX 通常等于段落缩进；装饰一律以"内容列左缘"为基准：
+        let originX = point.x - frame.minX
+        let width = textLayoutManager?.textContainer?.size.width ?? frame.width
         let height = frame.height
         let quoteDepth = attrs[QuireAttribute.quoteDepth] as? Int ?? 0
 
@@ -44,13 +46,13 @@ public final class BlockLayoutFragment: NSTextLayoutFragment {
             // 竖条起点：段落 headIndent 减去每层缩进
             let baseX = (ps?.headIndent ?? 0) - CGFloat(quoteDepth) * step
             for d in 0..<quoteDepth {
-                let x = point.x + baseX + CGFloat(d) * step
+                let x = originX + baseX + CGFloat(d) * step
                 let barRect = CGRect(x: x, y: point.y, width: style.blockquoteBarWidth, height: height - (ps?.paragraphSpacing ?? 0) * (isLastQuoteParagraph ? 0.5 : 0))
                 context.setFillColor(style.quoteBorder.cgColor)
                 context.fill(barRect)
             }
             if style.quoteBackground.alphaComponent > 0.01 {
-                let x = point.x + baseX
+                let x = originX + baseX
                 let bg = CGRect(x: x, y: point.y, width: width - baseX, height: height - (ps?.paragraphSpacing ?? 0) * (isLastQuoteParagraph ? 0.5 : 0))
                 context.setFillColor(style.quoteBackground.cgColor)
                 context.fill(bg)
@@ -63,7 +65,7 @@ public final class BlockLayoutFragment: NSTextLayoutFragment {
             let spacingBefore = ps?.paragraphSpacingBefore ?? pad
             let spacingAfter = ps?.paragraphSpacing ?? pad
             let left = (ps?.headIndent ?? pad) - pad
-            let rect = CGRect(x: point.x + left,
+            let rect = CGRect(x: originX + left,
                               y: point.y + spacingBefore - pad,
                               width: width - left,
                               height: height - spacingBefore - spacingAfter + pad * 2)
@@ -85,13 +87,13 @@ public final class BlockLayoutFragment: NSTextLayoutFragment {
             }
         case .thematicBreak:
             let y = point.y + height / 2 - (ps?.paragraphSpacing ?? 0) / 2
-            let x0 = point.x + (ps?.headIndent ?? 0)
+            let x0 = originX + (ps?.headIndent ?? 0)
             context.setFillColor(style.border.cgColor)
             context.fill(CGRect(x: x0, y: y.rounded() - 0.5, width: width - (ps?.headIndent ?? 0), height: 1))
         case .heading:
             if let level = attrs[QuireAttribute.headingLevel] as? Int, level <= 2 {
-                let y = point.y + height - (ps?.paragraphSpacing ?? 0) + style.baseSize * 0.2
-                let x0 = point.x + (ps?.headIndent ?? 0)
+                let y = point.y + height - (ps?.paragraphSpacing ?? 0) * 0.5
+                let x0 = originX + (ps?.headIndent ?? 0)
                 context.setFillColor(style.border.cgColor)
                 context.fill(CGRect(x: x0, y: y.rounded() - 0.5, width: width - (ps?.headIndent ?? 0), height: 1))
             }

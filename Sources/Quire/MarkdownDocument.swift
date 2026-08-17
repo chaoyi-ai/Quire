@@ -42,8 +42,7 @@ final class MarkdownDocument: NSDocument {
     override var isDocumentEdited: Bool { false }
 
     override func makeWindowControllers() {
-        let wc = DocumentWindowController(document: self)
-        addWindowController(wc)
+        addWindowController(DocumentWindowController(document: self))
     }
 
     override func read(from data: Data, ofType typeName: String) throws {

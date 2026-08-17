@@ -126,3 +126,12 @@ final class ParserTests: XCTestCase {
         _ = parser.parse(String(repeating: "* ", count: 5000))
     }
 }
+
+extension ParserTests {
+    func testStrikeAfterFootnote() {
+        let doc = parser.parse("正文[^1] 以及 ~~删除~~ 与 *斜体*。\n\n[^1]: x\n")
+        guard case .paragraph(let inl) = doc.blocks[0].kind else { return XCTFail() }
+        XCTAssertTrue(inl.contains(.strikethrough([.text("删除")])), "\(inl)")
+        XCTAssertTrue(inl.contains(.emphasis([.text("斜体")])), "\(inl)")
+    }
+}

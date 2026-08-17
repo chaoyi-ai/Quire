@@ -24,7 +24,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         window.setFrameAutosaveName("QuireDocumentWindow")
         window.isReleasedWhenClosed = false
         super.init(window: window)
-        self.document = document
+        // 注意：不要在这里 self.document = document —— NSDocument.addWindowController 会因"已关联"而跳过登记
         window.delegate = self
 
         // 侧栏 + 内容
