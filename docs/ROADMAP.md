@@ -13,7 +13,7 @@
 | M1 | 阅读器 MVP | 打开 .md，原生渲染全部基础块，代码高亮，多主题，目录，自动重载，查找 | ✅ 完成 |
 | M2 | 表格 + Mermaid | 原生表格视图，Mermaid 离屏渲染 + 缓存，更多语言，代码块工具 | ✅ 完成（行号/超长行滚动移入 M4） |
 | M3 | 编辑器 | 源码编辑器 + 高亮，分栏同步预览，增量渲染，保存/撤销/自动保存 | ✅ 完成 |
-| M4 | 性能与打磨 | 基准门禁，内存 / 启动优化，大文件模式，导出 HTML/PDF，偏好设置，发布 0.1 | 进行中 |
+| M4 | 性能与打磨 | 基准门禁，内存 / 启动优化，大文件模式，导出 HTML/PDF，偏好设置，发布 0.1 | ✅ 完成（表格可查找 → M5） |
 | M5 | 可视化编辑 | 行内实时预览编辑，数学公式，脚注/锚点，本地化，Homebrew 分发，发布 1.0 | |
 
 ---
@@ -93,19 +93,21 @@
 
 **验收**：全部 [PERFORMANCE.md](PERFORMANCE.md) 预算达标并进 CI 门禁；导出 HTML/PDF 可用；GitHub Release 附 `Quire.app.zip`。
 
-- [ ] `scripts/bench.sh` 与 CI 门禁（退化 > 10% 失败）
-- [ ] 启动优化：延迟加载主题目录监听 / Mermaid / 偏好；测量 `os_signpost`
-- [ ] 内存优化：渲染块缓存策略、图片缓存上限、Instruments 复核
-- [ ] 大文件模式（> 8 MB）：关闭高亮/Mermaid，提示条
-- [ ] 表格文本可查找（镜像隐藏文本或自定义 finder client）
-- [ ] 导出 HTML（内联主题 CSS）、PDF（原生打印管线）
-- [ ] 偏好设置窗口（SwiftUI 可）：主题对、字体覆盖、行号、链接下划线、自动重载
-- [ ] 应用图标、About、崩溃不丢数据复核
-- [ ] 发布流程：`scripts/release.sh`、GitHub Release、CHANGELOG
+- [x] `scripts/bench.sh` 与 CI 门禁（预算表；基线回归比对待稳定 runner）
+- [x] 启动优化：540 → 350–400 ms（懒建编辑器、同步首帧渲染、无启动动画）；`scripts/bench_launch.sh`
+- [x] 内存复核：40 MB / 90 MB（small / 1 MB）
+- [x] 大文件模式（> 8 MB，可调）：关闭高亮/Mermaid，提示条
+- [ ] 表格文本可查找 → M5
+- [x] 导出 HTML（内联主题 CSS）、PDF（原生打印管线，按块分页）
+- [x] 偏好设置窗口（SwiftUI）：主题对、外观、代码行号、复制按钮、链接下划线、自动重载、大文件阈值、编辑器行号（字体覆盖 → M5）
+- [x] 应用图标、About、autosavesInPlace
+- [x] 发布流程：`scripts/release.sh`、GitHub Release、CHANGELOG
 
 ## M5 · 可视化编辑 → 1.0
 
 - [ ] 行内实时预览模式（光标块显源码，其余渲染）
+- [ ] 表格文本可查找（镜像隐藏文本或自定义 finder client）
+- [ ] 主题级字体覆盖（设置里选字体 / 字号）
 - [ ] 数学公式（评估 SwiftMath 或自绘 KaTeX 子集，不引入 WebView）
 - [ ] 内部锚点跳转 / 相对链接打开 / 图片查看器
 - [ ] 本地化：zh-Hans / en
