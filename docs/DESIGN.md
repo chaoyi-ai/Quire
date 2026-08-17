@@ -36,7 +36,7 @@
 | ID | 决策 | 备选 | 理由 |
 |----|------|------|------|
 | ADR-1 | **正文用 TextKit 2 原生渲染，不用 WKWebView** | WKWebView + HTML/CSS（Typora / MarkText / 大多数工具的做法） | WebKit 一个进程起步 60–100 MB，冷启动慢，主题 = CSS 但一切都隔着一层 IPC；原生渲染让选择/查找/辅助功能/打印/字体渲染都是系统级的，且内存 < 40 MB 可实现。代价：表格 / Mermaid / 数学要自己想办法（见 §6） |
-| ADR-2 | **解析器用 swift-markdown（cmark-gfm 内核）** | 自写解析器；Down（cmark）；Ink | cmark-gfm 是 GitHub 生产级 C 实现，快且符合 GFM 规范；swift-markdown 是 Apple 维护的 Swift AST 封装，自带 Table / Strikethrough / TaskList / 源码位置信息（增量渲染必需）。自写解析器不值得 |
+| ADR-2 | **解析器用 cmark-gfm（C API 直调）** | 自写解析器；swift-markdown；Down（cmark）；Ink | cmark-gfm 是 GitHub 生产级 C 实现，快且符合 GFM 规范，自带 Table / Strikethrough / TaskList / Footnotes / 源码位置。最初用 swift-markdown 封装，实测其中间 AST 层占解析时间 45%（1 MB：136 ms → 直调 42 ms），且不暴露脚注扩展，故改为直接遍历 cmark 节点（ADR-12）。自写解析器不值得 |
 | ADR-3 | **块级增量渲染** | 每次全量重渲染 | 编辑器场景每次击键都全量渲染 1 MB 文档不可接受；按顶级块哈希 diff，只重建变化块的 attributed string 与布局 |
 | ADR-4 | **Mermaid 用惰性离屏 WKWebView 渲染成 SVG，缓存后显示为图片** | 原生实现 Mermaid（工程量巨大）；始终常驻 WebView；JavaScriptCore（Mermaid 需要 DOM，跑不起来） | Mermaid 事实上只有 JS 实现。把 WebView 限制为：文档含 mermaid 块时才创建、全局单例、渲染完空闲 30 s 后销毁、结果按内容哈希落盘缓存。绝大多数文档从不触发 WebKit |
 | ADR-5 | **代码高亮用自研轻量词法器（每语言 <150 行）** | tree-sitter（C + 每语言几百 KB 语法，二进制体积和内存都涨）；Highlightr（highlight.js 跑在 JavaScriptCore 里，慢且占内存） | 阅读器场景不需要语义级高亮；关键字 / 字符串 / 注释 / 数字 / 类型 的词法高亮覆盖 95% 的观感需求。词法器接口设计成可替换，未来 tree-sitter 可作为可选后端 |
@@ -45,6 +45,8 @@
 | ADR-8 | **主题即 JSON 数据** | 硬编码 Swift；CSS | 用户可写、可分享；热切换只需重建 attributed string 属性，不需重新解析 |
 | ADR-9 | **最低 macOS 14** | 12 / 13 | TextKit 2 在 14 才够稳（12/13 的 NSTextView TextKit 2 有大量回退到 TextKit 1 的坑）；Swift 6 并发 API 完整 |
 | ADR-10 | **文件监控用 DispatchSource，不轮询** | Timer 轮询 mtime | 零空闲 CPU |
+| ADR-11 | **属性字符串 run 追加走 ObjC 直通（`CQuireAttr`），属性字典预先 uniqued 并缓存** | 纯 Swift `NSAttributedString(string:attributes:)` | 实测：Swift 侧每个 run 要把 `[Key: Any]` 桥接为 NSDictionary 再 uniquing 哈希，1.5 µs/run；ObjC 直通 + 预 uniqued 字典 + `replaceCharacters/setAttributes` 为 0.25 µs/run（6×）。1 MB 文档 ≈ 20 万 run，渲染从 527 ms 降到 109 ms。同时严禁"先 append 再回头 addAttribute(range:)"（O(runs) 字典合并） |
+| ADR-12 | **不经 swift-markdown，直接遍历 cmark-gfm 节点** | swift-markdown Swift AST | 见 ADR-2：少一层 AST 拷贝，解析 3× 提速，且拿到 footnotes；类型判断对扩展节点（table / strikethrough / tasklist）用 `cmark_node_get_type_string` |
 
 ## 4. 架构分层
 
@@ -63,7 +65,7 @@
 │  Theme 模型 + 加载/校验 · SyntaxHighlighter + Lexers          │
 │  Outline(TOC) 提取 · FrontMatter · 大纲/查找索引               │
 ├────────────────────────────────────────────────────────────┤
-│  swift-markdown / cmark-gfm (C)                             │
+│  cmark-gfm (C, GitHub 维护 / Apple fork)  ·  CQuireAttr (ObjC 直通) │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -74,6 +76,7 @@
 | Target | 类型 | 说明 |
 |--------|------|------|
 | `QuireCore` | library | 纯逻辑；单元测试覆盖主体 |
+| `CQuireAttr` | C/ObjC | 属性字符串 run 追加直通（约 40 行，见 ADR-11） |
 | `QuireRender` | library | AppKit 渲染层；快照测试（后期） |
 | `Quire` | executable | App 壳 |
 | `quire-bench` | executable | 性能基准 CLI（解析/渲染/高亮），CI 中跑 |

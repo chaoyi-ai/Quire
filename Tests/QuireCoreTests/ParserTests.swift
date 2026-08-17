@@ -107,6 +107,18 @@ final class ParserTests: XCTestCase {
         XCTAssertTrue(BlockDiff.compute(old: old, new: old).isEmpty)
     }
 
+    func testFootnotes() {
+        let doc = parser.parse("正文[^1] 和 [^note]。\n\n[^1]: 第一条脚注。\n[^note]: 第二条，**粗体**。\n")
+        guard case .paragraph(let inl) = doc.blocks[0].kind else { return XCTFail() }
+        // cmark-gfm 把引用按出现顺序重编号；定义随之编号并挪到文末
+        XCTAssertTrue(inl.contains(.footnoteReference(label: "1")))
+        XCTAssertTrue(inl.contains(.footnoteReference(label: "2")))
+        let defs = doc.blocks.compactMap { b -> String? in if case .footnoteDefinition(let l, _) = b.kind { l } else { nil } }
+        XCTAssertEqual(defs, ["1", "2"])
+        guard case .footnoteDefinition(_, let blocks) = doc.blocks[2].kind, case .paragraph(let p) = blocks[0].kind else { return XCTFail() }
+        XCTAssertTrue(p.contains(.strong([.text("粗体")])))
+    }
+
     func testEmptyAndWeirdInput() {
         XCTAssertTrue(parser.parse("").blocks.isEmpty)
         XCTAssertEqual(parser.parse("---\n").blocks.count, 1) // 单独 --- 是分割线

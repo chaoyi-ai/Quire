@@ -1,2 +1,139 @@
 import Foundation
-print("quire-bench")
+import QuireCore
+import QuireRender
+
+// quire-bench：性能基准 CLI。输出 JSON 到 stdout，人类可读摘要到 stderr。
+// 用法：quire-bench [all|parse|highlight|themes|render|full|theme|incremental|gen <dir>] [--iterations N]
+
+let args = Array(CommandLine.arguments.dropFirst())
+let command = args.first ?? "all"
+var iterations = 5
+if let i = args.firstIndex(of: "--iterations"), i + 1 < args.count, let n = Int(args[i + 1]) { iterations = n }
+
+struct Result: Encodable {
+    var name: String
+    var bytes: Int
+    var medianMs: Double
+    var minMs: Double
+    var throughputMBps: Double
+    var note: String?
+}
+var results: [Result] = []
+
+@MainActor @discardableResult
+func measure(_ name: String, bytes: Int, note: String? = nil, _ body: () -> Void) -> Result {
+    var times: [Double] = []
+    body() // 预热
+    for _ in 0..<iterations {
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        body()
+        let t1 = DispatchTime.now().uptimeNanoseconds
+        times.append(Double(t1 - t0) / 1_000_000)
+    }
+    times.sort()
+    let median = times[times.count / 2]
+    let r = Result(name: name, bytes: bytes, medianMs: median, minMs: times[0], throughputMBps: Double(bytes) / 1_048_576 / (median / 1000), note: note)
+    results.append(r)
+    FileHandle.standardError.write("\(name.padding(toLength: 28, withPad: " ", startingAt: 0)) \(String(format: "%8.2f ms", median))  (min \(String(format: "%.2f", times[0])))  \(String(format: "%.1f MB/s", r.throughputMBps))\n".data(using: .utf8)!)
+    return r
+}
+
+let large = FixtureGenerator.mixed(targetBytes: 1_048_576)
+let medium = FixtureGenerator.mixed(targetBytes: 200 * 1024, seedOffset: 7)
+let small = FixtureGenerator.mixed(targetBytes: 20 * 1024, seedOffset: 3)
+let codeHeavy = FixtureGenerator.codeHeavy(targetBytes: 500 * 1024)
+let tableHeavy = FixtureGenerator.tableHeavy(targetBytes: 200 * 1024)
+
+let parser = MarkdownParser()
+let highlighter = SyntaxHighlighter()
+
+@MainActor func runParse() {
+    measure("parse/large-1mb", bytes: large.utf8.count) { _ = parser.parse(large) }
+    measure("parse/medium-200k", bytes: medium.utf8.count) { _ = parser.parse(medium) }
+    measure("parse/small-20k", bytes: small.utf8.count) { _ = parser.parse(small) }
+    measure("parse/table-heavy", bytes: tableHeavy.utf8.count) { _ = parser.parse(tableHeavy) }
+}
+
+@MainActor func runHighlight() {
+    let sw = String(repeating: FixtureGenerator.codeSwift + "\n", count: 800)
+    let js = String(repeating: FixtureGenerator.codeJS + "\n", count: 1200)
+    let py = String(repeating: FixtureGenerator.codePy + "\n", count: 1200)
+    let json = String(repeating: FixtureGenerator.codeJSON + "\n", count: 2000)
+    measure("highlight/swift", bytes: sw.utf8.count) { _ = highlighter.highlight(sw, language: "swift") }
+    measure("highlight/javascript", bytes: js.utf8.count) { _ = highlighter.highlight(js, language: "javascript") }
+    measure("highlight/python", bytes: py.utf8.count) { _ = highlighter.highlight(py, language: "python") }
+    measure("highlight/json", bytes: json.utf8.count) { _ = highlighter.highlight(json, language: "json") }
+    // 整份 code-heavy 文档：解析 + 全部代码块高亮
+    measure("highlight/code-heavy-doc", bytes: codeHeavy.utf8.count) {
+        let doc = parser.parse(codeHeavy)
+        for b in doc.blocks { if case .codeBlock(let l, let c) = b.kind { _ = highlighter.highlight(c, language: l) } }
+    }
+}
+
+@MainActor func runThemes() {
+    measure("themes/load-builtin", bytes: 0) { _ = ThemeStore.loadBuiltIn() }
+}
+
+@MainActor
+func runRender() {
+    let catalog = ThemeStore.loadBuiltIn()
+    guard let light = catalog.theme(id: "github-light"), let dark = catalog.theme(id: "github-dark") else {
+        FileHandle.standardError.write("主题缺失，跳过 render\n".data(using: .utf8)!); return
+    }
+    let doc = parser.parse(large)
+    let renderer = DocumentRenderer(theme: light)
+    measure("render/large-1mb", bytes: large.utf8.count) { _ = renderer.render(doc) }
+    measure("full/large-1mb (parse+render)", bytes: large.utf8.count) { _ = renderer.render(parser.parse(large)) }
+    let docMedium = parser.parse(medium)
+    measure("full/medium-200k", bytes: medium.utf8.count) { _ = renderer.render(parser.parse(medium)) }
+    _ = docMedium
+    // 主题切换：不重解析，重渲染
+    let rendered = renderer.render(doc)
+    let darkRenderer = DocumentRenderer(theme: dark)
+    measure("theme/switch-large-1mb", bytes: large.utf8.count) { _ = darkRenderer.rerender(rendered, document: doc) }
+    // 增量：改中间一段
+    var lines = large.components(separatedBy: "\n")
+    lines[lines.count / 2] += " 修改"
+    let edited = lines.joined(separator: "\n")
+    let editedDoc = parser.parse(edited)
+    measure("incremental/edit-middle-1mb", bytes: large.utf8.count) {
+        let diff = BlockDiff.compute(old: doc.blocks, new: editedDoc.blocks)
+        _ = renderer.render(blocks: Array(editedDoc.blocks[diff.newChanged]))
+    }
+}
+
+func generate(to dir: String) throws {
+    let base = URL(fileURLWithPath: dir)
+    try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+    try large.write(to: base.appendingPathComponent("large-1mb.md"), atomically: true, encoding: .utf8)
+    try medium.write(to: base.appendingPathComponent("medium.md"), atomically: true, encoding: .utf8)
+    try codeHeavy.write(to: base.appendingPathComponent("code-heavy.md"), atomically: true, encoding: .utf8)
+    try tableHeavy.write(to: base.appendingPathComponent("table-heavy.md"), atomically: true, encoding: .utf8)
+    try FixtureGenerator.mermaidDoc(count: 20).write(to: base.appendingPathComponent("mermaid.md"), atomically: true, encoding: .utf8)
+    FileHandle.standardError.write("✓ 已生成到 \(dir)\n".data(using: .utf8)!)
+}
+
+switch command {
+case "parse": runParse()
+case "highlight": runHighlight()
+case "themes": runThemes()
+case "render", "full", "theme", "incremental": runRender()
+case "gen":
+    let dir = args.count > 1 ? args[1] : "Tests/QuireCoreTests/Fixtures"
+    try generate(to: dir)
+    exit(0)
+case "all":
+    runParse(); runHighlight(); runThemes(); runRender()
+default:
+    FileHandle.standardError.write("未知命令 \(command)\n".data(using: .utf8)!); exit(2)
+}
+
+let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+let out = try enc.encode(["iterations": AnyEncodable(iterations), "results": AnyEncodable(results)])
+print(String(decoding: out, as: UTF8.self))
+
+struct AnyEncodable: Encodable {
+    let value: any Encodable
+    init(_ v: any Encodable) { value = v }
+    func encode(to encoder: Encoder) throws { try value.encode(to: encoder) }
+}

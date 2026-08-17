@@ -1,0 +1,513 @@
+import AppKit
+import QuireCore
+import CQuireAttr
+
+/// Block / Inline → NSAttributedString。无共享可变状态（缓存有锁），可在后台线程使用。
+///
+/// 性能原则（实测驱动，见 ADR-11）：
+/// 1. **只做顺序 append**，不在已构建范围上回头 addAttribute（O(runs) 字典合并）。
+/// 2. 每个 run 的属性字典**预先 uniqued 并缓存**，通过 `QAAppendRun` 走 ObjC 直通，不经 Swift 字典桥接。
+public final class AttributedStringBuilder: @unchecked Sendable {
+    public let style: RenderStyle
+    public let highlighter: SyntaxHighlighter
+
+    /// uniqued 的属性字典（NSAttributeDictionary，按引用复用）
+    typealias Attrs = AnyObject
+
+    private var paragraphStyleCache: [String: NSParagraphStyle] = [:]
+    private var attrsCache: [RunKey: Attrs] = [:]
+    private var checkboxCache: [Bool: NSAttributedString] = [:]
+    private var codeAttrCache: [String: [Attrs]] = [:]     // 按 TokenKind.tokenIndex 索引
+    private let cacheLock = NSLock()
+
+    public init(style: RenderStyle, highlighter: SyntaxHighlighter = SyntaxHighlighter()) {
+        self.style = style
+        self.highlighter = highlighter
+    }
+
+    // MARK: - 上下文
+
+    struct BlockContext {
+        var listDepth = 0
+        var quoteDepth = 0
+        var indent: CGFloat = 0           // 当前左缩进（列表 + 引用累计）
+        var marker: NSAttributedString?   // 列表项首段的标记（• / 1. / 复选框）
+        var markerWidth: CGFloat = 0
+        var isFirstInItem = false
+    }
+
+    /// 段级上下文：一段内所有 run 共享的属性 + 缓存键
+    struct ParagraphContext {
+        var base: [NSAttributedString.Key: Any]
+        var key: String
+        var quote: Bool
+        var baseFont: NSFont?          // 标题等覆盖字体
+        var color: NSColor?            // 覆盖颜色
+    }
+
+    struct InlineContext {
+        var para: ParagraphContext
+        var bold = false, italic = false, strike = false
+        var link: String? = nil
+        var tooltip: String? = nil
+    }
+
+    struct RunKey: Hashable {
+        var para: String
+        var flags: UInt8      // bold | italic<<1 | strike<<2 | inlineCode<<3 | muted<<4 | link<<5
+    }
+
+    // MARK: - 入口
+
+    /// 渲染一个顶级块。返回的字符串以段落分隔符结尾。
+    public func build(_ block: Block, index: Int) -> NSAttributedString {
+        let out = NSMutableAttributedString()
+        out.beginEditing()
+        append(block, into: out, ctx: BlockContext())
+        out.endEditing()
+        return out
+    }
+
+    // MARK: - 块
+
+    func append(_ block: Block, into out: NSMutableAttributedString, ctx: BlockContext) {
+        switch block.kind {
+        case .heading(let level, let inlines, let id):
+            appendHeading(level: level, inlines: inlines, id: id, into: out, ctx: ctx)
+        case .paragraph(let inlines):
+            appendParagraph(inlines, into: out, ctx: ctx)
+        case .codeBlock(let lang, let code):
+            appendCode(code, language: lang, role: .codeBlock, into: out, ctx: ctx)
+        case .mermaid(let source):
+            appendCode(source, language: "mermaid", role: .mermaid, into: out, ctx: ctx)
+        case .html(let html):
+            appendCode(html, language: "html", role: .htmlBlock, into: out, ctx: ctx)
+        case .frontMatter(let yaml):
+            appendCode(yaml, language: "yaml", role: .frontMatter, into: out, ctx: ctx)
+        case .blockQuote(let blocks):
+            var c = ctx
+            c.quoteDepth += 1
+            c.indent += style.blockquoteBarWidth + style.baseSize * 0.9
+            c.marker = nil; c.isFirstInItem = false
+            for (i, b) in blocks.enumerated() {
+                var cc = c
+                if i == 0, ctx.isFirstInItem { cc.marker = ctx.marker; cc.markerWidth = ctx.markerWidth; cc.isFirstInItem = true }
+                append(b, into: out, ctx: cc)
+            }
+        case .list(let ordered, let start, let items):
+            appendList(ordered: ordered, start: start, items: items, into: out, ctx: ctx)
+        case .thematicBreak:
+            appendThematicBreak(into: out, ctx: ctx)
+        case .image(let src, let title, let alt):
+            appendImageBlock(source: src, title: title, alt: alt, into: out, ctx: ctx)
+        case .table(let table):
+            appendTablePlaceholder(table, into: out, ctx: ctx)
+        case .footnoteDefinition(_, let blocks):
+            for b in blocks { append(b, into: out, ctx: ctx) }
+        }
+    }
+
+    /// 段级基础属性 + 缓存键
+    private func paragraphContext(role: BlockRole, psKey: String, ps: NSParagraphStyle, ctx: BlockContext, extra: [NSAttributedString.Key: Any] = [:], extraKey: String = "") -> ParagraphContext {
+        var a: [NSAttributedString.Key: Any] = [.paragraphStyle: ps, QuireAttribute.blockRole: role.rawValue]
+        if ctx.quoteDepth > 0 { a[QuireAttribute.quoteDepth] = ctx.quoteDepth }
+        if ctx.listDepth > 0 { a[QuireAttribute.listDepth] = ctx.listDepth }
+        for (k, v) in extra { a[k] = v }
+        return ParagraphContext(base: a, key: "\(psKey)|\(role.rawValue)|\(ctx.quoteDepth)|\(ctx.listDepth)|\(extraKey)", quote: ctx.quoteDepth > 0, baseFont: nil, color: nil)
+    }
+
+    private func appendHeading(level: Int, inlines: [Inline], id: String, into out: NSMutableAttributedString, ctx: BlockContext) {
+        let font = style.headingFont(level: level)
+        let psKey = "h\(level)-\(ctx.indent)-\(ctx.quoteDepth)"
+        let ps = paragraphStyle(key: psKey) { p in
+            let lh = (font.pointSize * 1.3).rounded()
+            p.minimumLineHeight = lh; p.maximumLineHeight = lh
+            p.paragraphSpacingBefore = (style.baseSize * CGFloat(style.theme.typography.headingSpacingBefore) * (level == 1 ? 1.0 : 0.8)).rounded()
+            p.paragraphSpacing = (style.baseSize * 0.6).rounded()
+            p.headIndent = ctx.indent; p.firstLineHeadIndent = ctx.indent
+        }
+        // 标题 id 每个都不同 → 不进缓存键；作为 extra 属性单独 addAttribute（一段一次，便宜）
+        var para = paragraphContext(role: .heading, psKey: psKey, ps: ps, ctx: ctx, extra: [QuireAttribute.headingLevel: level], extraKey: "L\(level)")
+        para.baseFont = font; para.color = style.heading
+        let ic = InlineContext(para: para)
+        let start = out.length
+        if let marker = ctx.marker, ctx.isFirstInItem { out.append(marker); appendRun("\t", into: out, ctx: ic) }
+        appendInlines(inlines, into: out, ctx: ic)
+        appendRun("\n", into: out, ctx: ic)
+        out.addAttribute(QuireAttribute.headingID, value: id, range: NSRange(location: start, length: out.length - start))
+    }
+
+    private func appendParagraph(_ inlines: [Inline], into out: NSMutableAttributedString, ctx: BlockContext) {
+        let (psKey, ps) = bodyParagraphStyle(ctx: ctx)
+        let para = paragraphContext(role: ctx.listDepth > 0 ? .listItem : .body, psKey: psKey, ps: ps, ctx: ctx)
+        let ic = InlineContext(para: para)
+        if let marker = ctx.marker, ctx.isFirstInItem {
+            out.append(marker)
+            appendRun("\t", into: out, ctx: ic)
+        }
+        appendInlines(inlines, into: out, ctx: ic)
+        appendRun("\n", into: out, ctx: ic)
+    }
+
+    private func bodyParagraphStyle(ctx: BlockContext) -> (String, NSParagraphStyle) {
+        let hasMarker = ctx.marker != nil && ctx.isFirstInItem
+        let key = "p-\(ctx.indent)-\(ctx.quoteDepth)-\(ctx.listDepth)-\(hasMarker ? ctx.markerWidth : 0)"
+        let ps = paragraphStyle(key: key) { p in
+            p.minimumLineHeight = style.lineHeight; p.maximumLineHeight = style.lineHeight
+            p.paragraphSpacing = ctx.listDepth > 0 ? (style.paragraphSpacing * 0.25).rounded() : style.paragraphSpacing
+            p.headIndent = ctx.indent
+            p.firstLineHeadIndent = hasMarker ? ctx.indent - ctx.markerWidth : ctx.indent
+            if hasMarker { p.tabStops = [NSTextTab(textAlignment: .left, location: ctx.indent)]; p.defaultTabInterval = ctx.indent }
+        }
+        return (key, ps)
+    }
+
+    private func appendList(ordered: Bool, start: Int, items: [ListItem], into out: NSMutableAttributedString, ctx: BlockContext) {
+        let depth = ctx.listDepth + 1
+        let markerWidth = (style.baseSize * 1.75).rounded()
+        let indent = ctx.indent + markerWidth
+        let markerFont = style.bodyFont
+        let bulletChars = ["•", "◦", "▪"]
+        let color: NSColor = ctx.quoteDepth > 0 ? style.quoteForeground : style.foreground
+        let bullet = NSAttributedString(string: bulletChars[(depth - 1) % bulletChars.count], attributes: [.font: markerFont, .foregroundColor: color])
+        for (i, item) in items.enumerated() {
+            let marker: NSAttributedString
+            if let cb = item.checkbox {
+                marker = checkboxAttachment(checked: cb == .checked, font: markerFont)
+            } else if ordered {
+                marker = NSAttributedString(string: "\(start + i).", attributes: [.font: markerFont, .foregroundColor: color])
+            } else {
+                marker = bullet
+            }
+            var c = ctx
+            c.listDepth = depth; c.indent = indent; c.marker = marker; c.markerWidth = markerWidth
+            let blocks = item.blocks.isEmpty ? [Block(kind: .paragraph([]))] : item.blocks
+            for (j, b) in blocks.enumerated() {
+                var cc = c
+                cc.isFirstInItem = (j == 0)
+                if j > 0 { cc.marker = nil }
+                append(b, into: out, ctx: cc)
+            }
+        }
+    }
+
+    private func checkboxAttachment(checked: Bool, font: NSFont) -> NSAttributedString {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        if let c = checkboxCache[checked] { return c }
+        let name = checked ? "checkmark.square.fill" : "square"
+        let size = font.pointSize * 0.95
+        let att = NSTextAttachment()
+        if let img = NSImage(systemSymbolName: name, accessibilityDescription: checked ? "已完成" : "未完成")?
+            .withSymbolConfiguration(.init(pointSize: size, weight: .regular)) {
+            let tinted = img.tinted(checked ? style.accent : style.muted)
+            att.image = tinted
+            let h = tinted.size.height, w = tinted.size.width
+            att.bounds = CGRect(x: 0, y: (font.capHeight - h) / 2 + 1, width: w, height: h)
+        }
+        let s = NSMutableAttributedString(attachment: att)
+        s.addAttributes([QuireAttribute.taskChecked: checked, .font: font], range: NSRange(location: 0, length: s.length))
+        checkboxCache[checked] = s
+        return s
+    }
+
+    /// 代码块每种 token 的 uniqued 属性字典，按 (role, indent, quote, lang) 缓存；下标 = TokenKind.tokenIndex
+    private func codeAttributes(role: BlockRole, ps: NSParagraphStyle, language: String?, ctx: BlockContext) -> [Attrs] {
+        let key = "\(role.rawValue)-\(ctx.indent)-\(ctx.quoteDepth)-\(language ?? "")"
+        cacheLock.lock()
+        if let c = codeAttrCache[key] { cacheLock.unlock(); return c }
+        cacheLock.unlock()
+        var base: [NSAttributedString.Key: Any] = [.paragraphStyle: ps, QuireAttribute.blockRole: role.rawValue, .font: style.codeFont]
+        if ctx.quoteDepth > 0 { base[QuireAttribute.quoteDepth] = ctx.quoteDepth }
+        if ctx.listDepth > 0 { base[QuireAttribute.listDepth] = ctx.listDepth }
+        if let language { base[QuireAttribute.codeLanguage] = language }
+        var table: [Attrs] = []
+        table.reserveCapacity(TokenKind.byIndex.count)
+        for k in TokenKind.byIndex {
+            var a = base
+            a[.foregroundColor] = k == .plain ? (role == .frontMatter ? style.muted : style.codeForeground) : style.syntaxColor(k)
+            table.append(QAUniqueAttributes(a as NSDictionary) as AnyObject)
+        }
+        cacheLock.lock(); codeAttrCache[key] = table; cacheLock.unlock()
+        return table
+    }
+
+    private func appendCode(_ code: String, language: String?, role: BlockRole, into out: NSMutableAttributedString, ctx: BlockContext) {
+        let pad = style.codeBlockPadding
+        let ps = paragraphStyle(key: "code-\(ctx.indent)-\(ctx.quoteDepth)") { p in
+            let lh = (style.codeSize * 1.5).rounded()
+            p.minimumLineHeight = lh; p.maximumLineHeight = lh
+            p.paragraphSpacingBefore = pad
+            p.paragraphSpacing = pad + style.paragraphSpacing
+            p.headIndent = ctx.indent + pad; p.firstLineHeadIndent = ctx.indent + pad
+            p.tailIndent = -pad
+            p.lineBreakMode = .byCharWrapping
+            p.tabStops = []; p.defaultTabInterval = style.codeFont.pointSize * 0.6 * 4
+        }
+        if let marker = ctx.marker, ctx.isFirstInItem {
+            out.append(marker)
+            out.append(NSAttributedString(string: "\n", attributes: [.paragraphStyle: bodyParagraphStyle(ctx: ctx).1, .font: style.bodyFont]))
+        }
+        let attrs = codeAttributes(role: role, ps: ps, language: language, ctx: ctx)
+        let plain = attrs[0]
+        let start = out.length
+        // 原生 NSString（UTF-16 存储）：后续按 UTF-16 范围操作是 O(1)，避免 Swift String 的索引换算
+        let ns = NSMutableString(string: code.isEmpty ? " " : code)
+        ns.replaceOccurrences(of: "\n", with: String(codeLineSeparator), options: [], range: NSRange(location: 0, length: ns.length))
+        let n = ns.length
+        QAAppendRun(out, ns, plain)
+
+        var tokens: [Token] = []
+        if role != .mermaid, let language, highlighter.supports(language) {
+            tokens = highlighter.highlight(code, language: language) // \n → U+2028 同为 1 单元，偏移一致
+        }
+        if !tokens.isEmpty {
+            // token → 每 UTF-16 单元的 kind（后写覆盖先写：字符串里的转义序列胜出）
+            var kinds = [UInt8](repeating: 0, count: n)
+            for t in tokens where t.kind != .plain {
+                let lo = max(0, t.range.lowerBound), hi = min(n, t.range.upperBound)
+                if lo < hi { let k = UInt8(t.kind.tokenIndex); for i in lo..<hi { kinds[i] = k } }
+            }
+            // 从左到右只覆盖非 plain 的 run：每次 setAttributes 都在 run 表尾部附近分裂，近似 O(1)
+            var runStart = 0
+            var i = 1
+            while i <= n {
+                if i == n || kinds[i] != kinds[runStart] {
+                    let k = kinds[runStart]
+                    if k != 0 { QASetRunAttributes(out, attrs[Int(k)], UInt(start + runStart), UInt(i - runStart)) }
+                    runStart = i
+                }
+                i += 1
+            }
+        }
+        QAAppendRun(out, "\n" as NSString, plain)
+        if role == .mermaid {
+            out.addAttribute(QuireAttribute.mermaidSource, value: code, range: NSRange(location: start, length: out.length - start))
+        }
+    }
+
+    private func appendThematicBreak(into out: NSMutableAttributedString, ctx: BlockContext) {
+        let psKey = "hr-\(ctx.indent)"
+        let ps = paragraphStyle(key: psKey) { p in
+            let h = (style.paragraphSpacing * 2).rounded()
+            p.minimumLineHeight = h; p.maximumLineHeight = h
+            p.paragraphSpacing = style.paragraphSpacing * 0.5
+            p.headIndent = ctx.indent; p.firstLineHeadIndent = ctx.indent
+        }
+        var para = paragraphContext(role: .thematicBreak, psKey: psKey, ps: ps, ctx: ctx)
+        para.color = .clear
+        appendRun("\u{00A0}\n", into: out, ctx: InlineContext(para: para))
+    }
+
+    private func appendImageBlock(source: String?, title: String?, alt: String, into out: NSMutableAttributedString, ctx: BlockContext) {
+        let psKey = "img-\(ctx.indent)-\(title == nil)"
+        let ps = paragraphStyle(key: psKey) { p in
+            p.alignment = .center
+            p.paragraphSpacing = title == nil ? style.paragraphSpacing : 4
+            p.paragraphSpacingBefore = 4
+            p.headIndent = ctx.indent; p.firstLineHeadIndent = ctx.indent
+        }
+        let para = paragraphContext(role: .image, psKey: psKey, ps: ps, ctx: ctx)
+        let ic = InlineContext(para: para)
+        appendImageAttachment(source: source, alt: alt, inline: false, into: out, ctx: ic)
+        appendRun("\n", into: out, ctx: ic)
+        if let title, !title.isEmpty {
+            let cKey = "imgcap-\(ctx.indent)"
+            let cps = paragraphStyle(key: cKey) { p in
+                p.alignment = .center
+                p.paragraphSpacing = style.paragraphSpacing
+                p.headIndent = ctx.indent; p.firstLineHeadIndent = ctx.indent
+            }
+            var cpara = paragraphContext(role: .image, psKey: cKey, ps: cps, ctx: ctx)
+            cpara.baseFont = NSFont(descriptor: style.bodyFont.fontDescriptor, size: (style.baseSize * 0.85).rounded()) ?? style.bodyFont
+            cpara.color = style.muted
+            appendRun(title + "\n", into: out, ctx: InlineContext(para: cpara))
+        }
+    }
+
+    /// 图片附件：占位尺寸，实际图片由 ImageLoader 异步填充
+    private func appendImageAttachment(source: String?, alt: String, inline: Bool, into out: NSMutableAttributedString, ctx: InlineContext) {
+        let att = ImageAttachment()
+        att.source = source
+        att.altText = alt
+        att.isInline = inline
+        let h: CGFloat = inline ? style.baseSize * 1.2 : style.baseSize * 4
+        att.bounds = CGRect(x: 0, y: inline ? -style.baseSize * 0.2 : 0, width: inline ? h : min(style.maxContentWidth * 0.6, 240), height: h)
+        att.image = ImageAttachment.placeholder(size: att.bounds.size, alt: alt, style: style)
+        var a = ctx.para.base
+        a[.font] = font(for: ctx)
+        a[.attachment] = att
+        if let source { a[QuireAttribute.imageSource] = source }
+        out.append(NSAttributedString(string: "\u{FFFC}", attributes: a))
+    }
+
+    /// M1 占位：表格以等宽文本 + 制表位呈现；M2 换成 TableAttachmentView
+    private func appendTablePlaceholder(_ table: TableModel, into out: NSMutableAttributedString, ctx: BlockContext) {
+        let cols = table.columnCount
+        var widths = [Int](repeating: 3, count: cols)
+        func measure(_ row: [[Inline]]) { for (i, c) in row.enumerated() where i < cols { widths[i] = max(widths[i], min(40, c.plainText.count + 2)) } }
+        measure(table.header); table.rows.forEach(measure)
+        let charW = style.codeFont.maximumAdvancement.width * 0.6
+        var stops: [NSTextTab] = []
+        var x: CGFloat = ctx.indent + 8
+        for w in widths { x += CGFloat(w) * charW * 1.05 + 12; stops.append(NSTextTab(textAlignment: .left, location: x)) }
+        let key = "tbl-\(ctx.indent)-\(widths)"
+        let ps = paragraphStyle(key: key) { p in
+            let lh = (style.codeSize * 1.7).rounded()
+            p.minimumLineHeight = lh; p.maximumLineHeight = lh
+            p.tabStops = stops; p.defaultTabInterval = 60
+            p.headIndent = ctx.indent + 8; p.firstLineHeadIndent = ctx.indent + 8
+            p.lineBreakMode = .byTruncatingTail
+        }
+        let lastPS = paragraphStyle(key: key + "-last") { p in
+            p.setParagraphStyle(ps); p.paragraphSpacing = style.paragraphSpacing
+        }
+        let start = out.length
+        let paraNormal = paragraphContext(role: .table, psKey: key, ps: ps, ctx: ctx)
+        let paraLast = paragraphContext(role: .table, psKey: key + "-last", ps: lastPS, ctx: ctx)
+        func line(_ row: [[Inline]], bold: Bool, last: Bool) {
+            var para = last ? paraLast : paraNormal
+            para.baseFont = style.codeFont
+            var ic = InlineContext(para: para); ic.bold = bold
+            for (i, cell) in row.enumerated() where i < cols {
+                if i > 0 { appendRun("\t", into: out, ctx: ic) }
+                appendInlines(cell, into: out, ctx: ic)
+            }
+            appendRun("\n", into: out, ctx: ic)
+        }
+        line(table.header, bold: true, last: table.rows.isEmpty)
+        for (i, r) in table.rows.enumerated() { line(r, bold: false, last: i == table.rows.count - 1) }
+        out.addAttribute(QuireAttribute.table, value: table, range: NSRange(location: start, length: out.length - start))
+    }
+
+    // MARK: - 行内
+
+    func appendInlines(_ inlines: [Inline], into out: NSMutableAttributedString, ctx: InlineContext) {
+        for i in inlines { appendInline(i, into: out, ctx: ctx) }
+    }
+
+    private func font(for ctx: InlineContext) -> NSFont {
+        if let base = ctx.para.baseFont {
+            var f = base
+            if ctx.bold { f = RenderStyle.variant(f, traits: .boldFontMask) }
+            if ctx.italic { f = RenderStyle.variant(f, traits: .italicFontMask) }
+            return f
+        }
+        switch (ctx.bold, ctx.italic) {
+        case (true, true): return style.bodyBoldItalic
+        case (true, false): return style.bodyBold
+        case (false, true): return style.bodyItalic
+        default: return style.bodyFont
+        }
+    }
+
+    /// 取（或建）当前上下文的 uniqued 属性字典
+    private func runAttributes(_ ctx: InlineContext, inlineCode: Bool = false, muted: Bool = false) -> Attrs {
+        var flags: UInt8 = 0
+        if ctx.bold { flags |= 1 }; if ctx.italic { flags |= 2 }; if ctx.strike { flags |= 4 }
+        if inlineCode { flags |= 8 }; if muted { flags |= 16 }; if ctx.link != nil { flags |= 32 }
+        let key = RunKey(para: ctx.para.key + (ctx.para.baseFont.map { "|\($0.fontName)\($0.pointSize)" } ?? "") + (ctx.para.color.map { "|\($0.description)" } ?? ""), flags: flags)
+        cacheLock.lock()
+        if let a = attrsCache[key] { cacheLock.unlock(); return a }
+        cacheLock.unlock()
+
+        var a = ctx.para.base
+        let color: NSColor = ctx.link != nil ? style.accent : (ctx.para.color ?? (ctx.para.quote ? style.quoteForeground : style.foreground))
+        if inlineCode {
+            let base = ctx.para.baseFont.map { NSFont(descriptor: style.inlineCodeFont.fontDescriptor, size: ($0.pointSize * CGFloat(style.theme.typography.codeSize)).rounded()) ?? style.inlineCodeFont } ?? style.inlineCodeFont
+            a[.font] = ctx.bold ? RenderStyle.variant(base, traits: .boldFontMask) : base
+            a[.backgroundColor] = style.inlineCodeBackground
+            a[.foregroundColor] = ctx.link != nil ? style.accent : style.inlineCodeForeground
+        } else if muted {
+            a[.font] = style.inlineCodeFont
+            a[.foregroundColor] = style.muted
+        } else {
+            a[.font] = font(for: ctx)
+            a[.foregroundColor] = color
+        }
+        if ctx.strike { a[.strikethroughStyle] = NSUnderlineStyle.single.rawValue; a[.strikethroughColor] = a[.foregroundColor] }
+        if ctx.link != nil { a[.cursor] = NSCursor.pointingHand }
+        let u = QAUniqueAttributes(a as NSDictionary) as AnyObject
+        cacheLock.lock(); attrsCache[key] = u; cacheLock.unlock()
+        return u
+    }
+
+    /// 追加一个文本 run（链接 / tooltip 作为 extra 属性叠加，不进缓存）
+    private func appendRun(_ s: String, into out: NSMutableAttributedString, ctx: InlineContext, inlineCode: Bool = false, muted: Bool = false) {
+        let attrs = runAttributes(ctx, inlineCode: inlineCode, muted: muted)
+        if let link = ctx.link {
+            let value: Any = URL(string: link) ?? link
+            let start = out.length
+            QAAppendRunWithExtra(out, s as NSString, attrs, .link, value)
+            if let tip = ctx.tooltip { out.addAttribute(.toolTip, value: tip, range: NSRange(location: start, length: out.length - start)) }
+        } else {
+            QAAppendRun(out, s as NSString, attrs)
+        }
+    }
+
+    private func appendInline(_ inline: Inline, into out: NSMutableAttributedString, ctx: InlineContext) {
+        switch inline {
+        case .text(let s):
+            appendRun(s, into: out, ctx: ctx)
+        case .softBreak:
+            appendRun(" ", into: out, ctx: ctx)
+        case .lineBreak:
+            appendRun("\u{2028}", into: out, ctx: ctx)
+        case .emphasis(let c):
+            var x = ctx; x.italic = true; appendInlines(c, into: out, ctx: x)
+        case .strong(let c):
+            var x = ctx; x.bold = true; appendInlines(c, into: out, ctx: x)
+        case .strikethrough(let c):
+            var x = ctx; x.strike = true; appendInlines(c, into: out, ctx: x)
+        case .code(let s):
+            // 前后加窄空格模拟内边距
+            appendRun("\u{2009}\(s)\u{2009}", into: out, ctx: ctx, inlineCode: true)
+        case .link(let dest, let title, let children):
+            var x = ctx; x.link = dest ?? ""
+            if let title, !title.isEmpty { x.tooltip = title }
+            appendInlines(children, into: out, ctx: x)
+        case .image(let src, _, let alt):
+            appendImageAttachment(source: src, alt: alt, inline: true, into: out, ctx: ctx)
+        case .html(let raw):
+            // 行内 HTML：常见 <br> 换行，其他原样弱化显示
+            if raw.lowercased().hasPrefix("<br") { appendRun("\u{2028}", into: out, ctx: ctx) }
+            else { appendRun(raw, into: out, ctx: ctx, muted: true) }
+        case .footnoteReference(let label):
+            var a = ctx.para.base
+            a[.font] = font(for: ctx); a[.superscript] = 1; a[.foregroundColor] = style.accent
+            out.append(NSAttributedString(string: label, attributes: a))
+        }
+    }
+
+    // MARK: - 段落样式缓存
+
+    func paragraphStyle(key: String, _ configure: (NSMutableParagraphStyle) -> Void) -> NSParagraphStyle {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        if let p = paragraphStyleCache[key] { return p }
+        let p = NSMutableParagraphStyle()
+        p.lineBreakStrategy = []
+        configure(p)
+        let frozen = p.copy() as! NSParagraphStyle
+        paragraphStyleCache[key] = frozen
+        return frozen
+    }
+}
+
+extension TokenKind {
+    /// 稳定的小整数索引（用于每字符 kind 数组）；0 = plain
+    static let byIndex: [TokenKind] = [.plain] + TokenKind.allCases.filter { $0 != .plain }
+    private static let indexOf: [TokenKind: Int] = Dictionary(uniqueKeysWithValues: byIndex.enumerated().map { ($1, $0) })
+    var tokenIndex: Int { TokenKind.indexOf[self] ?? 0 }
+}
+
+extension NSImage {
+    func tinted(_ color: NSColor) -> NSImage {
+        let img = NSImage(size: size, flipped: false) { rect in
+            color.set()
+            rect.fill()
+            self.draw(in: rect, from: .zero, operation: .destinationIn, fraction: 1)
+            return true
+        }
+        img.isTemplate = false
+        return img
+    }
+}

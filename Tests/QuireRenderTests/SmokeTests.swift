@@ -1,3 +1,7 @@
 import XCTest
 @testable import QuireRender
-final class RenderSmokeTests: XCTestCase { func testVersion() { XCTAssertFalse(QuireRender.version.isEmpty) } }
+@testable import QuireCore
+
+final class RenderSmokeTests: XCTestCase {
+    func testVersion() { XCTAssertFalse(QuireRenderInfo.version.isEmpty) }
+}

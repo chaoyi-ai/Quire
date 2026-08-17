@@ -12,23 +12,32 @@ let package = Package(
         .executable(name: "quire-bench", targets: ["quire-bench"]),
     ],
     dependencies: [
-        // Apple 维护的 cmark-gfm Swift 封装；非 semver tag，按 swift-6.3.3-RELEASE 的 revision 锁定
+        // cmark-gfm（GitHub 生产级 C 实现，Apple 维护的 fork）。直接走 C API，见 ADR-2 / ADR-12。
+        // gfm 分支无 semver tag，按 revision 锁定（与 swift-markdown swift-6.3.3-RELEASE 所用一致）
         .package(
-            url: "https://github.com/swiftlang/swift-markdown.git",
-            revision: "de3e245b6044386b623ecce11d1ccb5fe766e3db"
+            url: "https://github.com/swiftlang/swift-cmark.git",
+            revision: "7898f1b3e4befeecee56cb4a3bc8eebd2cb63219"
         ),
     ],
     targets: [
         // 纯 Foundation：解析 · 块模型 · 增量 diff · 主题 · 高亮 · 大纲
         .target(
             name: "QuireCore",
-            dependencies: [.product(name: "Markdown", package: "swift-markdown")],
+            dependencies: [
+                .product(name: "cmark-gfm", package: "swift-cmark"),
+                .product(name: "cmark-gfm-extensions", package: "swift-cmark"),
+            ],
             resources: [.copy("Themes")]
+        ),
+        // ObjC 直通：属性字符串 run 追加（避免 Swift 字典桥接，6× 提速；见 ADR-11）
+        .target(
+            name: "CQuireAttr",
+            path: "Sources/CQuireAttr"
         ),
         // AppKit 渲染层：Block → NSAttributedString · TextKit 2 视图 · 附件 · Mermaid · 图片
         .target(
             name: "QuireRender",
-            dependencies: ["QuireCore"],
+            dependencies: ["QuireCore", "CQuireAttr"],
             resources: [.copy("Resources/Mermaid")]
         ),
         // App 壳

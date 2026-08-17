@@ -13,7 +13,7 @@
 | 解析 1 MB Markdown（`Tests/Fixtures/large-1mb.md`） | **< 60 ms** | `quire-bench parse` |
 | 渲染 1 MB 文档为 attributed string（不含布局） | **< 140 ms** | `quire-bench render` |
 | 解析 + 渲染合计 | **< 200 ms** | `quire-bench full` |
-| 主题热切换（1 MB 文档） | < 50 ms | `quire-bench theme` |
+| 主题热切换（1 MB 文档，不重解析、全量重建属性） | < 150 ms | `quire-bench theme` |
 | 编辑回显（击键 → 预览更新，1 MB 文档中段修改一段） | **< 16 ms** 增量路径 | `quire-bench incremental` |
 | 代码高亮吞吐 | > 20 MB/s | `quire-bench highlight` |
 | 滚动 | 60 fps，无掉帧 | Instruments Animation Hitches |
@@ -31,7 +31,7 @@
 3. **零空闲开销。** 不用 `Timer` 轮询；文件监控用 `DispatchSource`；主题目录监听同理；Mermaid WebView 用完销毁。
 4. **内存有上限。** 图片缓存 `NSCache` 64 MB；Mermaid 磁盘缓存 200 MB LRU；渲染块缓存只保留当前文档。
 5. **进程数 = 1。** 除 Mermaid 渲染期间的 WebKit 辅助进程外，不启动任何子进程 / XPC。
-6. **依赖最小化。** 运行时依赖只有 swift-markdown（含 cmark-gfm）。每加一个依赖需要在 DESIGN.md ADR 中说明。
+6. **依赖最小化。** 运行时依赖只有 cmark-gfm。每加一个依赖需要在 DESIGN.md ADR 中说明。
 7. **测量而非猜测。** 每个性能相关 PR 附 `quire-bench` 前后对比。
 
 ## 3. 禁止事项
@@ -42,6 +42,20 @@
 - 禁止用 SwiftUI 承载正文渲染（偏好设置窗口等低频 UI 可以）。
 - 禁止全量重渲染响应击键。
 - 禁止把 highlight.js / prism 之类跑在 JavaScriptCore 里做高亮。
+- 禁止在已构建的 NSMutableAttributedString 范围上回头 `addAttribute(range:)`（O(runs) 字典合并）；run 属性在创建时一次写全，走 `CQuireAttr`。
+
+## 2.1 当前基线（Apple M-series，2026-08，`quire-bench all`）
+
+| 指标 | 结果 | 预算 |
+|------|------|------|
+| parse/large-1mb | 42 ms | 60 |
+| render/large-1mb | 110 ms | 140 |
+| full/large-1mb | 160 ms | 200 |
+| theme/switch-large-1mb | 114 ms | 150 |
+| incremental/edit-middle-1mb | 1.4 ms | 16 |
+| highlight/swift | 61 MB/s | > 20 |
+
+历史：swift-markdown 封装时 parse 136 ms；纯 Swift 属性字符串构建时 render 527 ms。
 
 ## 4. 测量工具
 

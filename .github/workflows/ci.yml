@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app || sudo xcode-select -s /Applications/Xcode.app
+      - name: Swift version
+        run: swift --version
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-
+      - name: Build (release)
+        run: swift build -c release
+      - name: Test
+        run: swift test
+      - name: Bench
+        run: swift run -c release quire-bench all > bench.json && cat bench.json
+      - name: Bench budget gate
+        run: scripts/bench_gate.sh bench.json
+      - name: Build app bundle
+        run: scripts/build_app.sh --no-mermaid && ls -la dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Quire.app
+          path: dist/Quire.app

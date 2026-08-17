@@ -86,7 +86,7 @@ open Package.swift             # 用 Xcode 开发
 Quire (App: NSDocument · 窗口 · 侧栏 · 编辑器 UI)
   └─ QuireRender (AppKit: Block → NSAttributedString · TextKit 2 视图 · 表格附件 · Mermaid · 图片)
        └─ QuireCore (Foundation only: 解析 · 块模型 · 增量 diff · 主题 · 高亮 · 大纲)
-            └─ swift-markdown (cmark-gfm)
+            └─ cmark-gfm (C) · CQuireAttr (ObjC 直通，40 行)
 ```
 
 ## 许可证

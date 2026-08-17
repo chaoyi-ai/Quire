@@ -1,8 +1,11 @@
 import Foundation
-import Markdown
+import cmark_gfm
+import cmark_gfm_extensions
 
-/// swift-markdown（cmark-gfm）→ Quire 块模型。
-/// 线程安全、无状态；可在任意后台队列调用。
+/// cmark-gfm（C API 直调）→ Quire 块模型。
+/// 线程安全、无状态；可在任意后台队列调用。每次 parse 独立创建 cmark_parser。
+///
+/// 为什么不用 swift-markdown：它的中间 AST 层占解析时间约 45%（实测），且不暴露 footnotes 扩展。见 ADR-12。
 public struct MarkdownParser: Sendable {
     public struct Options: Sendable {
         /// 识别 YAML front matter（文件开头 `---` … `---`）
@@ -11,15 +14,24 @@ public struct MarkdownParser: Sendable {
         public var promoteStandaloneImages = true
         /// 把 ```mermaid 围栏识别为 `.mermaid`
         public var mermaid = true
-        /// 自动识别裸 URL（http/https/www.）为链接
+        /// 自动识别裸 URL（http/https/www.）为链接。自研扫描器：遇到 CJK 标点即停止（比 GFM autolink 更适合中文文本）
         public var autolink = true
+        /// 脚注 `[^1]`
+        public var footnotes = true
         public init() {}
     }
 
     public var options: Options
     public init(options: Options = Options()) { self.options = options }
 
+    /// 全局扩展注册（一次）
+    private static let extensionsRegistered: Bool = {
+        cmark_gfm_core_extensions_ensure_registered()
+        return true
+    }()
+
     public func parse(_ source: String) -> Document {
+        _ = Self.extensionsRegistered
         var lineOffset = 0
         var blocks: [Block] = []
         var body = Substring(source)
@@ -32,11 +44,25 @@ public struct MarkdownParser: Sendable {
             body = fm.body
         }
 
-        let md = Markdown.Document(parsing: String(body), options: [.disableSmartOpts])
-        var ctx = Context(options: options, lineOffset: lineOffset)
-        for child in md.children {
-            blocks.append(contentsOf: ctx.convertBlock(child))
+        var cmarkOptions = CMARK_OPT_DEFAULT | CMARK_OPT_SOURCEPOS | CMARK_OPT_VALIDATE_UTF8 | CMARK_OPT_UNSAFE
+        if options.footnotes { cmarkOptions |= CMARK_OPT_FOOTNOTES }
+        guard let parser = cmark_parser_new(cmarkOptions) else { return .empty }
+        for name in ["table", "strikethrough", "tasklist"] {
+            if let ext = cmark_find_syntax_extension(name) { cmark_parser_attach_syntax_extension(parser, ext) }
         }
+        var ctx = Context(options: options, lineOffset: lineOffset)
+        body.withCString { cstr in
+            cmark_parser_feed(parser, cstr, strlen(cstr))
+        }
+        if let root = cmark_parser_finish(parser) {
+            var child = cmark_node_first_child(root)
+            while let node = child {
+                blocks.append(contentsOf: ctx.convertBlock(node))
+                child = cmark_node_next(node)
+            }
+            cmark_node_free(root)
+        }
+        cmark_parser_free(parser)
 
         // 大纲
         var entries: [Outline.Entry] = []
@@ -46,7 +72,8 @@ public struct MarkdownParser: Sendable {
                                      blockIndex: i, line: b.sourceRange?.start.line))
             }
         }
-        let lineCount = source.utf8.reduce(into: 1) { if $1 == 0x0A { $0 += 1 } }
+        var lineCount = 1
+        for b in source.utf8 where b == 0x0A { lineCount += 1 }
         return Document(blocks: blocks, outline: Outline(entries: entries), lineCount: lineCount)
     }
 
@@ -56,136 +83,156 @@ public struct MarkdownParser: Sendable {
         let options: Options
         let lineOffset: Int
         var ids = HeadingIDGenerator()
+        var footnoteOrdinal = 0
 
-        func range(_ m: Markup) -> SourceRange? {
-            guard let r = m.range else { return nil }
-            return SourceRange(start: .init(line: r.lowerBound.line + lineOffset, column: r.lowerBound.column),
-                               end: .init(line: r.upperBound.line + lineOffset, column: r.upperBound.column))
+        func range(_ n: UnsafeMutablePointer<cmark_node>) -> SourceRange? {
+            let sl = Int(cmark_node_get_start_line(n))
+            guard sl > 0 else { return nil }
+            return SourceRange(start: .init(line: sl + lineOffset, column: Int(cmark_node_get_start_column(n))),
+                               end: .init(line: Int(cmark_node_get_end_line(n)) + lineOffset, column: Int(cmark_node_get_end_column(n))))
         }
 
-        mutating func convertBlocks(_ children: MarkupChildren) -> [Block] {
+        @inline(__always) func literal(_ n: UnsafeMutablePointer<cmark_node>) -> String {
+            cmark_node_get_literal(n).map { String(cString: $0) } ?? ""
+        }
+        @inline(__always) func typeString(_ n: UnsafeMutablePointer<cmark_node>) -> String {
+            String(cString: cmark_node_get_type_string(n))
+        }
+
+        mutating func convertChildren(_ n: UnsafeMutablePointer<cmark_node>) -> [Block] {
             var out: [Block] = []
-            for c in children { out.append(contentsOf: convertBlock(c)) }
+            var child = cmark_node_first_child(n)
+            while let c = child { out.append(contentsOf: convertBlock(c)); child = cmark_node_next(c) }
             return out
         }
 
-        mutating func convertBlock(_ m: Markup) -> [Block] {
-            let r = range(m)
-            switch m {
-            case let h as Heading:
-                let inlines = convertInlines(h.children)
+        mutating func convertBlock(_ n: UnsafeMutablePointer<cmark_node>) -> [Block] {
+            let r = range(n)
+            switch cmark_node_get_type(n) {
+            case CMARK_NODE_HEADING:
+                let inlines = convertInlines(n)
                 let id = ids.next(for: inlines.plainText)
-                return [Block(kind: .heading(level: h.level, inlines: inlines, id: id), sourceRange: r)]
+                return [Block(kind: .heading(level: Int(cmark_node_get_heading_level(n)), inlines: inlines, id: id), sourceRange: r)]
 
-            case let p as Paragraph:
-                let inlines = convertInlines(p.children)
+            case CMARK_NODE_PARAGRAPH:
+                let inlines = convertInlines(n)
                 if options.promoteStandaloneImages, inlines.count == 1,
                    case .image(let src, let title, let alt) = inlines[0] {
                     return [Block(kind: .image(source: src, title: title, alt: alt), sourceRange: r)]
                 }
                 return [Block(kind: .paragraph(inlines), sourceRange: r)]
 
-            case let c as CodeBlock:
-                let lang = c.language?.trimmingCharacters(in: .whitespaces)
-                let langLower = lang?.lowercased()
-                var code = c.code
+            case CMARK_NODE_CODE_BLOCK:
+                let info = cmark_node_get_fence_info(n).map { String(cString: $0) }?.trimmingCharacters(in: .whitespaces)
+                var code = literal(n)
                 if code.hasSuffix("\n") { code.removeLast() }
-                if options.mermaid, langLower == "mermaid" {
+                if options.mermaid, info?.lowercased() == "mermaid" {
                     return [Block(kind: .mermaid(source: code), sourceRange: r)]
                 }
-                return [Block(kind: .codeBlock(language: (lang?.isEmpty ?? true) ? nil : lang, code: code), sourceRange: r)]
+                return [Block(kind: .codeBlock(language: (info?.isEmpty ?? true) ? nil : info, code: code), sourceRange: r)]
 
-            case let q as BlockQuote:
-                return [Block(kind: .blockQuote(convertBlocks(q.children)), sourceRange: r)]
+            case CMARK_NODE_BLOCK_QUOTE:
+                return [Block(kind: .blockQuote(convertChildren(n)), sourceRange: r)]
 
-            case let l as UnorderedList:
-                return [Block(kind: .list(ordered: false, start: 1, items: convertItems(l.children)), sourceRange: r)]
+            case CMARK_NODE_LIST:
+                let ordered = cmark_node_get_list_type(n) == CMARK_ORDERED_LIST
+                let start = ordered ? Int(cmark_node_get_list_start(n)) : 1
+                var items: [ListItem] = []
+                var child = cmark_node_first_child(n)
+                while let item = child {
+                    let checkbox: ListItem.Checkbox? = typeString(item) == "tasklist"
+                        ? (cmark_gfm_extensions_get_tasklist_item_checked(item) ? .checked : .unchecked) : nil
+                    items.append(ListItem(checkbox: checkbox, blocks: convertChildren(item)))
+                    child = cmark_node_next(item)
+                }
+                return [Block(kind: .list(ordered: ordered, start: start, items: items), sourceRange: r)]
 
-            case let l as OrderedList:
-                return [Block(kind: .list(ordered: true, start: Int(l.startIndex), items: convertItems(l.children)), sourceRange: r)]
-
-            case let t as Table:
-                return [Block(kind: .table(convertTable(t)), sourceRange: r)]
-
-            case is ThematicBreak:
+            case CMARK_NODE_THEMATIC_BREAK:
                 return [Block(kind: .thematicBreak, sourceRange: r)]
 
-            case let h as HTMLBlock:
-                var html = h.rawHTML
+            case CMARK_NODE_HTML_BLOCK:
+                var html = literal(n)
                 if html.hasSuffix("\n") { html.removeLast() }
                 return [Block(kind: .html(html), sourceRange: r)]
 
-            case let other as BlockMarkup:
-                // 未知块（BlockDirective 等）：退化为段落文本
-                let inlines = convertInlines(other.children)
-                return inlines.isEmpty ? [] : [Block(kind: .paragraph(inlines), sourceRange: r)]
+            case CMARK_NODE_FOOTNOTE_DEFINITION:
+                // cmark-gfm 会把引用重编号为 1、2、3… 并把定义按序挪到文末；这里给定义同样的序号，保证引用 ↔ 定义一致
+                footnoteOrdinal += 1
+                return [Block(kind: .footnoteDefinition(label: String(footnoteOrdinal), blocks: convertChildren(n)), sourceRange: r)]
+
+            case CMARK_NODE_CUSTOM_BLOCK, CMARK_NODE_ITEM:
+                return convertChildren(n)
 
             default:
-                return []
+                // 扩展节点：按类型名判断
+                if typeString(n) == "table" { return [Block(kind: .table(convertTable(n)), sourceRange: r)] }
+                // 未知块：子块展开或退化为段落
+                let children = convertChildren(n)
+                if !children.isEmpty { return children }
+                let inlines = convertInlines(n)
+                return inlines.isEmpty ? [] : [Block(kind: .paragraph(inlines), sourceRange: r)]
             }
         }
 
-        mutating func convertItems(_ children: MarkupChildren) -> [ListItem] {
-            var items: [ListItem] = []
-            for c in children {
-                guard let li = c as? Markdown.ListItem else { continue }
-                let cb: ListItem.Checkbox? = switch li.checkbox {
-                    case .checked?: .checked
-                    case .unchecked?: .unchecked
-                    case nil: nil
-                }
-                items.append(ListItem(checkbox: cb, blocks: convertBlocks(li.children)))
-            }
-            return items
-        }
-
-        mutating func convertTable(_ t: Table) -> TableModel {
-            let aligns: [TableModel.Alignment] = t.columnAlignments.map {
-                switch $0 {
-                case .left?: .left
-                case .center?: .center
-                case .right?: .right
-                case nil: .none
+        mutating func convertTable(_ n: UnsafeMutablePointer<cmark_node>) -> TableModel {
+            let cols = Int(cmark_gfm_extensions_get_table_columns(n))
+            var aligns: [TableModel.Alignment] = []
+            if let a = cmark_gfm_extensions_get_table_alignments(n) {
+                for i in 0..<cols {
+                    switch a[i] {
+                    case UInt8(ascii: "l"): aligns.append(.left)
+                    case UInt8(ascii: "c"): aligns.append(.center)
+                    case UInt8(ascii: "r"): aligns.append(.right)
+                    default: aligns.append(.none)
+                    }
                 }
             }
             var header: [[Inline]] = []
-            for cell in t.head.cells { header.append(convertInlines(cell.children)) }
             var rows: [[[Inline]]] = []
-            for row in t.body.rows {
+            var row = cmark_node_first_child(n)
+            while let rn = row {
                 var cells: [[Inline]] = []
-                for cell in row.cells { cells.append(convertInlines(cell.children)) }
-                rows.append(cells)
+                var cell = cmark_node_first_child(rn)
+                while let cn = cell { cells.append(convertInlines(cn)); cell = cmark_node_next(cn) }
+                if cmark_gfm_extensions_get_table_row_is_header(rn) != 0 && header.isEmpty { header = cells } else { rows.append(cells) }
+                row = cmark_node_next(rn)
             }
             return TableModel(alignments: aligns, header: header, rows: rows)
         }
 
-        mutating func convertInlines(_ children: MarkupChildren) -> [Inline] {
+        mutating func convertInlines(_ n: UnsafeMutablePointer<cmark_node>) -> [Inline] {
             var out: [Inline] = []
-            for c in children { convertInline(c, into: &out) }
+            var child = cmark_node_first_child(n)
+            while let c = child { convertInline(c, into: &out); child = cmark_node_next(c) }
             return out
         }
 
-        mutating func convertInline(_ m: Markup, into out: inout [Inline]) {
-            switch m {
-            case let t as Text:
-                if options.autolink { Autolink.scan(t.string, into: &out) } else { out.append(.text(t.string)) }
-            case let e as Emphasis: out.append(.emphasis(convertInlines(e.children)))
-            case let s as Strong: out.append(.strong(convertInlines(s.children)))
-            case let s as Strikethrough: out.append(.strikethrough(convertInlines(s.children)))
-            case let c as InlineCode: out.append(.code(c.code))
-            case let l as Link:
-                out.append(.link(destination: l.destination, title: l.title, children: convertInlines(l.children)))
-            case let i as Image:
-                out.append(.image(source: i.source, title: i.title, alt: i.children.compactMap { ($0 as? Text)?.string ?? ($0 as? InlineCode)?.code }.joined()))
-            case is SoftBreak: out.append(.softBreak)
-            case is LineBreak: out.append(.lineBreak)
-            case let h as InlineHTML: out.append(.html(h.rawHTML))
-            case let other as InlineContainer:
-                // InlineAttributes 等：展开子节点
-                for c in other.children { convertInline(c, into: &out) }
+        mutating func convertInline(_ n: UnsafeMutablePointer<cmark_node>, into out: inout [Inline]) {
+            switch cmark_node_get_type(n) {
+            case CMARK_NODE_TEXT:
+                let s = literal(n)
+                if options.autolink { Autolink.scan(s, into: &out) } else { out.append(.text(s)) }
+            case CMARK_NODE_EMPH: out.append(.emphasis(convertInlines(n)))
+            case CMARK_NODE_STRONG: out.append(.strong(convertInlines(n)))
+            case CMARK_NODE_CODE: out.append(.code(literal(n)))
+            case CMARK_NODE_LINK:
+                let url = cmark_node_get_url(n).map { String(cString: $0) }
+                let title = cmark_node_get_title(n).map { String(cString: $0) }
+                out.append(.link(destination: url, title: (title?.isEmpty ?? true) ? nil : title, children: convertInlines(n)))
+            case CMARK_NODE_IMAGE:
+                let url = cmark_node_get_url(n).map { String(cString: $0) }
+                let title = cmark_node_get_title(n).map { String(cString: $0) }
+                let alt = convertInlines(n).plainText
+                out.append(.image(source: url, title: (title?.isEmpty ?? true) ? nil : title, alt: alt))
+            case CMARK_NODE_SOFTBREAK: out.append(.softBreak)
+            case CMARK_NODE_LINEBREAK: out.append(.lineBreak)
+            case CMARK_NODE_HTML_INLINE: out.append(.html(literal(n)))
+            case CMARK_NODE_FOOTNOTE_REFERENCE: out.append(.footnoteReference(label: literal(n)))
+            case CMARK_NODE_CUSTOM_INLINE:
+                out.append(contentsOf: convertInlines(n))
             default:
-                let s = m.format()
-                if !s.isEmpty { out.append(.text(s)) }
+                if typeString(n) == "strikethrough" { out.append(.strikethrough(convertInlines(n))) }
+                else { out.append(contentsOf: convertInlines(n)) }
             }
         }
     }
@@ -196,29 +243,26 @@ public struct MarkdownParser: Sendable {
 enum FrontMatter {
     struct Split { let yaml: String; let body: Substring; let lineCount: Int }
 
-    /// 文件必须以 `---\n` 开头，第二个仅含 `---` 的行结束。
+    /// 文件必须以 `---\n` 开头，第二个仅含 `---`（或 `...`）的行结束。只扫描开头，不触碰正文。
     static func split(_ source: String) -> Split? {
         guard source.hasPrefix("---\n") || source.hasPrefix("---\r\n") else { return nil }
-        var lines = source.split(separator: "\n", omittingEmptySubsequences: false)
-        guard lines.count > 1 else { return nil }
-        lines.removeFirst()
-        var yamlLines: [Substring] = []
-        for (i, raw) in lines.enumerated() {
-            let line = raw.hasSuffix("\r") ? raw.dropLast() : raw
-            if line == "---" || line == "..." {
-                let consumed = i + 2 // 首行 --- + yaml + 结束行
-                let bodyStartIndex: String.Index = {
-                    var idx = source.startIndex
-                    var n = 0
-                    while n < consumed, let nl = source[idx...].firstIndex(of: "\n") {
-                        idx = source.index(after: nl); n += 1
-                    }
-                    return idx
-                }()
-                return Split(yaml: yamlLines.joined(separator: "\n"), body: source[bodyStartIndex...], lineCount: consumed)
+        let utf8 = source.utf8
+        guard let firstNL = utf8.firstIndex(of: 0x0A) else { return nil }
+        var idx = utf8.index(after: firstNL)
+        let yamlStart = idx
+        var lineNo = 1
+        while idx < utf8.endIndex {
+            let lineEnd = utf8[idx...].firstIndex(of: 0x0A) ?? utf8.endIndex
+            var content = utf8[idx..<lineEnd]
+            if content.last == 0x0D { content = content.dropLast() }
+            lineNo += 1
+            if content.elementsEqual("---".utf8) || content.elementsEqual("...".utf8) {
+                let yaml = String(source[yamlStart..<idx]).trimmingCharacters(in: .newlines)
+                let bodyStart = lineEnd < utf8.endIndex ? utf8.index(after: lineEnd) : utf8.endIndex
+                return Split(yaml: yaml, body: source[bodyStart...], lineCount: lineNo)
             }
-            yamlLines.append(line)
-            if i > 200 { return nil } // 防御：front matter 不该这么长
+            if lineNo > 200 { return nil } // 防御：front matter 不该这么长
+            idx = lineEnd < utf8.endIndex ? utf8.index(after: lineEnd) : utf8.endIndex
         }
         return nil
     }
