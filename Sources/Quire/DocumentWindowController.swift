@@ -10,7 +10,8 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     let readerViewController: ReaderViewController
     /// 编辑器按需创建（阅读模式启动时不构建，省启动时间）
     private(set) lazy var editorViewController: EditorViewController = makeEditor()
-    let outlineViewController: OutlineViewController
+    let sidebarViewController: SidebarViewController
+    private var fileURLObserver: NSKeyValueObservation?
     private let splitViewController = NSSplitViewController()
     private var editorItem: NSSplitViewItem?
     private var readerItem: NSSplitViewItem!
@@ -27,7 +28,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     init(document: MarkdownDocument) {
         session = document.session
         readerViewController = ReaderViewController(session: document.session)
-        outlineViewController = OutlineViewController()
+        sidebarViewController = SidebarViewController()
         LaunchClock.mark("  wc: view controllers")
 
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 800),
@@ -42,9 +43,9 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         window.delegate = self
 
         // 侧栏 + 编辑器 + 阅读
-        let sidebar = NSSplitViewItem(sidebarWithViewController: outlineViewController)
-        sidebar.minimumThickness = 160
-        sidebar.maximumThickness = 360
+        let sidebar = NSSplitViewItem(sidebarWithViewController: sidebarViewController)
+        sidebar.minimumThickness = 180
+        sidebar.maximumThickness = 420
         sidebar.canCollapse = true
         sidebar.isCollapsed = UserDefaults.standard.bool(forKey: "sidebar.collapsed")
         readerItem = NSSplitViewItem(viewController: readerViewController)
@@ -72,22 +73,34 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         window.toolbarStyle = .unified
         LaunchClock.mark("  wc: toolbar")
 
-        // 目录 → 跳转（阅读视图 + 编辑器）
-        outlineViewController.onSelect = { [weak self] entry in
+        // 侧栏：标题 → 跳转（阅读视图 + 编辑器）；文件 → 打开
+        sidebarViewController.onSelectHeading = { [weak self] entry in
             guard let self else { return }
             self.readerViewController.scroll(toBlock: entry.blockIndex)
             if self.mode != .reader, let line = entry.line { self.editorViewController.scroll(toLine: line) }
         }
-        // 阅读视图滚动 → 目录高亮 + 编辑器同步
+        sidebarViewController.onOpenFile = { url, line in
+            NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { doc, _, _ in
+                guard let line, let wc = doc?.windowControllers.first as? DocumentWindowController else { return }
+                // 打开后跳到指定行（大纲里点的是其他文件的标题）
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { wc.jump(toLine: line) }
+            }
+        }
+        // 阅读视图滚动 → 侧栏高亮 + 编辑器同步
         readerViewController.onTopBlockChanged = { [weak self] index in
             guard let self else { return }
-            self.outlineViewController.highlight(blockIndex: index)
+            self.sidebarViewController.highlight(blockIndex: index)
             self.syncEditorToReader(blockIndex: index)
         }
         document.session.onOutline = { [weak self] outline in
-            self?.outlineViewController.outline = outline
+            self?.sidebarViewController.outline = outline
         }
-        if !document.session.parsed.blocks.isEmpty { outlineViewController.outline = document.session.parsed.outline }
+        sidebarViewController.currentURL = document.fileURL
+        if !document.session.parsed.blocks.isEmpty { sidebarViewController.outline = document.session.parsed.outline }
+        // 存储为 / 首次存储后 URL 变化 → 侧栏跟随
+        fileURLObserver = document.observe(\.fileURL, options: [.new]) { [weak self] doc, _ in
+            Task { @MainActor [weak self] in self?.sidebarViewController.currentURL = doc.fileURL }
+        }
 
         // 初始模式：新文档 → 分栏；已有文档 → 上次选择（默认阅读）
         let saved = Mode(rawValue: UserDefaults.standard.integer(forKey: "view.mode")) ?? .reader
@@ -131,6 +144,14 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     /// 让 NSTextView 的撤销走文档的 UndoManager（自动标脏 / ⌘Z 与文档一致）
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? {
         document?.undoManager
+    }
+
+    /// 跳到源码行（阅读视图按块、编辑器按行）
+    func jump(toLine line: Int) {
+        if let rendered = readerViewController.textView.rendered, let idx = rendered.blockIndex(forLine: line) {
+            readerViewController.scroll(toBlock: idx)
+        }
+        if mode != .reader { editorViewController.scroll(toLine: line) }
     }
 
     /// 文档从磁盘（重新）读入：同步编辑器文本
@@ -190,6 +211,26 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     @objc func toggleSidebar(_ sender: Any?) {
         splitViewController.toggleSidebar(sender)
         UserDefaults.standard.set(splitViewController.splitViewItems.first?.isCollapsed ?? false, forKey: "sidebar.collapsed")
+    }
+
+    @objc func chooseSidebarFolder(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "选择"
+        panel.directoryURL = sidebarViewController.rootURL ?? markdownDocument?.fileURL?.deletingLastPathComponent()
+        guard let window else { return }
+        panel.beginSheetModal(for: window) { [weak self] resp in
+            guard resp == .OK, let url = panel.url else { return }
+            self?.sidebarViewController.setRoot(url)
+            if self?.splitViewController.splitViewItems.first?.isCollapsed == true { self?.toggleSidebar(nil) }
+        }
+    }
+
+    @objc func revealInSidebar(_ sender: Any?) {
+        if splitViewController.splitViewItems.first?.isCollapsed == true { toggleSidebar(nil) }
+        sidebarViewController.revealCurrent()
     }
 
     @objc func showThemeMenu(_ sender: Any?) {

@@ -103,6 +103,11 @@
 - [x] 应用图标、About、autosavesInPlace
 - [x] 发布流程：`scripts/release.sh`、GitHub Release、CHANGELOG
 
+## M4.5 · 侧栏文件树（0.2.0）✅
+
+- [x] 目录树 → 文件 → 大纲混合导航（懒加载、FSEvents、快速标题扫描 `HeadingScanner`）
+- [x] 路径栏切根目录、⌘⇧O 打开文件夹、⌘⇧J 定位当前文件
+
 ## M5 · 可视化编辑 → 1.0
 
 - [ ] 行内实时预览模式（光标块显源码，其余渲染）

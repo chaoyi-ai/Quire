@@ -184,9 +184,13 @@ enum Block: Hashable {
 - 失败：显示源码 + 错误信息块（不静默）。
 - 缓存目录 `~/Library/Caches/com.korako.quire/mermaid/`，LRU 上限 200 MB。
 
-### 6.8 大纲 / 目录
+### 6.8 侧栏：文件树 + 大纲
 
-`Outline` 从 heading 块生成树；侧栏 `NSOutlineView`；滚动时高亮当前标题（监听 viewport 变化，不用定时器）。
+一棵 `NSOutlineView`：根目录（默认文档所在文件夹）→ 子文件夹 → Markdown 文件 → 标题层级。
+- 当前文档的大纲来自完整解析（`Outline`），随每次解析更新；滚动时高亮当前标题（监听 viewport 变化，不用定时器）。
+- 其他文件的大纲在展开时后台用 `HeadingScanner`（ATX + setext、跳过围栏/front matter 的单趟扫描）生成，按 mtime 缓存，> 4 MB 不扫。
+- 目录内容只在展开时后台列举；整棵树一个 FSEvents 流监听变化，刷新时按 URL 复用节点以保持展开状态。
+- 图标为缓存的 SF Symbol（不逐行查 `NSWorkspace` 图标）；行视图复用；单目录最多列 5000 项。
 
 ### 6.9 查找
 

@@ -7,7 +7,7 @@ import QuireRender
 @MainActor
 final class QuireDocumentController: NSDocumentController {
     static let markdownType = "net.daringfireball.markdown"
-    static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "mkdn", "mdwn", "mdtxt", "mdtext", "txt", "text"]
+    nonisolated static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "mkdn", "mdwn", "mdtxt", "mdtext", "txt", "text"]
 
     override func typeForContents(of url: URL) throws -> String {
         LaunchClock.mark("typeForContents")

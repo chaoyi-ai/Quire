@@ -31,6 +31,8 @@ enum MainMenu {
         let file = NSMenu(title: "文件")
         file.addItem(withTitle: "新建", action: #selector(NSDocumentController.newDocument(_:)), keyEquivalent: "n")
         file.addItem(withTitle: "打开…", action: #selector(NSDocumentController.openDocument(_:)), keyEquivalent: "o")
+        let openFolder = file.addItem(withTitle: "在侧栏打开文件夹…", action: #selector(DocumentWindowController.chooseSidebarFolder(_:)), keyEquivalent: "O")
+        openFolder.keyEquivalentModifierMask = [.command, .shift]
         let recent = NSMenu(title: "打开最近使用")
         let recentItem = file.addItem(withTitle: "打开最近使用", action: nil, keyEquivalent: "")
         recentItem.submenu = recent
@@ -80,8 +82,10 @@ enum MainMenu {
 
         // View
         let view = NSMenu(title: "显示")
-        let sidebar = view.addItem(withTitle: "显示/隐藏目录", action: #selector(DocumentWindowController.toggleSidebar(_:)), keyEquivalent: "s")
+        let sidebar = view.addItem(withTitle: "显示/隐藏侧栏", action: #selector(DocumentWindowController.toggleSidebar(_:)), keyEquivalent: "s")
         sidebar.keyEquivalentModifierMask = [.command, .option]
+        let reveal = view.addItem(withTitle: "在侧栏中显示当前文件", action: #selector(DocumentWindowController.revealInSidebar(_:)), keyEquivalent: "j")
+        reveal.keyEquivalentModifierMask = [.command, .shift]
         view.addItem(.separator())
         view.addItem(withTitle: "阅读", action: #selector(DocumentWindowController.setModeReader(_:)), keyEquivalent: "1")
         view.addItem(withTitle: "编辑", action: #selector(DocumentWindowController.setModeEditor(_:)), keyEquivalent: "2")
