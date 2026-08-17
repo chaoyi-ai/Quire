@@ -25,6 +25,8 @@ public enum QuireAttribute {
     public static let mermaidSource = NSAttributedString.Key("quire.mermaidSource")
     /// 脚注定义标签（String），整段
     public static let footnoteLabel = NSAttributedString.Key("quire.footnoteLabel")
+    /// 行内代码 run（Bool）：背景由 BlockLayoutFragment 自绘（垂直居中的圆角框），不用 .backgroundColor
+    public static let inlineCode = NSAttributedString.Key("quire.inlineCode")
 }
 
 /// 段落在文档中的角色（决定自定义绘制）

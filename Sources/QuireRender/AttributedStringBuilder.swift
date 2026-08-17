@@ -486,7 +486,7 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         if inlineCode {
             let base = ctx.para.baseFont.map { NSFont(descriptor: style.inlineCodeFont.fontDescriptor, size: ($0.pointSize * CGFloat(style.theme.typography.codeSize)).rounded()) ?? style.inlineCodeFont } ?? style.inlineCodeFont
             a[.font] = ctx.bold ? RenderStyle.variant(base, traits: .boldFontMask) : base
-            a[.backgroundColor] = style.inlineCodeBackground
+            a[QuireAttribute.inlineCode] = true
             a[.foregroundColor] = ctx.link != nil ? style.accent : style.inlineCodeForeground
         } else if muted {
             a[.font] = style.inlineCodeFont

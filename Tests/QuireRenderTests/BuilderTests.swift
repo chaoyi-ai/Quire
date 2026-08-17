@@ -30,7 +30,8 @@ final class BuilderTests: XCTestCase {
         let italic = attrs(s, of: "斜")[.font] as! NSFont
         XCTAssertTrue(italic.fontDescriptor.symbolicTraits.contains(.italic), "斜体缺失：\(italic)")
         XCTAssertEqual(attrs(s, of: "删")[.strikethroughStyle] as? Int, NSUnderlineStyle.single.rawValue)
-        XCTAssertEqual((attrs(s, of: "码")[.backgroundColor] as? NSColor), style.inlineCodeBackground)
+        XCTAssertEqual(attrs(s, of: "码")[QuireAttribute.inlineCode] as? Bool, true)
+        XCTAssertNil(attrs(s, of: "码")[.backgroundColor], "行内代码背景由片段自绘，不用 .backgroundColor")
         XCTAssertNotNil(attrs(s, of: "链")[.link])
         XCTAssertEqual(attrs(s, of: "链")[.foregroundColor] as? NSColor, style.accent)
         // 普通文字：正文字体与前景色，且带段落样式与角色

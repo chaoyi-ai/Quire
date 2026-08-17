@@ -141,8 +141,42 @@ public final class BlockLayoutFragment: NSTextLayoutFragment {
         default:
             break
         }
+        // 行内代码背景：按行片段的排版高度垂直居中的圆角框
+        drawInlineCodeBackgrounds(at: point, in: context, style: style)
         context.restoreGState()
         super.draw(at: point, in: context)
+    }
+
+    private func drawInlineCodeBackgrounds(at point: CGPoint, in context: CGContext, style: RenderStyle) {
+        guard let p = textElement as? NSTextParagraph else { return }
+        let attr = p.attributedString
+        let full = NSRange(location: 0, length: attr.length)
+        // 快速跳过：整段没有行内代码
+        var has = false
+        attr.enumerateAttribute(QuireAttribute.inlineCode, in: full, options: [.longestEffectiveRangeNotRequired]) { v, _, stop in
+            if v as? Bool == true { has = true; stop.pointee = true }
+        }
+        guard has else { return }
+        let radius: CGFloat = 4
+        context.setFillColor(style.inlineCodeBackground.cgColor)
+        for lf in textLineFragments {
+            let lr = lf.characterRange
+            guard lr.length > 0 else { continue }
+            let tb = lf.typographicBounds
+            // 框高：代码字体的上下伸 + 内边距，且不超过行高
+            let codeH = style.inlineCodeFont.ascender - style.inlineCodeFont.descender
+            let h = min(tb.height - 1, (codeH + 4).rounded())
+            let y = point.y + tb.minY + (tb.height - h) / 2
+            attr.enumerateAttribute(QuireAttribute.inlineCode, in: lr, options: []) { v, r, _ in
+                guard v as? Bool == true else { return }
+                let x0 = lf.locationForCharacter(at: r.location).x
+                let x1 = lf.locationForCharacter(at: min(r.location + r.length, lr.location + lr.length)).x
+                guard x1 > x0 else { return }
+                let rect = CGRect(x: point.x + tb.minX + x0, y: y, width: x1 - x0, height: h)
+                context.addPath(CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil))
+                context.fillPath()
+            }
+        }
     }
 
     /// 是否是引用的最后一段（决定竖条是否延伸到段后间距）：由渲染层在属性里标记，暂按 false（竖条覆盖整个段落含间距，视觉上连续）

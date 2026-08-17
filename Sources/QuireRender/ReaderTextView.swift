@@ -294,18 +294,27 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
 
     private var imageRequestsInFlight = 0
 
-    /// 扫描附件，异步加载未加载的图片 / 渲染 Mermaid
+    /// 扫描附件，异步加载未加载的图片 / 渲染 Mermaid（可见区域优先）
     public func loadImages() {
         guard let ts = textStorage, ts.length > 0 else { return }
         let scale = window?.backingScaleFactor ?? 2
         let maxW = max(200, contentWidth)
+        // 收集后按"离视口的距离"排序：Mermaid 渲染是串行的，先渲染看得见的
+        var pending: [(NSTextAttachment, NSRange)] = []
         ts.enumerateAttribute(.attachment, in: NSRange(location: 0, length: ts.length), options: [.longestEffectiveRangeNotRequired]) { value, range, _ in
-            if let m = value as? MermaidAttachment, !m.isRendered, !m.failed {
+            if let m = value as? MermaidAttachment, !m.isRendered, !m.failed { pending.append((m, range)) }
+            else if let a = value as? ImageAttachment, !a.isLoaded, !a.loadFailed, a.source != nil { pending.append((a, range)) }
+        }
+        guard !pending.isEmpty else { return }
+        let visibleTop = topVisibleBlockIndex().flatMap { rendered?.ranges[$0].location } ?? 0
+        pending.sort { abs($0.1.location - visibleTop) < abs($1.1.location - visibleTop) }
+        for (value, range) in pending {
+            if let m = value as? MermaidAttachment {
                 renderMermaid(m, at: range, maxWidth: maxW)
-                return
+                continue
             }
-            guard let att = value as? ImageAttachment, !att.isLoaded, !att.loadFailed, let src = att.source else { return }
-            guard let url = ImageLoader.resolve(src, relativeTo: baseURL) else { att.loadFailed = true; return }
+            guard let att = value as? ImageAttachment, let src = att.source else { continue }
+            guard let url = ImageLoader.resolve(src, relativeTo: baseURL) else { att.loadFailed = true; continue }
             let inline = att.isInline
             let targetMaxWidth = inline ? style.baseSize * 12 : maxW
             ImageLoader.shared.load(url, maxPixelWidth: targetMaxWidth * scale) { [weak self] image in
@@ -360,7 +369,8 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
         }
     }
 
-    /// 附件内容/尺寸变化后触发该处重排（附件位置可能已变化：按对象重新定位）
+    /// 附件内容/尺寸变化后触发该处重排（附件位置可能已变化：按对象重新定位）。
+    /// 重排会改变文档高度，TextKit 2 可能把视口漂到该块 —— 用"顶部块 + 块内偏移"锁住可见位置。
     private func relayoutAttachment(_ att: NSTextAttachment, hint range: NSRange) {
         guard let ts = textStorage else { return }
         var target = range
@@ -372,9 +382,31 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
             guard let f = found else { return }
             target = f
         }
+        let anchor = captureScrollAnchor()
         ts.beginEditing()
         ts.addAttribute(.attachment, value: att, range: target)
         ts.endEditing()
+        restoreScrollAnchor(anchor)
+    }
+
+    /// 可见位置锚点：顶部块下标 + 视口顶到该块顶的偏移
+    private func captureScrollAnchor() -> (Int, CGFloat)? {
+        guard let idx = topVisibleBlockIndex(), let sv = enclosingScrollView, sv.contentView.bounds.minY > 0 else { return nil }
+        return (idx, scrollOffset(withinBlock: idx))
+    }
+
+    private func restoreScrollAnchor(_ anchor: (Int, CGFloat)?) {
+        guard let (idx, offset) = anchor, let rendered, idx < rendered.ranges.count,
+              let tlm = textLayoutManager, let cs = textContentStorage, let sv = enclosingScrollView,
+              let loc = cs.location(cs.documentRange.location, offsetBy: rendered.ranges[idx].location) else { return }
+        // 该块就在视口附近，布局是真实的
+        tlm.ensureLayout(for: NSTextRange(location: loc))
+        guard let frag = tlm.textLayoutFragment(for: loc) else { return }
+        let y = max(0, frag.layoutFragmentFrame.minY + textContainerInset.height + offset)
+        if abs(y - sv.contentView.bounds.minY) > 0.5 {
+            sv.contentView.setBoundsOrigin(CGPoint(x: 0, y: y))
+            sv.reflectScrolledClipView(sv.contentView)
+        }
     }
 
     private func apply(image: NSImage?, to att: ImageAttachment, at range: NSRange, maxWidth: CGFloat, inline: Bool) {
