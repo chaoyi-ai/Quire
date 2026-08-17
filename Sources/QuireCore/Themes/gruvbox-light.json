@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "id": "gruvbox-light",
+  "name": "Gruvbox Light",
+  "appearance": "light",
+  "author": "Quire",
+  "extends": "github-light",
+  "colors": {
+    "background": "#fbf1c7", "foreground": "#3c3836", "muted": "#7c6f64", "accent": "#076678", "heading": "#282828", "border": "#ebdbb2", "selection": "#07667833",
+    "blockquote": { "foreground": "#665c54", "border": "#bdae93", "background": "#f2e5bc80" },
+    "code": { "background": "#f2e5bc", "foreground": "#3c3836", "inlineBackground": "#ebdbb2", "inlineForeground": "#9d0006", "lineNumber": "#a89984" },
+    "table": { "headerBackground": "#f2e5bc", "stripe": "#f5ebc4", "border": "#d5c4a1", "hover": "#07667814" },
+    "syntax": {
+      "keyword": "#9d0006", "string": "#79740e", "comment": "#928374", "number": "#8f3f71", "type": "#b57614", "function": "#427b58",
+      "variable": "#3c3836", "constant": "#8f3f71", "operator": "#af3a03", "punctuation": "#3c3836", "attribute": "#b57614", "tag": "#427b58",
+      "meta": "#928374", "regexp": "#79740e", "escape": "#af3a03", "invalid": "#cc241d"
+    },
+    "editor": { "currentLine": "#f2e5bc", "gutter": "#a89984", "markdownMarker": "#a89984", "markdownHeading": "#b57614", "markdownLink": "#076678", "markdownCode": "#79740e" }
+  },
+  "mermaid": { "theme": "neutral" }
+}

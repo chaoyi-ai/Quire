@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "id": "paper",
+  "name": "Paper",
+  "appearance": "light",
+  "author": "Quire",
+  "extends": "github-light",
+  "colors": {
+    "background": "#f7f3e9",
+    "foreground": "#3b3630",
+    "muted": "#7a7267",
+    "accent": "#9a5b2b",
+    "heading": "#2e2a25",
+    "border": "#e0d8c8",
+    "selection": "#9a5b2b33",
+    "blockquote": { "foreground": "#6b6257", "border": "#cdb99a", "background": "#efe9dc80" },
+    "code": { "background": "#efe9dc", "foreground": "#3b3630", "inlineBackground": "#e3dbc9", "inlineForeground": "#5a4a3a", "lineNumber": "#a89f90" },
+    "table": { "headerBackground": "#efe9dc", "stripe": "#f2ede2", "border": "#e0d8c8", "hover": "#9a5b2b14" },
+    "syntax": {
+      "keyword": "#a1421f", "string": "#5c7a29", "comment": "#9a917f", "number": "#8a5a00", "type": "#7a4b8f",
+      "function": "#2f6f8f", "variable": "#3b3630", "constant": "#8a5a00", "operator": "#a1421f", "punctuation": "#6b6257",
+      "attribute": "#8a5a00", "tag": "#2f6f8f", "meta": "#9a917f", "regexp": "#5c7a29", "escape": "#5c7a29", "invalid": "#b3261e"
+    },
+    "editor": { "currentLine": "#9a5b2b0f", "gutter": "#a89f90", "markdownMarker": "#a89f90", "markdownHeading": "#8a5a00", "markdownLink": "#9a5b2b", "markdownCode": "#5c7a29" }
+  },
+  "typography": { "bodyFont": ["Charter", "Georgia", "system-serif"], "baseSize": 17, "lineHeight": 1.7, "headingWeight": "bold" },
+  "mermaid": { "theme": "neutral" }
+}

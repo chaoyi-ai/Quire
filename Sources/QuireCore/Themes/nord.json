@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "id": "nord",
+  "name": "Nord",
+  "appearance": "dark",
+  "author": "Quire",
+  "extends": "github-dark",
+  "colors": {
+    "background": "#2e3440", "foreground": "#d8dee9", "muted": "#7b88a1", "accent": "#88c0d0", "heading": "#eceff4", "border": "#3b4252", "selection": "#88c0d04d",
+    "blockquote": { "foreground": "#a3acbe", "border": "#4c566a", "background": "#3b425280" },
+    "code": { "background": "#3b4252", "foreground": "#d8dee9", "inlineBackground": "#434c5e", "inlineForeground": "#eceff4", "lineNumber": "#4c566a" },
+    "table": { "headerBackground": "#3b4252", "stripe": "#343b49", "border": "#434c5e", "hover": "#88c0d01a" },
+    "syntax": {
+      "keyword": "#81a1c1", "string": "#a3be8c", "comment": "#616e88", "number": "#b48ead", "type": "#8fbcbb", "function": "#88c0d0",
+      "variable": "#d8dee9", "constant": "#b48ead", "operator": "#81a1c1", "punctuation": "#eceff4", "attribute": "#8fbcbb", "tag": "#81a1c1",
+      "meta": "#616e88", "regexp": "#ebcb8b", "escape": "#ebcb8b", "invalid": "#bf616a"
+    },
+    "editor": { "currentLine": "#3b4252", "gutter": "#4c566a", "markdownMarker": "#4c566a", "markdownHeading": "#88c0d0", "markdownLink": "#88c0d0", "markdownCode": "#a3be8c" }
+  }
+}

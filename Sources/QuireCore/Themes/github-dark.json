@@ -1,0 +1,73 @@
+{
+  "schema": 1,
+  "id": "github-dark",
+  "name": "GitHub Dark",
+  "appearance": "dark",
+  "author": "Quire",
+  "colors": {
+    "background": "#0d1117",
+    "foreground": "#e6edf3",
+    "muted": "#8b949e",
+    "accent": "#4493f8",
+    "heading": "#e6edf3",
+    "border": "#30363d",
+    "selection": "#388bfd66",
+    "blockquote": { "foreground": "#8b949e", "border": "#3b434b", "background": "#00000000" },
+    "code": {
+      "background": "#161b22",
+      "foreground": "#e6edf3",
+      "inlineBackground": "#6e768166",
+      "inlineForeground": "#e6edf3",
+      "border": "#00000000",
+      "lineNumber": "#6e7681"
+    },
+    "table": { "headerBackground": "#161b22", "stripe": "#151b23", "border": "#30363d", "hover": "#388bfd1a" },
+    "syntax": {
+      "keyword": "#ff7b72",
+      "string": "#a5d6ff",
+      "comment": "#8b949e",
+      "number": "#79c0ff",
+      "type": "#ffa657",
+      "function": "#d2a8ff",
+      "variable": "#ffa657",
+      "constant": "#79c0ff",
+      "operator": "#79c0ff",
+      "punctuation": "#e6edf3",
+      "attribute": "#79c0ff",
+      "tag": "#7ee787",
+      "meta": "#8b949e",
+      "regexp": "#a5d6ff",
+      "escape": "#a5d6ff",
+      "invalid": "#ffa198"
+    },
+    "editor": {
+      "currentLine": "#388bfd14",
+      "gutter": "#6e7681",
+      "markdownMarker": "#6e7681",
+      "markdownHeading": "#79c0ff",
+      "markdownLink": "#4493f8",
+      "markdownCode": "#a5d6ff"
+    }
+  },
+  "typography": {
+    "bodyFont": ["system"],
+    "codeFont": ["SF Mono", "Menlo", "system-mono"],
+    "baseSize": 16,
+    "lineHeight": 1.6,
+    "paragraphSpacing": 1.0,
+    "headingScale": [2.0, 1.5, 1.25, 1.0, 0.875, 0.85],
+    "headingWeight": "semibold",
+    "headingSpacingBefore": 1.5,
+    "codeSize": 0.875
+  },
+  "layout": {
+    "maxContentWidth": 760,
+    "horizontalPadding": 32,
+    "verticalPadding": 40,
+    "codeBlockRadius": 6,
+    "codeBlockPadding": 12,
+    "blockquoteBarWidth": 3,
+    "tableCellPadding": [6, 12]
+  },
+  "mermaid": { "theme": "dark" }
+}

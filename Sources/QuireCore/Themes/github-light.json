@@ -1,0 +1,73 @@
+{
+  "schema": 1,
+  "id": "github-light",
+  "name": "GitHub Light",
+  "appearance": "light",
+  "author": "Quire",
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#1f2328",
+    "muted": "#656d76",
+    "accent": "#0969da",
+    "heading": "#1f2328",
+    "border": "#d0d7de",
+    "selection": "#0969da33",
+    "blockquote": { "foreground": "#656d76", "border": "#d0d7de", "background": "#00000000" },
+    "code": {
+      "background": "#f6f8fa",
+      "foreground": "#1f2328",
+      "inlineBackground": "#afb8c133",
+      "inlineForeground": "#1f2328",
+      "border": "#00000000",
+      "lineNumber": "#8c959f"
+    },
+    "table": { "headerBackground": "#f6f8fa", "stripe": "#f6f8fa", "border": "#d0d7de", "hover": "#0969da0f" },
+    "syntax": {
+      "keyword": "#cf222e",
+      "string": "#0a3069",
+      "comment": "#6e7781",
+      "number": "#0550ae",
+      "type": "#953800",
+      "function": "#8250df",
+      "variable": "#1f2328",
+      "constant": "#0550ae",
+      "operator": "#0550ae",
+      "punctuation": "#1f2328",
+      "attribute": "#0550ae",
+      "tag": "#116329",
+      "meta": "#6e7781",
+      "regexp": "#0a3069",
+      "escape": "#0a3069",
+      "invalid": "#82071e"
+    },
+    "editor": {
+      "currentLine": "#0969da0a",
+      "gutter": "#8c959f",
+      "markdownMarker": "#8c959f",
+      "markdownHeading": "#0550ae",
+      "markdownLink": "#0969da",
+      "markdownCode": "#0a3069"
+    }
+  },
+  "typography": {
+    "bodyFont": ["system"],
+    "codeFont": ["SF Mono", "Menlo", "system-mono"],
+    "baseSize": 16,
+    "lineHeight": 1.6,
+    "paragraphSpacing": 1.0,
+    "headingScale": [2.0, 1.5, 1.25, 1.0, 0.875, 0.85],
+    "headingWeight": "semibold",
+    "headingSpacingBefore": 1.5,
+    "codeSize": 0.875
+  },
+  "layout": {
+    "maxContentWidth": 760,
+    "horizontalPadding": 32,
+    "verticalPadding": 40,
+    "codeBlockRadius": 6,
+    "codeBlockPadding": 12,
+    "blockquoteBarWidth": 3,
+    "tableCellPadding": [6, 12]
+  },
+  "mermaid": { "theme": "default" }
+}

@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "id": "solarized-light",
+  "name": "Solarized Light",
+  "appearance": "light",
+  "author": "Quire",
+  "extends": "github-light",
+  "colors": {
+    "background": "#fdf6e3", "foreground": "#657b83", "muted": "#93a1a1", "accent": "#268bd2", "heading": "#586e75", "border": "#eee8d5", "selection": "#268bd233",
+    "blockquote": { "foreground": "#839496", "border": "#93a1a1", "background": "#eee8d580" },
+    "code": { "background": "#eee8d5", "foreground": "#657b83", "inlineBackground": "#eee8d5", "inlineForeground": "#586e75", "lineNumber": "#93a1a1" },
+    "table": { "headerBackground": "#eee8d5", "stripe": "#f5efdc", "border": "#e5dfc9", "hover": "#268bd214" },
+    "syntax": {
+      "keyword": "#859900", "string": "#2aa198", "comment": "#93a1a1", "number": "#d33682", "type": "#b58900", "function": "#268bd2",
+      "variable": "#657b83", "constant": "#cb4b16", "operator": "#859900", "punctuation": "#657b83", "attribute": "#b58900", "tag": "#268bd2",
+      "meta": "#93a1a1", "regexp": "#2aa198", "escape": "#cb4b16", "invalid": "#dc322f"
+    },
+    "editor": { "currentLine": "#eee8d5", "gutter": "#93a1a1", "markdownMarker": "#93a1a1", "markdownHeading": "#b58900", "markdownLink": "#268bd2", "markdownCode": "#2aa198" }
+  },
+  "mermaid": { "theme": "neutral" }
+}
