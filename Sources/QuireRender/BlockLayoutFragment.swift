@@ -90,6 +90,20 @@ public final class BlockLayoutFragment: NSTextLayoutFragment {
             let x0 = originX + (ps?.headIndent ?? 0)
             context.setFillColor(style.border.cgColor)
             context.fill(CGRect(x: x0, y: y.rounded() - 0.5, width: width - (ps?.headIndent ?? 0), height: 1))
+        case .table:
+            // 表格直接绘制在附件位置（附件本身不画图）
+            if let p = textElement as? NSTextParagraph {
+                var found: (TableAttachment, Int)?
+                p.attributedString.enumerateAttribute(.attachment, in: NSRange(location: 0, length: p.attributedString.length), options: []) { v, r, stop in
+                    if let t = v as? TableAttachment { found = (t, r.location); stop.pointee = true }
+                }
+                if let (att, _) = found, let tlm = textLayoutManager, let cs = tlm.textContentManager,
+                   let loc = cs.location(rangeInElement.location, offsetBy: found!.1) {
+                    let attRect = frameForTextAttachment(at: loc)  // 片段坐标
+                    let layout = att.currentLayout ?? att.layout(available: attRect.width)
+                    TableRenderer.draw(att, layout: layout, at: CGPoint(x: point.x + attRect.minX, y: point.y + attRect.minY), maxWidth: attRect.width, in: context)
+                }
+            }
         case .heading:
             if let level = attrs[QuireAttribute.headingLevel] as? Int, level <= 2 {
                 let y = point.y + height - (ps?.paragraphSpacing ?? 0) * 0.5

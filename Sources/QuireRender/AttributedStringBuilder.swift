@@ -349,43 +349,34 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         out.append(NSAttributedString(string: "\u{FFFC}", attributes: a))
     }
 
-    /// M1 占位：表格以等宽文本 + 制表位呈现；M2 换成 TableAttachmentView
+    /// 表格：单元格属性字符串在这里（后台）生成，视图由 TableAttachmentViewProvider 按宽度排版
     private func appendTablePlaceholder(_ table: TableModel, into out: NSMutableAttributedString, ctx: BlockContext) {
-        let cols = table.columnCount
-        var widths = [Int](repeating: 3, count: cols)
-        func measure(_ row: [[Inline]]) { for (i, c) in row.enumerated() where i < cols { widths[i] = max(widths[i], min(40, c.plainText.count + 2)) } }
-        measure(table.header); table.rows.forEach(measure)
-        let charW = style.codeFont.maximumAdvancement.width * 0.6
-        var stops: [NSTextTab] = []
-        var x: CGFloat = ctx.indent + 8
-        for w in widths { x += CGFloat(w) * charW * 1.05 + 12; stops.append(NSTextTab(textAlignment: .left, location: x)) }
-        let key = "tbl-\(ctx.indent)-\(widths)"
-        let ps = paragraphStyle(key: key) { p in
-            let lh = (style.codeSize * 1.7).rounded()
-            p.minimumLineHeight = lh; p.maximumLineHeight = lh
-            p.tabStops = stops; p.defaultTabInterval = 60
-            p.headIndent = ctx.indent + 8; p.firstLineHeadIndent = ctx.indent + 8
-            p.lineBreakMode = .byTruncatingTail
+        let cellPara = ParagraphContext(base: [:], key: "tblcell", quote: false, baseFont: nil, color: nil)
+        func cell(_ inlines: [Inline], bold: Bool) -> NSAttributedString {
+            let m = NSMutableAttributedString()
+            var ic = InlineContext(para: cellPara); ic.bold = bold
+            appendInlines(inlines, into: m, ctx: ic)
+            if m.length == 0 { appendRun(" ", into: m, ctx: ic) }
+            return m
         }
-        let lastPS = paragraphStyle(key: key + "-last") { p in
-            p.setParagraphStyle(ps); p.paragraphSpacing = style.paragraphSpacing
+        let header = table.header.map { cell($0, bold: true) }
+        let rows = table.rows.map { row in row.map { cell($0, bold: false) } }
+        let att = TableAttachment(model: table, header: header, rows: rows, style: style)
+
+        let psKey = "tbl-\(ctx.indent)-\(ctx.quoteDepth)"
+        let ps = paragraphStyle(key: psKey) { p in
+            p.paragraphSpacing = style.paragraphSpacing
+            p.paragraphSpacingBefore = 2
+            p.headIndent = ctx.indent; p.firstLineHeadIndent = ctx.indent
+            p.lineBreakMode = .byClipping
         }
-        let start = out.length
-        let paraNormal = paragraphContext(role: .table, psKey: key, ps: ps, ctx: ctx)
-        let paraLast = paragraphContext(role: .table, psKey: key + "-last", ps: lastPS, ctx: ctx)
-        func line(_ row: [[Inline]], bold: Bool, last: Bool) {
-            var para = last ? paraLast : paraNormal
-            para.baseFont = style.codeFont
-            var ic = InlineContext(para: para); ic.bold = bold
-            for (i, cell) in row.enumerated() where i < cols {
-                if i > 0 { appendRun("\t", into: out, ctx: ic) }
-                appendInlines(cell, into: out, ctx: ic)
-            }
-            appendRun("\n", into: out, ctx: ic)
-        }
-        line(table.header, bold: true, last: table.rows.isEmpty)
-        for (i, r) in table.rows.enumerated() { line(r, bold: false, last: i == table.rows.count - 1) }
-        out.addAttribute(QuireAttribute.table, value: table, range: NSRange(location: start, length: out.length - start))
+        let para = paragraphContext(role: .table, psKey: psKey, ps: ps, ctx: ctx)
+        var a = para.base
+        a[.attachment] = att
+        a[.font] = style.bodyFont
+        a[QuireAttribute.table] = table
+        out.append(NSAttributedString(string: "\u{FFFC}", attributes: a))
+        appendRun("\n", into: out, ctx: InlineContext(para: para))
     }
 
     // MARK: - 行内
