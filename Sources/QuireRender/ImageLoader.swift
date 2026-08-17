@@ -63,14 +63,19 @@ public final class ImageLoader: @unchecked Sendable {
     /// 异步加载并 downsample 到 `maxPixelWidth`（含 Retina 倍率）。回调在主线程。
     public func load(_ url: URL, maxPixelWidth: CGFloat, completion: @escaping @MainActor (NSImage?) -> Void) {
         let key = "\(url.absoluteString)@\(Int(maxPixelWidth))"
-        if let img = cache.object(forKey: key as NSString) { Task { @MainActor in completion(img) }; return }
+        // NSImage 本身线程安全（Apple 文档），但不是 Sendable：用盒子跨过 Swift 6.1 的严格检查
+        let deliver: @Sendable (NSImage?) -> Void = { img in
+            let boxed = UncheckedSendable(img)
+            Task { @MainActor in completion(boxed.value) }
+        }
+        if let img = cache.object(forKey: key as NSString) { deliver(img); return }
 
         lock.lock()
         if inflight[key] != nil {
-            inflight[key]!.append { img in Task { @MainActor in completion(img) } }
+            inflight[key]!.append(deliver)
             lock.unlock(); return
         }
-        inflight[key] = [{ img in Task { @MainActor in completion(img) } }]
+        inflight[key] = [deliver]
         lock.unlock()
 
         let finish: @Sendable (NSImage?) -> Void = { [weak self] img in
@@ -124,4 +129,10 @@ public final class ImageLoader: @unchecked Sendable {
         let img = NSImage(cgImage: cg, size: pointSize)
         return img
     }
+}
+
+/// 跨隔离域传递已知线程安全但未标记 Sendable 的对象
+struct UncheckedSendable<T>: @unchecked Sendable {
+    let value: T
+    init(_ v: T) { value = v }
 }
