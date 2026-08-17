@@ -171,6 +171,7 @@ public final class BlockLayoutFragment: NSTextLayoutFragment {
             let bottom = (baseline - font.descender + pad).rounded()
             let h = bottom - top
             let y = top
+            // inlineCode 属性覆盖 "留白 + 代码 + 留白" 三个 run（同值），enumerate 会合并成一段
             attr.enumerateAttribute(QuireAttribute.inlineCode, in: lr, options: []) { v, r, _ in
                 guard v as? Bool == true else { return }
                 let x0 = lf.locationForCharacter(at: r.location).x

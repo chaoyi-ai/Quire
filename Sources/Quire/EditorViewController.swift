@@ -36,6 +36,7 @@ final class EditorViewController: NSViewController {
         scrollView.documentView = textView
         scrollView.contentView.postsBoundsChangedNotifications = true
         scrollView.scrollerStyle = .overlay
+        scrollView.automaticallyAdjustsContentInsets = true
         ruler = LineNumberRulerView(editor: textView, scrollView: scrollView)
         ruler.style = style
         scrollView.verticalRulerView = ruler
@@ -81,17 +82,17 @@ final class EditorViewController: NSViewController {
     }
 
     /// 文档 URL 变化（存储为）
-    func documentURLDidChange(_ url: URL?) { textView.documentURL = url }
+    func documentURLDidChange(_ url: URL?) { if isViewLoaded { textView.documentURL = url } }
 
-    /// 外部（磁盘）变化：替换编辑器文本但保留光标
+    /// 外部（磁盘）变化：替换编辑器文本但保留光标（视图未加载时不用管：loadView 会从文档取源码）
     func replaceSource(_ text: String) {
-        guard textView.source != text else { return }
+        guard isViewLoaded, textView.source != text else { return }
         let sel = textView.selectedRange()
         textView.setSource(text)
         let len = (text as NSString).length
         textView.setSelectedRange(NSRange(location: min(sel.location, len), length: 0))
     }
 
-    func scroll(toLine line: Int) { textView.scroll(toLine: line) }
-    var topVisibleLine: Int { textView.topVisibleLine() }
+    func scroll(toLine line: Int) { if isViewLoaded { textView.scroll(toLine: line) } }
+    var topVisibleLine: Int { isViewLoaded ? textView.topVisibleLine() : 1 }
 }

@@ -472,10 +472,10 @@ public final class AttributedStringBuilder: @unchecked Sendable {
     }
 
     /// 取（或建）当前上下文的 uniqued 属性字典
-    private func runAttributes(_ ctx: InlineContext, inlineCode: Bool = false, muted: Bool = false) -> Attrs {
+    private func runAttributes(_ ctx: InlineContext, inlineCode: Bool = false, muted: Bool = false, codePad: Bool = false) -> Attrs {
         var flags: UInt8 = 0
         if ctx.bold { flags |= 1 }; if ctx.italic { flags |= 2 }; if ctx.strike { flags |= 4 }
-        if inlineCode { flags |= 8 }; if muted { flags |= 16 }; if ctx.link != nil { flags |= 32 }
+        if inlineCode { flags |= 8 }; if muted { flags |= 16 }; if ctx.link != nil { flags |= 32 }; if codePad { flags |= 64 }
         let key = RunKey(para: ctx.para.key + (ctx.para.baseFont.map { "|\($0.fontName)\($0.pointSize)" } ?? "") + (ctx.para.color.map { "|\($0.description)" } ?? ""), flags: flags)
         cacheLock.lock()
         if let a = attrsCache[key] { cacheLock.unlock(); return a }
@@ -491,6 +491,11 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         } else if muted {
             a[.font] = style.inlineCodeFont
             a[.foregroundColor] = style.muted
+        } else if codePad {
+            // 行内代码框两侧的留白：正文字体的窄空格（不能放在代码字体 run 里，CJK 回退字体会把它撑宽）
+            a[.font] = style.bodyFont
+            a[.foregroundColor] = color
+            a[QuireAttribute.inlineCode] = true
         } else {
             a[.font] = font(for: ctx)
             a[.foregroundColor] = color
@@ -506,8 +511,8 @@ public final class AttributedStringBuilder: @unchecked Sendable {
     }
 
     /// 追加一个文本 run（链接 / tooltip 作为 extra 属性叠加，不进缓存）
-    private func appendRun(_ s: String, into out: NSMutableAttributedString, ctx: InlineContext, inlineCode: Bool = false, muted: Bool = false) {
-        let attrs = runAttributes(ctx, inlineCode: inlineCode, muted: muted)
+    private func appendRun(_ s: String, into out: NSMutableAttributedString, ctx: InlineContext, inlineCode: Bool = false, muted: Bool = false, codePad: Bool = false) {
+        let attrs = runAttributes(ctx, inlineCode: inlineCode, muted: muted, codePad: codePad)
         if let link = ctx.link {
             let value: Any = URL(string: link) ?? link
             let start = out.length
@@ -533,8 +538,10 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         case .strikethrough(let c):
             var x = ctx; x.strike = true; appendInlines(c, into: out, ctx: x)
         case .code(let s):
-            // 前后加窄空格模拟内边距
-            appendRun("\u{2009}\(s)\u{2009}", into: out, ctx: ctx, inlineCode: true)
+            // 两侧留白用正文字体的窄空格（独立 run，同样带 inlineCode 标记，一起纳入背景框）
+            appendRun("\u{2009}\u{2009}\u{2009}", into: out, ctx: ctx, codePad: true)
+            appendRun(s, into: out, ctx: ctx, inlineCode: true)
+            appendRun("\u{2009}\u{2009}\u{2009}", into: out, ctx: ctx, codePad: true)
         case .link(let dest, let title, let children):
             var x = ctx; x.link = dest ?? ""
             if let title, !title.isEmpty { x.tooltip = title }
