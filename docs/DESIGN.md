@@ -1,0 +1,257 @@
+# Quire 设计文档
+
+> 状态：Living document。任何架构级改动先改这里，再改代码。
+> 配套文档：[性能预算](PERFORMANCE.md) · [主题规范](THEMES.md) · [路线图](ROADMAP.md)
+
+## 1. 一句话定位
+
+**Quire 是一个 macOS 原生的 Markdown 阅读器 / 编辑器，把"快"和"省"当作第一功能。**
+打开一个 Markdown 文件应该像打开 TextEdit 一样瞬间；空闲时不占 CPU；内存占用是 Electron 类工具的十分之一量级；同时不牺牲现代 Markdown 该有的东西：多主题、代码高亮、GFM 表格、Mermaid 图。
+
+## 2. 目标与非目标
+
+### 目标
+
+| # | 目标 | 可度量的定义 |
+|---|------|--------------|
+| G1 | 快 | 冷启动到首屏 < 300 ms；1 MB Markdown 解析 + 渲染 < 200 ms；滚动 60 fps；编辑回显 < 16 ms |
+| G2 | 省 | 典型文档常驻内存 < 40 MB；空闲 CPU 0%；无常驻定时器；无后台进程（Mermaid 除外，见 §6.7） |
+| G3 | 原生 | AppKit + TextKit 2；系统外观/字体/滚动/辅助功能/查找/打印全部原生 |
+| G4 | 完整 | CommonMark + GFM（表格、任务列表、删除线、自动链接、脚注）+ 代码高亮 + Mermaid + 数学（后期） |
+| G5 | 多主题 | 主题即数据（JSON），内置 8+ 套，支持用户主题、跟随系统明暗、热切换不重解析 |
+| G6 | 可编辑 | 源码编辑 + 分栏实时预览（M3）；行内可视化编辑（M5） |
+| G7 | 开源 | MIT；纯 SwiftPM，`swift build` 即可编译；无私有依赖 |
+
+### 非目标（至少 1.0 之前）
+
+- 不做笔记库 / 知识管理（不做 wiki 链接、图谱、标签数据库）
+- 不做云同步 / 账号
+- 不做插件系统（先把内核做扎实；主题是唯一扩展点）
+- 不做 Windows / Linux（原生是有代价的，我们付这个代价）
+- 不做完整 WYSIWYG（Typora 式）——M5 只做"行内实时预览"，不追求所见即所得的完备性
+- 不用 WebView 渲染正文（Mermaid 是唯一例外，且被严格隔离）
+
+## 3. 关键技术决策（ADR 摘要）
+
+| ID | 决策 | 备选 | 理由 |
+|----|------|------|------|
+| ADR-1 | **正文用 TextKit 2 原生渲染，不用 WKWebView** | WKWebView + HTML/CSS（Typora / MarkText / 大多数工具的做法） | WebKit 一个进程起步 60–100 MB，冷启动慢，主题 = CSS 但一切都隔着一层 IPC；原生渲染让选择/查找/辅助功能/打印/字体渲染都是系统级的，且内存 < 40 MB 可实现。代价：表格 / Mermaid / 数学要自己想办法（见 §6） |
+| ADR-2 | **解析器用 swift-markdown（cmark-gfm 内核）** | 自写解析器；Down（cmark）；Ink | cmark-gfm 是 GitHub 生产级 C 实现，快且符合 GFM 规范；swift-markdown 是 Apple 维护的 Swift AST 封装，自带 Table / Strikethrough / TaskList / 源码位置信息（增量渲染必需）。自写解析器不值得 |
+| ADR-3 | **块级增量渲染** | 每次全量重渲染 | 编辑器场景每次击键都全量渲染 1 MB 文档不可接受；按顶级块哈希 diff，只重建变化块的 attributed string 与布局 |
+| ADR-4 | **Mermaid 用惰性离屏 WKWebView 渲染成 SVG，缓存后显示为图片** | 原生实现 Mermaid（工程量巨大）；始终常驻 WebView；JavaScriptCore（Mermaid 需要 DOM，跑不起来） | Mermaid 事实上只有 JS 实现。把 WebView 限制为：文档含 mermaid 块时才创建、全局单例、渲染完空闲 30 s 后销毁、结果按内容哈希落盘缓存。绝大多数文档从不触发 WebKit |
+| ADR-5 | **代码高亮用自研轻量词法器（每语言 <150 行）** | tree-sitter（C + 每语言几百 KB 语法，二进制体积和内存都涨）；Highlightr（highlight.js 跑在 JavaScriptCore 里，慢且占内存） | 阅读器场景不需要语义级高亮；关键字 / 字符串 / 注释 / 数字 / 类型 的词法高亮覆盖 95% 的观感需求。词法器接口设计成可替换，未来 tree-sitter 可作为可选后端 |
+| ADR-6 | **表格用自定义 NSView 附件（NSTextAttachmentViewProvider）** | TextKit 1 的 NSTextTable（老、慢、不可控外观）；把表格转成等宽文本 | 自绘表格视图可精确控制对齐、斑马纹、边框、单元格换行、水平滚动；作为附件嵌入 TextKit 2 文本流保持整体滚动统一 |
+| ADR-7 | **纯 SwiftPM，脚本组装 .app** | Xcode 工程；XcodeGen；Tuist | 贡献者 `swift build` 就能跑；库层可以 `swift test`；Xcode 直接打开 `Package.swift` 也能开发。App 壳由 `scripts/build_app.sh` 组装 |
+| ADR-8 | **主题即 JSON 数据** | 硬编码 Swift；CSS | 用户可写、可分享；热切换只需重建 attributed string 属性，不需重新解析 |
+| ADR-9 | **最低 macOS 14** | 12 / 13 | TextKit 2 在 14 才够稳（12/13 的 NSTextView TextKit 2 有大量回退到 TextKit 1 的坑）；Swift 6 并发 API 完整 |
+| ADR-10 | **文件监控用 DispatchSource，不轮询** | Timer 轮询 mtime | 零空闲 CPU |
+
+## 4. 架构分层
+
+```
+┌────────────────────────────────────────────────────────────┐
+│  QuireApp (executable, AppKit)                              │
+│  NSDocument · 窗口/工具栏/侧栏 · 菜单 · 偏好设置 · 编辑器 UI   │
+├────────────────────────────────────────────────────────────┤
+│  QuireRender (library, AppKit)                              │
+│  Block → NSAttributedString · ReaderTextView(TextKit 2)      │
+│  TableView 附件 · CodeBlock 背景绘制 · ImageLoader           │
+│  MermaidRenderer(离屏 WebKit + 缓存) · ThemeApplier          │
+├────────────────────────────────────────────────────────────┤
+│  QuireCore (library, Foundation only — 可在 CI 跑测试)        │
+│  MarkdownParser(swift-markdown 封装) · Block 模型 · 增量 diff  │
+│  Theme 模型 + 加载/校验 · SyntaxHighlighter + Lexers          │
+│  Outline(TOC) 提取 · FrontMatter · 大纲/查找索引               │
+├────────────────────────────────────────────────────────────┤
+│  swift-markdown / cmark-gfm (C)                             │
+└────────────────────────────────────────────────────────────┘
+```
+
+**依赖方向严格向下。** `QuireCore` 不 import AppKit，这样解析/高亮/主题逻辑能在 Linux CI 或纯命令行基准里跑。
+
+### 目标划分（SwiftPM）
+
+| Target | 类型 | 说明 |
+|--------|------|------|
+| `QuireCore` | library | 纯逻辑；单元测试覆盖主体 |
+| `QuireRender` | library | AppKit 渲染层；快照测试（后期） |
+| `Quire` | executable | App 壳 |
+| `quire-bench` | executable | 性能基准 CLI（解析/渲染/高亮），CI 中跑 |
+| `QuireCoreTests` | test | |
+| `QuireRenderTests` | test | |
+
+## 5. 数据流
+
+### 5.1 阅读模式
+
+```
+文件 ─read─▶ String ─parse(后台)─▶ Document{blocks:[Block]} ─render─▶ [BlockRender]
+                                        │                                │
+                                  Outline(TOC)                    NSTextContentStorage
+                                                                          │
+                                                          ReaderTextView (TextKit 2, viewport lazy layout)
+```
+
+- 读文件、解析、生成 attributed string 都在后台队列；只有"把 NSTextStorage 装进 view"在主线程。
+- `Document` 是值类型、不可变；每个 `Block` 携带 `sourceRange` 与 `contentHash`。
+
+### 5.2 编辑模式（M3）
+
+```
+NSTextView(源码) ─textDidChange─▶ debounce(≈50ms) ─▶ parse(后台) ─▶ diff(old.blocks, new.blocks) by contentHash
+                                                                         │
+                                                       只对变更块重建 attributed string ─▶ 替换对应 range
+```
+
+- 滚动同步：源码行号 ↔ 块 `sourceRange` ↔ 渲染侧 `NSTextRange`，双向映射表在每次 diff 后增量更新。
+
+### 5.3 主题切换
+
+`Theme` 变化 → 不重新解析 → 对已渲染的每个块重新应用属性（`ThemeApplier.reapply(theme:to:)`）→ 一次 `NSTextStorage` 事务。目标 < 50 ms（1 MB 文档）。
+
+## 6. 渲染管线细节
+
+### 6.1 块模型
+
+```swift
+enum Block: Hashable {
+  case heading(level: Int, inlines: [Inline], id: String)
+  case paragraph([Inline])
+  case codeBlock(language: String?, code: String)          // ``` 围栏 / 缩进
+  case mermaid(source: String)                              // ```mermaid 特化
+  case blockQuote([Block])
+  case list(ordered: Bool, start: Int, items: [ListItem])   // ListItem 含 checkbox
+  case table(Table)                                         // GFM 表格
+  case thematicBreak
+  case html(String)                                         // 原样显示为代码
+  case image(url: String, alt: String, title: String?)      // 独占一行的图片提升为块
+  case frontMatter(String)
+  case footnoteDefinition(label: String, [Block])
+}
+```
+
+`Inline`：`text / emphasis / strong / strikethrough / code / link / image / softBreak / lineBreak / footnoteRef / html`。
+
+`Block` 是值类型 + `Hashable`，`contentHash` 缓存在 `RenderedBlock` 中用于 diff。
+
+### 6.2 属性字符串生成
+
+- 每个块 → 一个 `NSAttributedString` 段（以段落分隔符结束）。
+- 段落样式全部来自 `Theme.typography`（字号、行高、段距、内容最大宽度）。
+- 自定义属性 key（`QuireAttribute.*`）标记块类型、代码语言、链接目标、标题 id，供 TextKit 2 的 fragment 绘制与交互使用。
+- 内容宽度：`NSTextContainer` 宽度受 `Theme.layout.maxContentWidth` 约束并居中，超宽内容（表格 / 代码）在附件内水平滚动。
+
+### 6.3 代码块
+
+- 高亮在 `QuireCore.SyntaxHighlighter` 中完成，输出 `[Token(range, kind)]`；渲染层只查主题色。
+- 背景圆角块由 `NSTextLayoutFragment` 子类在 `draw(at:in:)` 中绘制（TextKit 2 官方推荐方式），不用附件 → 代码文本可选择、可查找。
+- 行号（可选）、语言标签、复制按钮：叠加在 fragment 上的轻量 overlay view，按视口惰性创建。
+- 超长代码不换行、水平滚动（用 `lineBreakMode = .byClipping` + 附件内滚动 —— 需要实测决定，见路线图 M2）。
+
+### 6.4 表格
+
+- `TableAttachmentView: NSView`，自绘（CoreText 排版单元格，或每格一个 `NSTextField`——先用 CoreText，省视图数量）。
+- 列宽算法：先按内容自然宽度，若总宽 > 可用宽，按比例压缩可换行列；最小列宽 = 最长单词。
+- 支持对齐、表头加粗、斑马纹、悬停行高亮、单元格内行内样式（粗体/代码/链接）。
+- 通过 `NSTextAttachmentViewProvider` 提供 view；高度在布局前计算并缓存。
+
+### 6.5 图片
+
+- 本地 / 远程；ImageIO 按目标像素宽度 downsample（`kCGImageSourceThumbnailMaxPixelSize`），绝不解码原图到内存。
+- `NSCache` 限额（默认 64 MB，主题不可改）；远程图片走 `URLSession` 后台，占位符先撑高，避免布局跳动。
+- SVG 由系统 `NSImage` 解码（macOS 11+）。
+
+### 6.6 链接与交互
+
+- 点击链接：`http(s)` 交给系统；`#anchor` 内部跳转；相对路径 `.md` 在同窗口打开；其他文件交 Finder。
+- 标题 id 生成规则与 GitHub 一致（小写、去标点、空格→`-`、重名加 `-n`）。
+
+### 6.7 Mermaid（唯一 WebKit 例外）
+
+```
+```mermaid 块 ─hash(source + theme.mermaidTheme)─▶ 磁盘缓存命中? ─是─▶ SVG → NSImage → 附件
+                                                    │否
+                                          MermaidRenderer(单例) ─惰性创建 WKWebView(不可见)─▶ mermaid.render() ─▶ SVG
+                                                    │
+                                              写缓存 · 30 s 空闲后销毁 WebView
+```
+
+- `mermaid.min.js` 不入库，`scripts/fetch_mermaid.sh` 按固定版本 + SHA256 拉取到 `Vendor/mermaid/`，构建时打入 bundle。
+- 渲染串行队列；一次 `evaluateJavaScript` 批量渲染同一文档所有图。
+- 失败：显示源码 + 错误信息块（不静默）。
+- 缓存目录 `~/Library/Caches/com.korako.quire/mermaid/`，LRU 上限 200 MB。
+
+### 6.8 大纲 / 目录
+
+`Outline` 从 heading 块生成树；侧栏 `NSOutlineView`；滚动时高亮当前标题（监听 viewport 变化，不用定时器）。
+
+### 6.9 查找
+
+原生 `NSTextFinder`（TextKit 2 支持）；附件内文本（表格）不可查找 —— 已知限制，M4 评估把表格文本镜像成隐藏可查找文本。
+
+## 7. 编辑器设计（M3 / M5）
+
+### M3 源码编辑器
+- `NSTextView`（TextKit 2）+ 增量 Markdown 高亮（按段落重高亮，`QuireCore.MarkdownLexer`）。
+- 分栏：左源码 / 右预览，可切换 只源码 / 只预览 / 分栏。
+- 同步滚动、保存、自动保存（`NSDocument` 原生）、撤销、行号、当前行高亮、软换行。
+- 输入辅助：列表续行、代码围栏自动闭合、Tab 缩进、粗体/斜体/链接快捷键、表格格式化。
+
+### M5 行内实时预览（"可视化编辑"）
+- 单栏；光标所在块显示源码，其余块显示渲染结果（Obsidian Live Preview 模式）。
+- 复用 M1 渲染器与 M3 高亮器，用同一份 `Document`；不写第二套渲染。
+
+## 8. 主题系统
+
+见 [THEMES.md](THEMES.md)。核心约束：
+
+- 主题文件 = JSON；`Theme` 结构体解码 + 校验（缺字段回退到 `base` 主题，非法颜色报错不静默）。
+- 内置主题打入 bundle；用户主题在 `~/Library/Application Support/Quire/Themes/*.json`，目录监听热加载。
+- 明暗对：主题声明 `appearance: light | dark`，"跟随系统"模式按用户选定的一对切换。
+
+## 9. 文件监控与重载
+
+- `DispatchSource.makeFileSystemObjectSource`（`.write .rename .delete`）；编辑器保存时用 atomic write 触发 rename，要重新 open fd。
+- 重载保留滚动位置（按可见首块的 `contentHash` 就近定位）。
+
+## 10. 目录结构
+
+```
+Quire/
+├── Package.swift
+├── Sources/
+│   ├── QuireCore/        # 解析 · 块模型 · 增量 · 主题模型 · 高亮 · 大纲
+│   ├── QuireRender/      # AttributedString 生成 · ReaderTextView · 附件 · Mermaid · 图片
+│   ├── Quire/            # App 壳（NSDocument、窗口、菜单、偏好）
+│   └── quire-bench/      # 基准 CLI
+├── Tests/
+│   ├── QuireCoreTests/
+│   ├── QuireRenderTests/
+│   └── Fixtures/         # 测试与基准用 Markdown（含 1 MB 大文件）
+├── Themes/               # 内置主题 JSON（Package resource）
+├── Vendor/mermaid/       # 构建时拉取
+├── assets/               # Info.plist · 图标
+├── scripts/              # build_app.sh · fetch_mermaid.sh · bench.sh · make_icon.swift
+├── docs/                 # 本文档、性能、主题、路线图
+└── .github/workflows/    # CI：build + test + bench 门禁
+```
+
+## 11. 并发模型
+
+- Swift 6 语言模式，严格并发。
+- `MarkdownParser`、`SyntaxHighlighter`、`ThemeStore` 是 `Sendable` 值/actor。
+- 渲染管线：`DocumentSession`（actor）持有当前 `Document` 与已渲染块缓存；UI 层通过 `@MainActor` 视图模型订阅。
+- 绝不在主线程做解析 / 高亮 / 图片解码。
+
+## 12. 错误与降级策略
+
+- 解析永不失败（cmark 容错）；渲染单块失败 → 该块显示为纯文本 + 日志，不影响其他块。
+- 主题加载失败 → 回退默认主题并在偏好设置里显示错误。
+- Mermaid 失败 → 显示源码 + 错误。
+- 文件 > 8 MB → "大文件模式"：关闭高亮与 Mermaid，只做基础渲染并提示。
+
+## 13. 测试策略
+
+- `QuireCore`：单元测试（解析结构、增量 diff 正确性、高亮 token、主题解码、outline id 规则）；CommonMark spec 抽样。
+- `QuireRender`：attributed string 属性断言；后期加位图快照。
+- 基准：`quire-bench` 输出 JSON，CI 与 `docs/PERFORMANCE.md` 中的预算比对，超预算即失败。
