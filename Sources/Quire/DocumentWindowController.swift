@@ -30,12 +30,11 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         outlineViewController = OutlineViewController()
         LaunchClock.mark("  wc: view controllers")
 
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 800),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                               backing: .buffered, defer: false)
         window.minSize = NSSize(width: 520, height: 320)
         window.tabbingMode = .preferred
-        window.setFrameAutosaveName("QuireDocumentWindow")
         window.isReleasedWhenClosed = false
         super.init(window: window)
         LaunchClock.mark("  wc: window")
@@ -55,7 +54,13 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         splitViewController.addSplitViewItem(readerItem)
         splitViewController.splitView.autosaveName = "QuireSplit3"
         splitViewController.splitView.dividerStyle = .thin
-        window.contentViewController = splitViewController
+        window.contentViewController = splitViewController   // 注意：这会按子视图初始 frame 改窗口大小
+        // 恢复上次窗口位置/大小；没有则用默认尺寸并居中
+        if !window.setFrameUsingName("QuireDocumentWindow") {
+            window.setContentSize(NSSize(width: 1240, height: 800))
+            window.center()
+        }
+        window.setFrameAutosaveName("QuireDocumentWindow")
         LaunchClock.mark("  wc: split view")
 
         // 工具栏
@@ -88,7 +93,6 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         let saved = Mode(rawValue: UserDefaults.standard.integer(forKey: "view.mode")) ?? .reader
         mode = document.isNewDocument ? .split : saved
         applyMode()
-        window.center()
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }

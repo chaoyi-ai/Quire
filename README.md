@@ -12,18 +12,27 @@
 
 > A fast, lightweight, native macOS Markdown reader/editor. Multiple themes, syntax-highlighted code, GFM tables and Mermaid — rendered with AppKit/TextKit 2, no WebView for the document body.
 
+<p align="center">
+  <img src="docs/screenshots/reader-light.png" width="800" alt="Quire 阅读模式（GitHub Light）">
+  <br>
+  <img src="docs/screenshots/split-dark.png" width="800" alt="Quire 分栏编辑（One Dark）">
+</p>
+
 ## 为什么又一个 Markdown 阅读器？
 
 因为现有的大多数在 WebView 里跑：一个进程起步 100 MB、冷启动半秒、滚动是浏览器的滚动。
 Quire 的第一功能是**快和省**，其他功能都在这个前提下做：
 
-| 指标 | 预算 |
-|------|------|
-| 冷启动到首屏 | < 300 ms |
-| 解析 + 渲染 1 MB Markdown | < 200 ms |
-| 常驻内存（典型文档） | < 40 MB |
-| 空闲 CPU | 0% |
-| 进程数（不含 Mermaid） | 1 |
+| 指标 | 预算 | 0.1 实测（M 系列 / macOS 26） |
+|------|------|------|
+| 解析 1 MB Markdown | < 60 ms | 42 ms |
+| 解析 + 渲染 1 MB Markdown | < 200 ms | 160 ms |
+| 编辑回显（1 MB 文档中段修改） | < 16 ms | 1.4 ms |
+| 热启动到首帧 | < 400 ms（目标 300） | 350–400 ms |
+| 常驻内存（典型文档 / 1 MB 文档） | < 40 / 120 MB | 40 / 90 MB |
+| 空闲 CPU | 0% | 0% |
+| App 体积（含 Mermaid） | < 15 MB | 6.5 MB |
+| 进程数（不含 Mermaid 渲染期间） | 1 | 1 |
 
 完整预算与测量方法见 [docs/PERFORMANCE.md](docs/PERFORMANCE.md)。
 
@@ -34,15 +43,20 @@ Quire 的第一功能是**快和省**，其他功能都在这个前提下做：
 - **代码高亮**：自研轻量词法器，30+ 语言，无 JS 运行时
 - **Mermaid**：唯一使用 WebKit 的地方——惰性、离屏、渲染完销毁、结果缓存
 - **多主题**：10 套内置（GitHub / Paper / Solarized / Nord / Dracula / One Dark / Gruvbox），JSON 自定义主题、热切换、跟随系统明暗
-- **阅读器**：目录侧栏、外部修改自动刷新（保持滚动位置）、缩放、查找
-- **编辑器**（M3）：源码编辑 + 语法高亮、分栏同步预览、块级增量渲染
+- **阅读器**：目录侧栏、外部修改自动刷新（保持滚动位置）、缩放、查找、打印
+- **编辑器**：源码编辑 + Markdown 高亮、行号、列表/围栏/引用续行、⌘B/I/K/E、分栏同步滚动、块级增量预览（击键 → 预览 1.4 ms）
+- **导出**：HTML（内联主题 CSS）、PDF（按块边界分页）
 - **可视化编辑**（M5）：行内实时预览
 
 ## 快速开始
 
+下载：[Releases](https://github.com/chaoyi-ai/Quire/releases)（`Quire-x.y.z.zip`，ad-hoc 签名；首次打开需右键 → 打开）。
+
+从源码：
+
 ```bash
 git clone https://github.com/chaoyi-ai/Quire.git && cd Quire
-scripts/build_app.sh          # swift build -c release → dist/Quire.app
+scripts/build_app.sh          # 拉取 mermaid.min.js → swift build -c release → dist/Quire.app
 open dist/Quire.app
 ```
 
@@ -71,11 +85,11 @@ open Package.swift             # 用 Xcode 开发
 
 | 里程碑 | 交付 |
 |--------|------|
-| M0 基础设施 | 仓库、文档、SwiftPM 骨架、CI、主题、基准数据 |
-| M1 阅读器 MVP | 原生渲染基础块 + 代码高亮 + 主题 + 目录 + 自动重载 |
-| M2 表格 + Mermaid | 原生表格视图、Mermaid 离屏渲染 + 缓存 |
-| M3 编辑器 | 源码编辑、分栏同步预览、增量渲染 |
-| M4 性能与打磨 | 基准门禁、大文件模式、导出、0.1 发布 |
+| ✅ M0 基础设施 | 仓库、文档、SwiftPM 骨架、CI、主题、基准数据 |
+| ✅ M1 阅读器 MVP | 原生渲染基础块 + 代码高亮 + 主题 + 目录 + 自动重载 |
+| ✅ M2 表格 + Mermaid | 原生表格、Mermaid 离屏渲染 + 缓存 |
+| ✅ M3 编辑器 | 源码编辑、分栏同步预览、增量渲染 |
+| ✅ M4 性能与打磨 | 基准门禁、启动优化、大文件模式、设置、导出、0.1 发布 |
 | M5 可视化编辑 | 行内实时预览、数学、本地化、1.0 |
 
 详见 [docs/ROADMAP.md](docs/ROADMAP.md) 与 [GitHub Milestones](https://github.com/chaoyi-ai/Quire/milestones)。

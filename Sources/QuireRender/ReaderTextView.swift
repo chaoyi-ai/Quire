@@ -107,9 +107,41 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
 
     // MARK: - 布局：内容列居中
 
+    private var lastFittedWidth: CGFloat = 0
     public override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         updateContentInsets()
+        // 宽度变化：把超宽的图片 / Mermaid 附件重新缩放到内容列宽
+        if abs(contentWidth - lastFittedWidth) > 1 {
+            lastFittedWidth = contentWidth
+            fitAttachmentsToWidth()
+        }
+    }
+
+    /// 让块级图片 / Mermaid 附件的显示宽度不超过内容列宽（保持纵横比；缩小或恢复到自然尺寸）
+    private func fitAttachmentsToWidth() {
+        guard let ts = textStorage, ts.length > 0 else { return }
+        let maxW = max(100, contentWidth)
+        var changes: [(NSTextAttachment, NSRange)] = []
+        ts.enumerateAttribute(.attachment, in: NSRange(location: 0, length: ts.length), options: [.longestEffectiveRangeNotRequired]) { v, r, _ in
+            guard let att = v as? NSTextAttachment, let img = att.image else { return }
+            let isBlockImage = (att as? ImageAttachment).map { !$0.isInline && $0.isLoaded } ?? false
+            let isMermaid = (att as? MermaidAttachment)?.isRendered ?? false
+            guard isBlockImage || isMermaid else { return }
+            let natural = img.size
+            guard natural.width > 0, natural.height > 0 else { return }
+            var w = min(natural.width, maxW)
+            let h = (natural.height * w / natural.width).rounded()
+            w = w.rounded()
+            if abs(att.bounds.width - w) > 0.5 {
+                att.bounds = CGRect(x: 0, y: 0, width: w, height: h)
+                changes.append((att, r))
+            }
+        }
+        guard !changes.isEmpty else { return }
+        ts.beginEditing()
+        for (att, r) in changes { ts.addAttribute(.attachment, value: att, range: r) }
+        ts.endEditing()
     }
 
     private func updateContentInsets() {
@@ -123,10 +155,21 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
         if textContainerInset.width != inset {
             textContainerInset = CGSize(width: inset, height: style.verticalPadding)
         }
+        // 容器宽度显式跟随（widthTracksTextView 只在 frame 变化时更新，inset 变化时不会）
+        let cw = max(50, w - inset * 2)
+        if let c = textContainer, abs(c.size.width - cw) > 0.5 {
+            c.size = CGSize(width: cw, height: .greatestFiniteMagnitude)
+        }
     }
 
     /// 内容列宽度（pt）
     public var contentWidth: CGFloat { bounds.width - textContainerInset.width * 2 }
+
+    /// NSTextView（TextKit 2）在某些布局时序下会用过期的容器宽度做水平居中，导致 origin 漂移；
+    /// 内容列位置完全由 textContainerInset 决定，这里固定下来。
+    public override var textContainerOrigin: NSPoint {
+        NSPoint(x: textContainerInset.width, y: textContainerInset.height)
+    }
 
     private var fixedPrintingWidth: CGFloat?
     /// 打印 / PDF：固定容器宽度，忽略 maxContentWidth 居中逻辑
