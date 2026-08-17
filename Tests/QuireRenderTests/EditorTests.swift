@@ -135,3 +135,22 @@ final class IncrementalReaderTests: XCTestCase {
         }
     }
 }
+
+@MainActor
+final class TextViewSizingTests: XCTestCase {
+    /// 回归：代码创建的 NSTextView 默认 maxSize == 初始 frame，会把长文档卡在首屏
+    func testTextViewsCanGrowBeyondInitialFrame() {
+        let style = RenderStyle(theme: ThemeStore.loadBuiltIn().theme(id: "github-light")!)
+        let reader = ReaderTextView(style: style)
+        XCTAssertGreaterThan(reader.maxSize.height, 1_000_000)
+        let editor = EditorTextView(style: style)
+        XCTAssertGreaterThan(editor.maxSize.height, 1_000_000)
+        // 长文档：frame 高度必须随内容增长
+        let long = String(repeating: "段落文字 paragraph text.\n\n", count: 400)
+        let doc = MarkdownParser().parse(long)
+        reader.setRendered(DocumentRenderer(style: style).render(doc), style: style)
+        reader.textLayoutManager?.ensureLayout(for: reader.textLayoutManager!.documentRange)
+        reader.sizeToFit()
+        XCTAssertGreaterThan(reader.frame.height, 2000, "长文档文本视图应远高于初始 600pt")
+    }
+}

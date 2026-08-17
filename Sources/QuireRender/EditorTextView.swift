@@ -41,6 +41,9 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         isVerticallyResizable = true
         isHorizontallyResizable = false
         autoresizingMask = [.width]
+        // 代码创建的 NSTextView 默认 maxSize == 初始 frame，会把高度卡死在首屏；必须放开
+        minSize = NSSize(width: 0, height: 0)
+        maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         usesFindBar = true
         isIncrementalSearchingEnabled = true
         usesFontPanel = false
