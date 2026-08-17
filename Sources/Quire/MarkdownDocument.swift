@@ -89,20 +89,46 @@ final class MarkdownDocument: NSDocument {
         source = text
     }
 
-    /// 外部修改后重新读取（保留编码）；自己刚保存的写入会被忽略（内容相同）
+    /// 外部修改后重新读取（保留编码）；自己刚保存的写入会被忽略（内容相同）。
+    /// 有未保存改动时不静默覆盖：弹 sheet 让用户选择"重新载入（丢弃改动）/ 保留我的改动"；同一份磁盘内容只问一次。
     func reloadFromDisk() {
         guard let url = fileURL, let data = try? Data(contentsOf: url) else { return }
         guard let s = String(data: data, encoding: encoding), s != source else { return }
         if isDocumentEdited {
-            // 有未保存改动：不覆盖，只提示（M4：冲突处理 UI）
-            NSLog("Quire: 文件在磁盘上被修改，但当前有未保存改动，跳过重载")
+            guard s != conflictPromptedContent else { return }
+            conflictPromptedContent = s
+            MainActor.assumeIsolated { promptReloadConflict(diskSource: s) }
             return
         }
+        applyReloaded(s)
+    }
+    private var conflictPromptedContent: String?
+
+    private func applyReloaded(_ s: String) {
         source = s
+        conflictPromptedContent = nil
         MainActor.assumeIsolated {
             session.sourceDidChange(s, reason: .externalChange)
             (windowControllers.first as? DocumentWindowController)?.documentDidReload(s)
         }
+    }
+
+    @MainActor
+    private func promptReloadConflict(diskSource: String) {
+        let alert = NSAlert()
+        alert.messageText = "文件在磁盘上被修改"
+        alert.informativeText = "\(fileURL?.lastPathComponent ?? displayName ?? "文档") 已被其他程序修改，而当前有未保存的改动。要重新载入磁盘上的版本吗？"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "保留我的改动")
+        alert.addButton(withTitle: "重新载入（丢弃改动）")
+        let handle: (NSApplication.ModalResponse) -> Void = { [weak self] r in
+            guard let self, r == .alertSecondButtonReturn else { return }
+            self.applyReloaded(diskSource)
+            self.updateChangeCount(.changeCleared)
+            self.undoManager?.removeAllActions()
+        }
+        if let window = windowForSheet { alert.beginSheetModal(for: window, completionHandler: handle) }
+        else { handle(alert.runModal()) }
     }
 
     override func printOperation(withSettings printSettings: [NSPrintInfo.AttributeKey: Any]) throws -> NSPrintOperation {

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.5 — 2026-08-18
+
+代码审查版本：清理"假完成 / 死代码 / 双重逻辑"，复测性能并修掉三个视图层卡点。
+
+- 性能：主题切换 / 外部重载 / 缩放时阅读视图整体换内容，1 MB 文档主线程 **4.1 s → 44 ms**（TextKit 2 已有布局时直接 `setAttributedString` 会逐段落对账；先清空再设）。
+- 性能：不再对整份 textStorage 枚举附件（1 MB 100 ms/次，原先每次 setRendered、每次击键增量替换、每次改宽都做）；渲染阶段按块标记有无图片 / Mermaid，只扫这些块。
+- 性能：编辑器击键路径 1 MB 文档 ≈ 10 ms → 0.8 ms（分块 `getCharacters` 一趟建行索引 + 每行围栏状态表；增量高亮起始状态查表）。
+- 性能：`quire-bench views` 新增视图层基准（`view/reader-setRendered-1mb`、`view/editor-keystroke-1mb`）并纳入门禁；`blockIndex(forLine:)` 二分。
+- 修复：主题切换 / 重载后恢复滚动位置——原实现的偏移在异步二次对齐里被抹掉，且对未布局位置 `textLayoutFragment(for:)` 返回错误片段，1 MB 文档会回到文首；按内容哈希找回原块时取第一个匹配（重复内容的文档会跳到前面）。现在：偏移进对齐计算、片段用 `ensuresLayout` 枚举、"设视口 → 布局视口 → 重算"收敛、哈希就近匹配。编辑器滚动同步同样收敛。
+- 修复：大文件模式下每次都新建 `RenderStyle`，导致增量渲染路径永远不命中（每次击键全量重设）；现在派生 style 缓存。
+- 修复：有未保存改动时磁盘文件被外部修改，原来只 NSLog 一句就跳过（注释写着"M4：冲突处理 UI"但从未做）。现在弹 sheet 让用户选择重新载入或保留改动。
+- 修复：Mermaid 串行渲染用 10 ms 忙等轮询排队，改为 continuation 队列；侧栏大纲不变时不再重载；目录变化只遍历一次；`HeadingScanner.isRule` 逻辑理顺。
+- 清理死代码：`QuireAttribute` 里从未读取的 8 个自定义属性（headingID / imageSource / taskChecked / listDepth / table / mermaidSource / footnoteLabel / quoteLast）及其写入、`Document.lineCount`、`DocumentRenderer.rerender`、`RenderStyle.codeBold`、`MermaidRenderer.errorText/isWebViewAlive`、`ReaderTextView.imageRequestsInFlight/resetCursorRects/isFlipped`、`EditorTextView.showsLineNumbers`、`Theme.withAlpha`、`GenericLexer.hashComments`、`Languages.cLikeConstants`、`NSImage.tinted`、`AppDelegate.pendingFiles` 等；`ReaderViewController.apply` 里一个恒真条件。
+- 文档：DESIGN.md ADR-13（TextKit 2 三条硬规矩）；PERFORMANCE.md 新预算与基线。
+
 ## 0.2.4 — 2026-08-17
 
 - 修复：阅读模式下切到编辑 / 分栏时崩溃（编辑器视图尚未加载就被同步源码）。

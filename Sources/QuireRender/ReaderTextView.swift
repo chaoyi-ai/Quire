@@ -80,6 +80,11 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
         self.rendered = doc
         applyStyleChrome()
         guard let ts = textContentStorage?.textStorage else { return }
+        // 先清空再整体设置：已有布局时直接 setAttributedString 会让 TextKit 2 逐段落对账旧元素
+        //（1 MB 文档实测 4.3 s，主线程卡死）；清空后再设只需 ~10 ms（与首次设置一样）。
+        if ts.length > 0 {
+            ts.beginEditing(); ts.setAttributedString(NSAttributedString()); ts.endEditing()
+        }
         ts.beginEditing()
         ts.setAttributedString(doc.attributed)
         ts.endEditing()
@@ -102,7 +107,7 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
         ts.replaceCharacters(in: NSRange(location: oldStart, length: oldEnd - oldStart), with: replacement)
         ts.endEditing()
         self.rendered = doc
-        loadImages()
+        loadImages(blocks: diff.newChanged)
     }
 
     public override var isOpaque: Bool { true }
@@ -130,8 +135,8 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
         guard let ts = textStorage, ts.length > 0 else { return }
         let maxW = max(100, contentWidth)
         var changes: [(NSTextAttachment, NSRange)] = []
-        ts.enumerateAttribute(.attachment, in: NSRange(location: 0, length: ts.length), options: [.longestEffectiveRangeNotRequired]) { v, r, _ in
-            guard let att = v as? NSTextAttachment, let img = att.image else { return }
+        forEachLoadableAttachment { att, r in
+            guard let img = att.image else { return }
             let isBlockImage = (att as? ImageAttachment).map { !$0.isInline && $0.isLoaded } ?? false
             let isMermaid = (att as? MermaidAttachment)?.isRendered ?? false
             guard isBlockImage || isMermaid else { return }
@@ -149,6 +154,19 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
         ts.beginEditing()
         for (att, r) in changes { ts.addAttribute(.attachment, value: att, range: r) }
         ts.endEditing()
+    }
+
+    /// 只在标记了 hasLoadableAttachments 的块里枚举图片 / Mermaid 附件（避免全文属性枚举，1 MB 文档 ~100 ms/次）
+    private func forEachLoadableAttachment(blocks blockRange: Range<Int>? = nil, _ body: (NSTextAttachment, NSRange) -> Void) {
+        guard let ts = textStorage, let rendered else { return }
+        let indices = blockRange.map { $0.clamped(to: 0..<rendered.blocks.count) } ?? 0..<rendered.blocks.count
+        for i in indices where rendered.blocks[i].hasLoadableAttachments {
+            let r = rendered.ranges[i]
+            guard r.location + r.length <= ts.length else { continue }
+            ts.enumerateAttribute(.attachment, in: r, options: [.longestEffectiveRangeNotRequired]) { value, range, _ in
+                if let att = value as? NSTextAttachment { body(att, range) }
+            }
+        }
     }
 
     private func updateContentInsets() {
@@ -239,8 +257,7 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
         return rects[page - 1]
     }
 
-    /// 打印时不画背景外的选区、光标等
-    public override var isFlipped: Bool { true }
+
 
     // MARK: - NSTextLayoutManagerDelegate
 
@@ -287,10 +304,6 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
         super.mouseDown(with: event)
     }
 
-    public override func resetCursorRects() {
-        super.resetCursorRects()
-    }
-
     // MARK: - 复制：U+2028 → \n
 
     public override func copy(_ sender: Any?) {
@@ -310,21 +323,21 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
 
     // MARK: - 图片
 
-    private var imageRequestsInFlight = 0
-
     /// 扫描附件，异步加载未加载的图片 / 渲染 Mermaid（可见区域优先）
-    public func loadImages() {
-        guard let ts = textStorage, ts.length > 0 else { return }
+    /// 触发图片 / Mermaid 异步加载。只枚举标记了 hasLoadableAttachments 的块（`blockRange` 可再限定块下标范围，
+    /// 增量替换时只看被替换的块），不对整份文档做属性枚举。
+    public func loadImages(blocks blockRange: Range<Int>? = nil) {
+        guard let ts = textStorage, ts.length > 0, let rendered else { return }
         let scale = window?.backingScaleFactor ?? 2
         let maxW = max(200, contentWidth)
         // 收集后按"离视口的距离"排序：Mermaid 渲染是串行的，先渲染看得见的
         var pending: [(NSTextAttachment, NSRange)] = []
-        ts.enumerateAttribute(.attachment, in: NSRange(location: 0, length: ts.length), options: [.longestEffectiveRangeNotRequired]) { value, range, _ in
+        forEachLoadableAttachment(blocks: blockRange) { value, range in
             if let m = value as? MermaidAttachment, !m.isRendered, !m.failed { pending.append((m, range)) }
             else if let a = value as? ImageAttachment, !a.isLoaded, !a.loadFailed, a.source != nil { pending.append((a, range)) }
         }
         guard !pending.isEmpty else { return }
-        let visibleTop = topVisibleBlockIndex().flatMap { rendered?.ranges[$0].location } ?? 0
+        let visibleTop = topVisibleBlockIndex().flatMap { rendered.ranges[$0].location } ?? 0
         pending.sort { abs($0.1.location - visibleTop) < abs($1.1.location - visibleTop) }
         for (value, range) in pending {
             if let m = value as? MermaidAttachment {
@@ -354,7 +367,6 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
                 att.bounds = CGRect(x: 0, y: 0, width: w.rounded(), height: h.rounded())
             } catch {
                 att.failed = true
-                att.errorText = "\(error)"
                 let msg = "Mermaid 渲染失败：\(error)"
                 let img = Self.errorImage(message: msg, source: att.source, width: maxWidth, style: self?.style)
                 att.image = img
@@ -394,9 +406,7 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
         var target = range
         if range.location >= ts.length || (ts.attribute(.attachment, at: range.location, effectiveRange: nil) as? NSTextAttachment) !== att {
             var found: NSRange?
-            ts.enumerateAttribute(.attachment, in: NSRange(location: 0, length: ts.length), options: []) { v, r, stop in
-                if (v as? NSTextAttachment) === att { found = r; stop.pointee = true }
-            }
+            forEachLoadableAttachment { v, r in if found == nil, v === att { found = r } }
             guard let f = found else { return }
             target = f
         }
@@ -414,12 +424,8 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
     }
 
     private func restoreScrollAnchor(_ anchor: (Int, CGFloat)?) {
-        guard let (idx, offset) = anchor, let rendered, idx < rendered.ranges.count,
-              let tlm = textLayoutManager, let cs = textContentStorage, let sv = enclosingScrollView,
-              let loc = cs.location(cs.documentRange.location, offsetBy: rendered.ranges[idx].location) else { return }
-        // 该块就在视口附近，布局是真实的
-        tlm.ensureLayout(for: NSTextRange(location: loc))
-        guard let frag = tlm.textLayoutFragment(for: loc) else { return }
+        guard let (idx, offset) = anchor, let rendered, idx < rendered.ranges.count, let sv = enclosingScrollView,
+              let frag = layoutFragment(atCharacter: rendered.ranges[idx].location) else { return }
         let y = max(0, frag.layoutFragmentFrame.minY + textContainerInset.height + offset)
         if abs(y - sv.contentView.bounds.minY) > 0.5 {
             sv.contentView.setBoundsOrigin(CGPoint(x: 0, y: y))
@@ -451,45 +457,55 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
     /// 滚动到某个顶级块顶部；`completion` 在动画结束（或立即）时调用。
     /// TextKit 2 对视口外内容只估算高度，直接按估算 y 滚会落空；策略：先用 NSTextView 自己的
     /// scrollRangeToVisible 把目标拉进视口（内部会处理估算修正），再按真实片段位置对齐到顶部，必要时再修一次。
-    public func scroll(toBlock index: Int, animated: Bool = false, completion: (@MainActor () -> Void)? = nil) {
-        guard let rendered, index < rendered.ranges.count, let sv = enclosingScrollView else { completion?(); return }
+    /// 保证已布局的片段（TextKit 2 对未布局位置的 `textLayoutFragment(for:)` 会返回错误的片段）
+    func layoutFragment(atCharacter offset: Int) -> NSTextLayoutFragment? {
+        guard let tlm = textLayoutManager, let cs = textContentStorage,
+              let loc = cs.location(cs.documentRange.location, offsetBy: offset) else { return nil }
+        var result: NSTextLayoutFragment?
+        tlm.enumerateTextLayoutFragments(from: loc, options: [.ensuresLayout]) { f in result = f; return false }
+        return result
+    }
+
+    /// 滚到块顶（块顶留 scrollTopMargin），或按 offset（视口顶到块顶的偏移）恢复位置。
+    /// TextKit 2 是估算布局：先按估算位置滚过去，视口真实布局后再对齐，直到稳定。
+    public func scroll(toBlock index: Int, animated: Bool = false, offset: CGFloat = 0, completion: (@MainActor () -> Void)? = nil) {
+        guard let rendered, index < rendered.ranges.count, let sv = enclosingScrollView, let tlm = textLayoutManager else { completion?(); return }
         let r = rendered.ranges[index]
-        if index == 0 {
+        if index == 0, offset <= 0 {
             sv.contentView.setBoundsOrigin(.zero); sv.reflectScrolledClipView(sv.contentView); completion?(); return
         }
-        // 第一步：进入视口（非动画）
-        scrollRangeToVisible(NSRange(location: r.location, length: 0))
-        // 第二步：对齐到顶部（此时目标片段已真实布局）
         let align: () -> CGPoint? = { [weak self] in
-            guard let self, let tlm = self.textLayoutManager, let cs = self.textContentStorage,
-                  let loc = cs.location(cs.documentRange.location, offsetBy: r.location),
-                  let frag = tlm.textLayoutFragment(for: loc) else { return nil }
-            var y = frag.layoutFragmentFrame.minY + self.textContainerInset.height - Self.scrollTopMargin
-            let maxY = max(0, self.frame.height - sv.contentView.bounds.height)
-            y = min(max(0, y), maxY)
-            return CGPoint(x: 0, y: y)
+            guard let self, let frag = self.layoutFragment(atCharacter: r.location) else { return nil }
+            // 不在这里按 frame 高度夹紧：内容刚替换时 frame 只是估算，会把目标夹到很靠前
+            let y = frag.layoutFragmentFrame.minY + self.textContainerInset.height + (offset == 0 ? -Self.scrollTopMargin : offset)
+            return CGPoint(x: 0, y: max(0, y))
+        }
+        // 同步收敛：设视口 → 布局视口 → 重算，最多 4 轮；最后按真实 frame 夹紧
+        let settle: () -> Void = { [weak self] in
+            for _ in 0..<4 {
+                guard let t = align(), abs(t.y - sv.contentView.bounds.minY) > 0.5 else { break }
+                sv.contentView.setBoundsOrigin(t)
+                sv.reflectScrolledClipView(sv.contentView)
+                tlm.textViewportLayoutController.layoutViewport()
+            }
+            if let self {
+                let maxY = max(0, self.frame.height - sv.contentView.bounds.height)
+                if sv.contentView.bounds.minY > maxY { sv.contentView.setBoundsOrigin(CGPoint(x: 0, y: maxY)); sv.reflectScrolledClipView(sv.contentView) }
+            }
         }
         guard let target = align() else { completion?(); return }
-        let finish: @MainActor () -> Void = { [weak self] in
-            // 视口移动后 TextKit 可能再次修正估算：再对齐一次（无动画、幅度小）
-            if let self, let t2 = align(), abs(t2.y - sv.contentView.bounds.minY) > 1 {
-                sv.contentView.setBoundsOrigin(t2); sv.reflectScrolledClipView(sv.contentView)
-                _ = self
-            }
-            completion?()
-        }
         if animated, abs(target.y - sv.contentView.bounds.minY) < sv.contentView.bounds.height * 3 {
             NSAnimationContext.runAnimationGroup({ ctx in
                 ctx.duration = 0.2
                 sv.contentView.animator().setBoundsOrigin(target)
             }, completionHandler: {
                 sv.reflectScrolledClipView(sv.contentView)
-                finish()
+                settle()
+                completion?()
             })
         } else {
-            sv.contentView.setBoundsOrigin(target)
-            sv.reflectScrolledClipView(sv.contentView)
-            DispatchQueue.main.async { finish() }
+            settle()
+            DispatchQueue.main.async { settle(); completion?() }   // 下一轮再校一次（视口布局后的估算修正）
         }
     }
 
@@ -505,17 +521,14 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
 
     /// 视口顶部到指定块顶部的像素偏移（用于重载后恢复位置）
     public func scrollOffset(withinBlock index: Int) -> CGFloat {
-        guard let rendered, index < rendered.ranges.count, let tlm = textLayoutManager, let cs = textContentStorage, let sv = enclosingScrollView else { return 0 }
-        guard let loc = cs.location(cs.documentRange.location, offsetBy: rendered.ranges[index].location), let frag = tlm.textLayoutFragment(for: loc) else { return 0 }
+        guard let rendered, index < rendered.ranges.count, let sv = enclosingScrollView,
+              let frag = layoutFragment(atCharacter: rendered.ranges[index].location) else { return 0 }
         return sv.contentView.bounds.minY - (frag.layoutFragmentFrame.minY + textContainerInset.height)
     }
 
+    /// 恢复位置：块 index 顶部到视口顶部的偏移为 offset（由 scrollOffset(withinBlock:) 得到）
     public func scroll(toBlock index: Int, offset: CGFloat) {
-        scroll(toBlock: index)
-        guard let sv = enclosingScrollView else { return }
-        var o = sv.contentView.bounds.origin
-        o.y = max(0, o.y + Self.scrollTopMargin + offset)
-        sv.contentView.setBoundsOrigin(o)
-        sv.reflectScrolledClipView(sv.contentView)
+        scroll(toBlock: index, animated: false, offset: offset)
     }
 }
+

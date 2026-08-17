@@ -47,6 +47,7 @@
 | ADR-10 | **文件监控用 DispatchSource，不轮询** | Timer 轮询 mtime | 零空闲 CPU |
 | ADR-11 | **属性字符串 run 追加走 ObjC 直通（`CQuireAttr`），属性字典预先 uniqued 并缓存** | 纯 Swift `NSAttributedString(string:attributes:)` | 实测：Swift 侧每个 run 要把 `[Key: Any]` 桥接为 NSDictionary 再 uniquing 哈希，1.5 µs/run；ObjC 直通 + 预 uniqued 字典 + `replaceCharacters/setAttributes` 为 0.25 µs/run（6×）。1 MB 文档 ≈ 20 万 run，渲染从 527 ms 降到 109 ms。同时严禁"先 append 再回头 addAttribute(range:)"（O(runs) 字典合并） |
 | ADR-12 | **不经 swift-markdown，直接遍历 cmark-gfm 节点** | swift-markdown Swift AST | 见 ADR-2：少一层 AST 拷贝，解析 3× 提速，且拿到 footnotes；类型判断对扩展节点（table / strikethrough / tasklist）用 `cmark_node_get_type_string` |
+| ADR-13 | **TextKit 2 三条硬规矩**：① 整体换内容先清空再 `setAttributedString`；② 视口外片段位置只信 `enumerateTextLayoutFragments(from:options:.ensuresLayout)`，滚动到远处后必须"设视口 → 布局视口 → 重算"收敛；③ 不对整份 textStorage 做属性枚举，附件位置由渲染阶段按块标记 | 直接换内容 / `textLayoutFragment(for:)` / 全文 `enumerateAttribute` | 实测 1 MB：已有布局时直接 `setAttributedString` 4.3 s（TextKit 2 逐段落对账旧元素），清空后再设 10 ms；`textLayoutFragment(for: location)` 对未布局位置返回错误片段（估算几何可互相重叠），主题切换后恢复位置会落到文首；全文 `enumerateAttribute(.attachment)` 13 万 run 要 100 ms/次，原先每次 setRendered / 增量替换 / 改宽都做一遍。见 `ReaderTextView.setRendered / scroll(toBlock:) / forEachLoadableAttachment` |
 
 ## 4. 架构分层
 
@@ -219,7 +220,8 @@ enum Block: Hashable {
 ## 9. 文件监控与重载
 
 - `DispatchSource.makeFileSystemObjectSource`（`.write .rename .delete`）；编辑器保存时用 atomic write 触发 rename，要重新 open fd。
-- 重载保留滚动位置（按可见首块的 `contentHash` 就近定位）。
+- 重载保留滚动位置（按可见首块的 `contentHash` **就近**定位——文档里可能有内容相同的重复块，不能取第一个匹配）。
+- 有未保存改动时磁盘文件被改：不静默覆盖也不静默忽略，弹 sheet 让用户选"重新载入（丢弃改动）/ 保留我的改动"；同一份磁盘内容只问一次。
 
 ## 10. 目录结构
 

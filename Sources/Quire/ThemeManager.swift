@@ -70,8 +70,10 @@ final class ThemeManager {
     func select(themeID: String) {
         guard let t = catalog.theme(id: themeID) else { return }
         if t.appearance == .dark { defaults.set(themeID, forKey: Key.darkTheme) } else { defaults.set(themeID, forKey: Key.lightTheme) }
-        if mode != .system || effectiveAppearance != t.appearance {
-            if effectiveAppearance != t.appearance { defaults.set((t.appearance == .dark ? AppearanceMode.dark : .light).rawValue, forKey: Key.mode); applyAppAppearance() }
+        // 选了与当前外观相反的主题：切换外观模式，让它立即生效
+        if effectiveAppearance != t.appearance {
+            defaults.set((t.appearance == .dark ? AppearanceMode.dark : .light).rawValue, forKey: Key.mode)
+            applyAppAppearance()
         }
         refresh()
     }

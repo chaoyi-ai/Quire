@@ -5,7 +5,12 @@ import QuireCore
 public struct RenderedBlock: @unchecked Sendable {
     public let block: Block
     public let attributed: NSAttributedString
+    /// 含图片 / Mermaid 附件（需要异步加载）
+    public let hasLoadableAttachments: Bool
     public var length: Int { attributed.length }
+    public init(block: Block, attributed: NSAttributedString, hasLoadableAttachments: Bool = false) {
+        self.block = block; self.attributed = attributed; self.hasLoadableAttachments = hasLoadableAttachments
+    }
 }
 
 /// 整份已渲染文档：块列表 + 拼接结果 + 每块在拼接串中的范围
@@ -32,16 +37,22 @@ public struct RenderedDocument: @unchecked Sendable {
         return ranges.isEmpty ? nil : min(max(lo, 0), ranges.count - 1)
     }
 
-    /// 源码行 → 首个覆盖该行的块下标（用于滚动同步）
+    /// 源码行 → 覆盖该行的块下标；行落在块间空白时取其前一块（用于滚动同步）。块按源码顺序排列 → 二分。
     public func blockIndex(forLine line: Int) -> Int? {
+        guard !blocks.isEmpty else { return nil }
+        var lo = 0, hi = blocks.count - 1
         var best: Int?
-        for (i, b) in blocks.enumerated() {
-            guard let r = b.block.sourceRange else { continue }
-            if r.lineRange.contains(line) { return i }
-            if r.start.line > line { return best ?? i }
-            best = i
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            guard let r = blocks[mid].block.sourceRange else {
+                // 极少数无位置的块：退化为向后线性
+                if let i = blocks[mid...].firstIndex(where: { $0.block.sourceRange != nil }) { lo = i; continue }
+                hi = mid - 1; continue
+            }
+            if r.lineRange.contains(line) { return mid }
+            if r.start.line > line { hi = mid - 1 } else { best = mid; lo = mid + 1 }
         }
-        return best
+        return best ?? 0
     }
 }
 
@@ -71,7 +82,8 @@ public final class DocumentRenderer: @unchecked Sendable {
         var out: [RenderedBlock] = []
         out.reserveCapacity(blocks.count)
         for (i, b) in blocks.enumerated() {
-            out.append(RenderedBlock(block: b, attributed: builder.build(b, index: i)))
+            let r: (attributed: NSAttributedString, hasLoadableAttachments: Bool) = builder.build(b, index: i)
+            out.append(RenderedBlock(block: b, attributed: r.attributed, hasLoadableAttachments: r.hasLoadableAttachments))
         }
         return out
     }
@@ -84,15 +96,11 @@ public final class DocumentRenderer: @unchecked Sendable {
         blocks.reserveCapacity(document.blocks.count)
         blocks.append(contentsOf: previous.blocks[0..<diff.oldChanged.lowerBound])
         for (k, b) in document.blocks[diff.newChanged].enumerated() {
-            blocks.append(RenderedBlock(block: b, attributed: builder.build(b, index: diff.newChanged.lowerBound + k)))
+            let r: (attributed: NSAttributedString, hasLoadableAttachments: Bool) = builder.build(b, index: diff.newChanged.lowerBound + k)
+            blocks.append(RenderedBlock(block: b, attributed: r.attributed, hasLoadableAttachments: r.hasLoadableAttachments))
         }
         blocks.append(contentsOf: previous.blocks[diff.oldChanged.upperBound...])
         return (assemble(blocks), diff)
-    }
-
-    /// 主题切换：同一文档换 style 全量重建（不重解析）
-    public func rerender(_ previous: RenderedDocument, document: Document) -> RenderedDocument {
-        render(document)
     }
 
     private func assemble(_ blocks: [RenderedBlock]) -> RenderedDocument {

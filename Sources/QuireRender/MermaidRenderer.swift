@@ -9,7 +9,6 @@ public final class MermaidAttachment: NSTextAttachment {
     public let mermaidTheme: String
     public var isRendered = false
     public var failed = false
-    public var errorText: String?
 
     public init(source: String, mermaidTheme: String) {
         self.source = source
@@ -116,11 +115,10 @@ public final class MermaidRenderer: NSObject, WKNavigationDelegate {
     public func render(source: String, theme: String, background: String = "transparent") async throws -> NSImage {
         let key = MermaidCache.key(source: source, theme: theme + "|" + background)
         if let cached = MermaidCache.shared.image(forKey: key) { return cached }
-        // 排队：同一时刻只有一个渲染在用 stage
-        while busy { try? await Task.sleep(nanoseconds: 10_000_000) }
-        busy = true
+        // 串行：同一时刻只有一个渲染在用 stage（排队等待，不忙等）
+        await acquire()
         inflight += 1
-        defer { busy = false; inflight -= 1; scheduleIdle() }
+        defer { release(); inflight -= 1; scheduleIdle() }
         if let cached = MermaidCache.shared.image(forKey: key) { return cached }
         try await ensureReady()
         guard let webView else { throw Failure.unavailable("WebView 未创建") }
@@ -154,6 +152,16 @@ public final class MermaidRenderer: NSObject, WKNavigationDelegate {
         return img
     }
     private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private func acquire() async {
+        if !busy { busy = true; return }
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in waiters.append(c) }
+        busy = true
+    }
+    private func release() {
+        busy = false
+        if !waiters.isEmpty { waiters.removeFirst().resume() }
+    }
 
     /// PNG（2× 像素）→ NSImage（pt 尺寸 = 像素 / rasterScale）
     nonisolated static func image(fromPNG data: Data, pointSize: CGSize? = nil) -> NSImage? {
@@ -213,7 +221,4 @@ public final class MermaidRenderer: NSObject, WKNavigationDelegate {
             self.ready = false
         }
     }
-
-    /// 是否有存活的 WebView（测试 / 诊断）
-    public var isWebViewAlive: Bool { webView != nil }
 }

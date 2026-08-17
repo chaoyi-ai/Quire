@@ -58,6 +58,28 @@ final class EditorTests: XCTestCase {
         XCTAssertEqual(attrs("b")[.foregroundColor] as? NSColor, code)
     }
 
+    /// 在围栏内 / front matter 内编辑一行：增量高亮要拿到正确的行首状态（不能把围栏内的文字当正文重新着色）
+    func testEditInsideFenceKeepsCodeState() {
+        editor.setSource("---\ntitle: x\n---\n\n# 标题\n\n```swift\nlet a = 1\nlet b = 2\n```\n\n尾段 **粗**\n")
+        let code = editor.style.theme.colors.editor.markdownCode.nsColor
+        XCTAssertEqual(attrs("let b = 2")[.foregroundColor] as? NSColor, code)
+        // 在围栏内第二行末尾输入
+        let loc = (editor.source as NSString).range(of: "let b = 2").upperBound
+        editor.setSelectedRange(NSRange(location: loc, length: 0))
+        editor.insertText(" // c", replacementRange: NSRange(location: loc, length: 0))
+        XCTAssertEqual(attrs("let b = 2 // c")[.foregroundColor] as? NSColor, code)
+        XCTAssertEqual(attrs("let a = 1")[.foregroundColor] as? NSColor, code)
+        // 围栏外仍是正文/粗体
+        XCTAssertTrue((attrs("粗")[.font] as! NSFont).fontDescriptor.symbolicTraits.contains(.bold))
+        // 在 front matter 里编辑：不当作标题
+        let fm = (editor.source as NSString).range(of: "title: x").upperBound
+        editor.insertText("y", replacementRange: NSRange(location: fm, length: 0))
+        XCTAssertNotEqual(attrs("title: xy")[.foregroundColor] as? NSColor, editor.style.theme.colors.editor.markdownHeading.nsColor)
+        XCTAssertEqual(attrs("标题")[.foregroundColor] as? NSColor, editor.style.theme.colors.editor.markdownHeading.nsColor)
+        // 行索引仍正确
+        XCTAssertEqual(editor.lineNumber(at: (editor.source as NSString).range(of: "尾段").location), 12)
+    }
+
     func testListContinuation() {
         editor.setSource("- 项目一")
         editor.setSelectedRange(NSRange(location: (editor.source as NSString).length, length: 0))

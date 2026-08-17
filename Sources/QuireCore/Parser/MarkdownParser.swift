@@ -72,9 +72,7 @@ public struct MarkdownParser: Sendable {
                                      blockIndex: i, line: b.sourceRange?.start.line))
             }
         }
-        var lineCount = 1
-        for b in source.utf8 where b == 0x0A { lineCount += 1 }
-        return Document(blocks: blocks, outline: Outline(entries: entries), lineCount: lineCount)
+        return Document(blocks: blocks, outline: Outline(entries: entries))
     }
 
     // MARK: - Conversion

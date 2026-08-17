@@ -61,12 +61,20 @@ public final class AttributedStringBuilder: @unchecked Sendable {
 
     /// 渲染一个顶级块。返回的字符串以段落分隔符结尾。
     public func build(_ block: Block, index: Int) -> NSAttributedString {
+        build(block, index: index).attributed
+    }
+
+    /// 同上，并报告该块是否含需要异步加载的附件（图片 / Mermaid），供 loadImages 跳过无关块，
+    /// 避免对整份 1 MB 文档做属性枚举（实测 ~100 ms/次）。
+    public func build(_ block: Block, index: Int) -> (attributed: NSAttributedString, hasLoadableAttachments: Bool) {
         let out = NSMutableAttributedString()
+        appendedLoadableAttachment = false
         out.beginEditing()
         append(block, into: out, ctx: BlockContext())
         out.endEditing()
-        return out
+        return (out, appendedLoadableAttachment)
     }
+    private var appendedLoadableAttachment = false
 
     // MARK: - 块
 
@@ -112,7 +120,6 @@ public final class AttributedStringBuilder: @unchecked Sendable {
     private func paragraphContext(role: BlockRole, psKey: String, ps: NSParagraphStyle, ctx: BlockContext, extra: [NSAttributedString.Key: Any] = [:], extraKey: String = "") -> ParagraphContext {
         var a: [NSAttributedString.Key: Any] = [.paragraphStyle: ps, QuireAttribute.blockRole: role.rawValue]
         if ctx.quoteDepth > 0 { a[QuireAttribute.quoteDepth] = ctx.quoteDepth }
-        if ctx.listDepth > 0 { a[QuireAttribute.listDepth] = ctx.listDepth }
         for (k, v) in extra { a[k] = v }
         return ParagraphContext(base: a, key: "\(psKey)|\(role.rawValue)|\(ctx.quoteDepth)|\(ctx.listDepth)|\(extraKey)", quote: ctx.quoteDepth > 0, baseFont: nil, color: nil)
     }
@@ -127,15 +134,13 @@ public final class AttributedStringBuilder: @unchecked Sendable {
             p.paragraphSpacing = (style.baseSize * 0.6).rounded()
             p.headIndent = ctx.indent; p.firstLineHeadIndent = ctx.indent
         }
-        // 标题 id 每个都不同 → 不进缓存键；作为 extra 属性单独 addAttribute（一段一次，便宜）
         var para = paragraphContext(role: .heading, psKey: psKey, ps: ps, ctx: ctx, extra: [QuireAttribute.headingLevel: level], extraKey: "L\(level)")
         para.baseFont = font; para.color = style.heading
         let ic = InlineContext(para: para)
-        let start = out.length
         if let marker = ctx.marker, ctx.isFirstInItem { appendMarker(marker, into: out, para: para); appendRun("\t", into: out, ctx: ic) }
         appendInlines(inlines, into: out, ctx: ic)
         appendRun("\n", into: out, ctx: ic)
-        out.addAttribute(QuireAttribute.headingID, value: id, range: NSRange(location: start, length: out.length - start))
+        _ = id   // 锚点跳转按 Block.kind 查，不需要写进属性
     }
 
     private func appendParagraph(_ inlines: [Inline], into out: NSMutableAttributedString, ctx: BlockContext) {
@@ -227,7 +232,7 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         att.image = img
         att.bounds = CGRect(x: 0, y: (font.capHeight - size) / 2 + 1, width: size, height: size)
         let s = NSMutableAttributedString(attachment: att)
-        s.addAttributes([QuireAttribute.taskChecked: checked, .font: font], range: NSRange(location: 0, length: s.length))
+        s.addAttributes([.font: font], range: NSRange(location: 0, length: s.length))
         checkboxCache[checked] = s
         return s
     }
@@ -240,7 +245,6 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         cacheLock.unlock()
         var base: [NSAttributedString.Key: Any] = [.paragraphStyle: ps, QuireAttribute.blockRole: role.rawValue, .font: style.codeFont]
         if ctx.quoteDepth > 0 { base[QuireAttribute.quoteDepth] = ctx.quoteDepth }
-        if ctx.listDepth > 0 { base[QuireAttribute.listDepth] = ctx.listDepth }
         if let language { base[QuireAttribute.codeLanguage] = language }
         var table: [Attrs] = []
         table.reserveCapacity(TokenKind.byIndex.count)
@@ -304,7 +308,6 @@ public final class AttributedStringBuilder: @unchecked Sendable {
             }
         }
         QAAppendRun(out, "\n" as NSString, plain)
-        _ = start
     }
 
     private func appendThematicBreak(into out: NSMutableAttributedString, ctx: BlockContext) {
@@ -370,7 +373,6 @@ public final class AttributedStringBuilder: @unchecked Sendable {
                 out.addAttribute(.font, value: NSFont(descriptor: f.fontDescriptor, size: (f.pointSize * 0.85).rounded()) ?? f, range: r)
             }
         }
-        out.addAttribute(QuireAttribute.footnoteLabel, value: label, range: range)
     }
 
     /// Mermaid：占位附件（缓存命中则直接带图），实际渲染由 ReaderTextView 触发 MermaidRenderer
@@ -384,6 +386,7 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         }
         let para = paragraphContext(role: .mermaid, psKey: psKey, ps: ps, ctx: ctx)
         let att = MermaidAttachment(source: source, mermaidTheme: style.theme.mermaid.theme)
+        appendedLoadableAttachment = true
         let key = MermaidCache.key(source: source, theme: style.theme.mermaid.theme + "|" + style.theme.colors.background.hexString)
         if let cached = MermaidCache.shared.image(forKey: key) {
             att.image = cached
@@ -399,7 +402,6 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         var a = para.base
         a[.font] = style.bodyFont
         a[.attachment] = att
-        a[QuireAttribute.mermaidSource] = source
         out.append(NSAttributedString(string: "\u{FFFC}", attributes: a))
         appendRun("\n", into: out, ctx: InlineContext(para: para))
     }
@@ -407,6 +409,7 @@ public final class AttributedStringBuilder: @unchecked Sendable {
     /// 图片附件：占位尺寸，实际图片由 ImageLoader 异步填充
     private func appendImageAttachment(source: String?, alt: String, inline: Bool, into out: NSMutableAttributedString, ctx: InlineContext) {
         let att = ImageAttachment()
+        appendedLoadableAttachment = true
         att.source = source
         att.altText = alt
         att.isInline = inline
@@ -416,7 +419,6 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         var a = ctx.para.base
         a[.font] = font(for: ctx)
         a[.attachment] = att
-        if let source { a[QuireAttribute.imageSource] = source }
         out.append(NSAttributedString(string: "\u{FFFC}", attributes: a))
     }
 
@@ -445,7 +447,6 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         var a = para.base
         a[.attachment] = att
         a[.font] = style.bodyFont
-        a[QuireAttribute.table] = table
         out.append(NSAttributedString(string: "\u{FFFC}", attributes: a))
         appendRun("\n", into: out, ctx: InlineContext(para: para))
     }
@@ -583,17 +584,4 @@ extension TokenKind {
     static let byIndex: [TokenKind] = [.plain] + TokenKind.allCases.filter { $0 != .plain }
     private static let indexOf: [TokenKind: Int] = Dictionary(uniqueKeysWithValues: byIndex.enumerated().map { ($1, $0) })
     var tokenIndex: Int { TokenKind.indexOf[self] ?? 0 }
-}
-
-extension NSImage {
-    func tinted(_ color: NSColor) -> NSImage {
-        let img = NSImage(size: size, flipped: false) { rect in
-            color.set()
-            rect.fill()
-            self.draw(in: rect, from: .zero, operation: .destinationIn, fraction: 1)
-            return true
-        }
-        img.isTemplate = false
-        return img
-    }
 }

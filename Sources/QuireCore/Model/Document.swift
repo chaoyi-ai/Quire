@@ -110,11 +110,9 @@ public struct Block: Hashable, Sendable {
 public struct Document: Sendable {
     public var blocks: [Block]
     public var outline: Outline
-    /// 原始源码行数（用于滚动同步映射）
-    public var lineCount: Int
 
-    public init(blocks: [Block], outline: Outline, lineCount: Int) {
-        self.blocks = blocks; self.outline = outline; self.lineCount = lineCount
+    public init(blocks: [Block], outline: Outline) {
+        self.blocks = blocks; self.outline = outline
     }
-    public static let empty = Document(blocks: [], outline: Outline(entries: []), lineCount: 0)
+    public static let empty = Document(blocks: [], outline: Outline(entries: []))
 }

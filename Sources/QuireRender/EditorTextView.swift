@@ -18,8 +18,6 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     public var onDropFiles: (([URL]) -> Void)?
     /// 当前文档 URL（用于生成拖入图片/文件的相对路径）
     public var documentURL: URL?
-    /// 是否显示行号
-    public var showsLineNumbers = true { didSet { enclosingScrollView?.rulersVisible = showsLineNumbers } }
 
     public init(style: RenderStyle) {
         self.style = style
@@ -135,13 +133,79 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
 
     // MARK: - 高亮
 
+    /// 每行行首的围栏 / front matter 状态（与 lineStarts 对齐）
+    private struct LineState { var fenceChar: UInt8 = 0; var fenceLen: UInt16 = 0; var inFrontMatter = false }
+    private var lineStates: [LineState] = [LineState()]
+
+    /// 一趟重建行索引 + 每行行首状态。分块 getCharacters（不用 String.utf16 逐字遍历：1 MB 桥接串 ~9 ms → <1 ms）。
     private func rebuildLineStarts() {
-        let s = textStorage?.string ?? ""
-        var starts = [0]
-        starts.reserveCapacity(s.utf16.count / 40)
-        var i = 0
-        for u in s.utf16 { i += 1; if u == 0x0A { starts.append(i) } }
+        guard let ns = textStorage?.string as NSString?, ns.length > 0 else { lineStarts = [0]; lineStates = [LineState()]; return }
+        let n = ns.length
+        var starts: [Int] = [0]; starts.reserveCapacity(n / 40 + 1)
+        var states: [LineState] = [LineState()]; states.reserveCapacity(n / 40 + 1)
+        var st = LineState()          // 正在扫描的这一行行首的状态 → 处理完成为下一行行首状态
+        var lineIdx = 0
+        var carry: [unichar] = []     // 跨块的未完成行
+        let chunk = 1 << 16
+        var buf = [unichar](repeating: 0, count: chunk)
+        var loc = 0
+        while loc < n {
+            let len = min(chunk, n - loc)
+            ns.getCharacters(&buf, range: NSRange(location: loc, length: len))
+            buf.withUnsafeBufferPointer { p in
+                var lineBegin = 0
+                for k in 0..<len where p[k] == 0x0A {
+                    if carry.isEmpty {
+                        Self.advance(&st, line: UnsafeBufferPointer(rebasing: p[lineBegin..<k]), lineIndex: lineIdx)
+                    } else {
+                        carry.append(contentsOf: p[lineBegin..<k])
+                        carry.withUnsafeBufferPointer { Self.advance(&st, line: $0, lineIndex: lineIdx) }
+                        carry.removeAll(keepingCapacity: true)
+                    }
+                    lineIdx += 1
+                    starts.append(loc + k + 1)
+                    states.append(st)
+                    lineBegin = k + 1
+                }
+                if lineBegin < len { carry.append(contentsOf: p[lineBegin..<len]) }
+            }
+            loc += len
+        }
         lineStarts = starts
+        lineStates = states
+    }
+
+    /// 用一行内容推进围栏 / front matter 状态（只看行首几个字符 + 必要时整行）
+    private static func advance(_ st: inout LineState, line: UnsafeBufferPointer<unichar>, lineIndex: Int) {
+        let n = line.count
+        var i = 0, spaces = 0
+        while i < n, spaces < 3, line[i] == 0x20 { i += 1; spaces += 1 }
+        guard i < n else { return }
+        let c = line[i]
+        func isDashRule() -> Bool {
+            var dashes = 0
+            for k in i..<n { let x = line[k]; if x == 0x2D { dashes += 1 } else if x != 0x20, x != 0x0D { return false } }
+            return dashes >= 3
+        }
+        if lineIndex == 0, c == 0x2D, isDashRule() { st.inFrontMatter = true; return }
+        if st.inFrontMatter {
+            if (c == 0x2D && isDashRule()) || (c == 0x2E && i + 2 < n && line[i + 1] == 0x2E && line[i + 2] == 0x2E) { st.inFrontMatter = false }
+            return
+        }
+        guard c == 0x60 || c == 0x7E else { return }
+        var k = i; while k < n, line[k] == c { k += 1 }
+        let len = k - i
+        guard len >= 3 else { return }
+        if st.fenceChar != 0 {
+            // 闭合行：同字符、不短于开栏、其后只有空白
+            guard UInt8(c) == st.fenceChar, len >= Int(st.fenceLen) else { return }
+            for m in k..<n where line[m] != 0x20 && line[m] != 0x09 && line[m] != 0x0D { return }
+            st.fenceChar = 0; st.fenceLen = 0
+        } else {
+            // 反引号围栏 info 中不能含反引号
+            if c == 0x60 { for m in k..<n where line[m] == 0x60 { return } }
+            st.fenceChar = UInt8(c); st.fenceLen = UInt16(min(len, Int(UInt16.max)))
+        }
     }
 
     private func rehighlightAll() {
@@ -149,49 +213,15 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         highlight(range: NSRange(location: 0, length: ts.length), state: .initial)
     }
 
-    /// 计算 `location` 所在行开头的围栏 / front matter 状态：只看每行开头几个字符（O(行数)，1 MB ≈ 25k 行 < 1 ms）
+    /// `location` 所在行行首的围栏 / front matter 状态（查表，O(log 行数)）
     private func fenceState(before location: Int) -> MarkdownLexer.State {
-        guard let ns = textStorage?.string as NSString?, location > 0 else { return .initial }
+        guard location > 0 else { return .initial }
+        let line = lineNumber(at: location)          // 1-based
+        let ls = lineStates[min(line - 1, lineStates.count - 1)]
         var st = MarkdownLexer.State()
-        let n = ns.length
-        for (idx, start) in lineStarts.enumerated() {
-            if start >= location { break }
-            st.lineNumber = idx + 1
-            // 读取行首至多 8 个字符
-            var i = start
-            var spaces = 0
-            while i < n, spaces < 3, ns.character(at: i) == 0x20 { i += 1; spaces += 1 }
-            guard i < n else { continue }
-            let c = ns.character(at: i)
-            if idx == 0, c == 0x2D, isDashRule(ns, i, n) { st.inFrontMatter = true; continue }
-            if st.inFrontMatter {
-                if (c == 0x2D && isDashRule(ns, i, n)) || (c == 0x2E && ns.character(at: min(i + 1, n - 1)) == 0x2E) { st.inFrontMatter = false }
-                continue
-            }
-            guard c == 0x60 || c == 0x7E else { continue }
-            var k = i; while k < n, ns.character(at: k) == c { k += 1 }
-            let len = k - i
-            guard len >= 3 else { continue }
-            if st.inFence {
-                if UInt8(c) == st.fenceChar, len >= st.fenceLen {
-                    // 闭合行只能有空白
-                    var m = k; var only = true
-                    while m < n { let x = ns.character(at: m); if x == 0x0A { break }; if x != 0x20, x != 0x09 { only = false; break }; m += 1 }
-                    if only { st.fenceChar = 0; st.fenceLen = 0 }
-                }
-            } else {
-                // 反引号围栏 info 中不能含反引号
-                var ok = true
-                if c == 0x60 { var m = k; while m < n { let x = ns.character(at: m); if x == 0x0A { break }; if x == 0x60 { ok = false; break }; m += 1 } }
-                if ok { st.fenceChar = UInt8(c); st.fenceLen = len }
-            }
-        }
+        st.fenceChar = ls.fenceChar; st.fenceLen = Int(ls.fenceLen); st.inFrontMatter = ls.inFrontMatter
+        st.lineNumber = line - 1     // lexer 语义：该行之前的行数（0-based 行号）
         return st
-    }
-    private func isDashRule(_ ns: NSString, _ i: Int, _ n: Int) -> Bool {
-        var k = i; var dashes = 0
-        while k < n { let x = ns.character(at: k); if x == 0x0A { break }; if x == 0x2D { dashes += 1 } else if x != 0x20 { return false }; k += 1 }
-        return dashes >= 3
     }
 
     private func highlight(range: NSRange, state: MarkdownLexer.State) {
@@ -291,11 +321,17 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         guard let tlm = textLayoutManager, let cs = textContentStorage, let sv = enclosingScrollView else { return }
         let loc = location(ofLine: line)
         guard let l = cs.location(cs.documentRange.location, offsetBy: loc) else { return }
-        tlm.ensureLayout(for: NSTextRange(location: l))
-        guard let frag = tlm.textLayoutFragment(for: l) else { return }
-        let y = max(0, frag.layoutFragmentFrame.minY + textContainerInset.height - 8)
-        sv.contentView.setBoundsOrigin(CGPoint(x: 0, y: y))
-        sv.reflectScrolledClipView(sv.contentView)
+        // 估算布局：设视口 → 布局视口 → 重算，直到稳定（最多 3 轮）
+        for _ in 0..<3 {
+            var frag: NSTextLayoutFragment?
+            tlm.enumerateTextLayoutFragments(from: l, options: [.ensuresLayout]) { f in frag = f; return false }
+            guard let frag else { return }
+            let y = max(0, frag.layoutFragmentFrame.minY + textContainerInset.height - 8)
+            if abs(y - sv.contentView.bounds.minY) <= 0.5 { break }
+            sv.contentView.setBoundsOrigin(CGPoint(x: 0, y: y))
+            sv.reflectScrolledClipView(sv.contentView)
+            tlm.textViewportLayoutController.layoutViewport()
+        }
     }
 
     // MARK: - 拖放：.md 打开；图片插入 ![]()；其他文件插入 []()

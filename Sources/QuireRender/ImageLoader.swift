@@ -23,11 +23,6 @@ public final class ImageAttachment: NSTextAttachment {
             return true
         }
     }
-
-    // 覆盖 image 访问，保证附件在缩放时按 bounds 绘制
-    public override func image(forBounds imageBounds: CGRect, textContainer: NSTextContainer?, characterIndex charIndex: Int) -> NSImage? {
-        image
-    }
 }
 
 /// 图片加载：磁盘 / 网络 → ImageIO 按目标像素宽度 downsample → NSCache。

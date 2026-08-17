@@ -38,7 +38,6 @@ public final class RenderStyle: @unchecked Sendable {
     public let bodyItalic: NSFont
     public let bodyBoldItalic: NSFont
     public let codeFont: NSFont
-    public let codeBold: NSFont
     public let inlineCodeFont: NSFont
     public let headingFonts: [NSFont]       // h1…h6
 
@@ -83,7 +82,6 @@ public final class RenderStyle: @unchecked Sendable {
         bodyBoldItalic = Self.variant(Self.variant(body, traits: .boldFontMask), traits: .italicFontMask)
         let code = Self.resolveFont(families: t.codeFont, size: codeSize, mono: true)
         codeFont = code
-        codeBold = Self.variant(code, traits: .boldFontMask)
         inlineCodeFont = Self.resolveFont(families: t.codeFont, size: (baseSize * CGFloat(t.codeSize)).rounded(), mono: true)
 
         let weight: NSFont.Weight = switch t.headingWeight {

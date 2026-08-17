@@ -24,7 +24,6 @@ public struct LanguageSpec: Sendable {
     public var capitalizedTypeHeuristic = true      // Capitalized → type
     public var regexLiterals = false                // JS/TS 简单 /…/ 识别
     public var lifetimeQuote = false                // Rust 'a
-    public var hashComments: Bool { lineComments.contains("#") }
 
     public init(name: String) { self.name = name }
 }

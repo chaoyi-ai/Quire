@@ -51,7 +51,6 @@ public struct ThemeColor: Hashable, Sendable, Codable, CustomStringConvertible {
     }
 
     public static let clear = ThemeColor(red: 0, green: 0, blue: 0, alpha: 0)
-    public func withAlpha(_ a: Double) -> ThemeColor { var c = self; c.alpha = a; return c }
 }
 
 public enum Appearance: String, Codable, Sendable, Hashable { case light, dark }

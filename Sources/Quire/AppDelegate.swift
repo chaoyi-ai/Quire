@@ -4,8 +4,6 @@ import QuireRender
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var pendingFiles: [String] = []
-
     func applicationWillFinishLaunching(_ notification: Notification) {
         LaunchClock.mark("willFinishLaunching")
         MainMenu.install()
@@ -36,10 +34,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 无文档启动：弹开文件面板（⌘N 仍可新建）
+    /// 无文档启动：弹开文件面板（⌘N 仍可新建）。命令行带文件时 AppKit 会走 open 事件而不调用这里。
     func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
-        // 命令行传了路径的话由 didFinishLaunching 处理
-        if !CommandLine.arguments.dropFirst().filter({ !$0.hasPrefix("-") }).isEmpty { return true }
         NSDocumentController.shared.openDocument(nil)
         return true
     }

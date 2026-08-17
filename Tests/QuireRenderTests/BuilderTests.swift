@@ -46,7 +46,6 @@ final class BuilderTests: XCTestCase {
         let h = attrs(s, of: "标题")
         XCTAssertEqual(h[QuireAttribute.blockRole] as? Int, BlockRole.heading.rawValue)
         XCTAssertEqual(h[QuireAttribute.headingLevel] as? Int, 1)
-        XCTAssertEqual(h[QuireAttribute.headingID] as? String, "标题")
         XCTAssertEqual((h[.font] as? NSFont)?.pointSize, style.headingFont(level: 1).pointSize)
         let kw = attrs(s, of: "let")
         XCTAssertEqual(kw[.foregroundColor] as? NSColor, style.syntaxColor(.keyword))

@@ -60,13 +60,19 @@ final class DocumentSession {
     private(set) var isLargeFile = false
     var onLargeFileModeChanged: ((Bool) -> Void)?
 
+    /// 大文件模式下的派生 style（缓存：同一基础 style 复用同一实例，保证 `===` 身份稳定，增量路径才能命中）
+    private var largeFileStyle: (base: RenderStyle, derived: RenderStyle)?
+
     /// 当前有效 style（大文件模式下带 largeFile 选项）
     private func effectiveStyle() -> RenderStyle {
         let large = source.utf8.count > Preferences.shared.largeFileThresholdBytes
         if large != isLargeFile { isLargeFile = large; onLargeFileModeChanged?(large) }
         guard large else { return style }
+        if let cached = largeFileStyle, cached.base === style { return cached.derived }
         var o = style.options; o.largeFile = true
-        return RenderStyle(theme: style.theme, scale: style.scale, options: o)
+        let derived = RenderStyle(theme: style.theme, scale: style.scale, options: o)
+        largeFileStyle = (style, derived)
+        return derived
     }
 
     func sourceDidChange(_ newSource: String, reason: ChangeReason) {

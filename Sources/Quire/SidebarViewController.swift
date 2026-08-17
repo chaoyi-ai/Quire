@@ -30,7 +30,7 @@ final class SidebarNode {
 final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NSOutlineViewDelegate {
     // 输入
     var currentURL: URL? { didSet { if currentURL != oldValue { currentURLDidChange() } } }
-    var outline: Outline = Outline(entries: []) { didSet { outlineDidChange() } }
+    var outline: Outline = Outline(entries: []) { didSet { if outline != oldValue { outlineDidChange() } } }
     // 输出
     var onSelectHeading: ((Outline.Entry) -> Void)?
     var onOpenFile: ((URL, Int?) -> Void)?
@@ -331,19 +331,13 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         var seen = Set<String>()
         for d in dirs {
             let p = d.standardizedFileURL.path
-            guard seen.insert(p).inserted else { continue }
-            if let node = findFolderNode(path: p, from: root), node.children != nil {
-                loadChildren(of: node)
+            guard seen.insert(p).inserted, let node = findFolderNode(path: p, from: root), node.children != nil else { continue }
+            // 该目录下的文件可能变了：标题缓存失效；已展开的重扫
+            for c in node.children ?? [] where c.kind == .file && c !== currentFileNode {
+                if let u = c.url { headingCache.removeValue(forKey: u) }
+                if c.children != nil, outlineView.isItemExpanded(c) { c.children = nil; loadChildren(of: c) }
             }
-        }
-        // 文件内容变了：让缓存失效（下次展开重扫）
-        for d in dirs {
-            if let node = findFolderNode(path: d.standardizedFileURL.path, from: root) {
-                for c in node.children ?? [] where c.kind == .file && c !== currentFileNode {
-                    if let u = c.url { headingCache.removeValue(forKey: u) }
-                    if c.children != nil, outlineView.isItemExpanded(c) { c.children = nil; loadChildren(of: c) }
-                }
-            }
+            loadChildren(of: node)   // 增删改名 → 重列（按 URL 复用节点）
         }
     }
 

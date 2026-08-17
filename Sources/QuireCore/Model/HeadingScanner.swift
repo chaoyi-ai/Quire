@@ -88,17 +88,20 @@ public enum HeadingScanner {
         return out
     }
 
-    /// 至少 3 个 `char`，其余仅空白（allowSpaces=false 时中间不允许空格，用于 setext 下划线）
+    /// 至少 3 个 `char`，其余仅空白。allowSpaces=false（setext 下划线）时 char 之间不允许空白，只允许尾随空白。
     private static func isRule(_ base: UnsafePointer<UInt8>, _ s: Int, _ e: Int, _ char: UInt8, allowSpaces: Bool = true) -> Bool {
         var count = 0
-        var k = s
-        var seenSpaceAfter = false
-        while k < e {
+        var seenSpaceAfterChar = false
+        for k in s..<e {
             let b = base[k]
-            if b == char { if seenSpaceAfter && !allowSpaces { return false }; count += 1 }
-            else if b == 0x20 || b == 0x09 || b == 0x0D { if count > 0 { seenSpaceAfter = true }; if !allowSpaces && k < e - 1 && count > 0 { /* 尾随空白允许 */ } }
-            else { return false }
-            k += 1
+            if b == char {
+                if seenSpaceAfterChar && !allowSpaces { return false }
+                count += 1
+            } else if b == 0x20 || b == 0x09 || b == 0x0D {
+                if count > 0 { seenSpaceAfterChar = true }
+            } else {
+                return false
+            }
         }
         return count >= 3
     }

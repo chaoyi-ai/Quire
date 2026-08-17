@@ -128,7 +128,7 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
     private func apply(_ doc: RenderedDocument, style: RenderStyle, reason: DocumentSession.ChangeReason, diff: BlockDiff?) {
         defer { if reason == .opened { reportLaunchIfNeeded() } }
         // 增量路径：编辑时只替换变化块，视口不动
-        if reason == .edited, let diff, let previous = textView.rendered, previous.blocks.count == diff.oldChanged.upperBound + (previous.blocks.count - diff.oldChanged.upperBound), style === textView.style {
+        if reason == .edited, let diff, let previous = textView.rendered, style === textView.style {
             if diff.isEmpty { textView.updateRendered(doc); return }
             textView.replaceBlocks(with: doc, diff: diff, previous: previous)
             viewportDidScroll()
@@ -149,13 +149,26 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
             scrollView.contentView.setBoundsOrigin(.zero)
         case .externalChange, .edited, .theme, .zoom:
             // 优先按内容哈希找回原块（块可能移动），否则按下标
-            if let topHash, let idx = doc.blocks.firstIndex(where: { $0.block.contentHash == topHash }) {
+            if let top, let idx = Self.nearestBlock(withHash: topHash, around: top, in: doc) {
                 textView.scroll(toBlock: idx, offset: offset)
-            } else if let top, top < doc.blocks.count {
-                textView.scroll(toBlock: top, offset: offset)
             }
         }
         viewportDidScroll()
+    }
+
+    /// 找回原顶部块：优先同下标同哈希；否则以原下标为中心向两侧找同哈希（文档里可能有重复内容块，不能取 first）；再否则原下标
+    static func nearestBlock(withHash hash: Int?, around top: Int, in doc: RenderedDocument) -> Int? {
+        let n = doc.blocks.count
+        guard n > 0 else { return nil }
+        guard let hash else { return min(top, n - 1) }
+        if top < n, doc.blocks[top].block.contentHash == hash { return top }
+        var d = 1
+        while top - d >= 0 || top + d < n {
+            if top + d < n, doc.blocks[top + d].block.contentHash == hash { return top + d }
+            if top - d >= 0, doc.blocks[top - d].block.contentHash == hash { return top - d }
+            d += 1
+        }
+        return min(top, n - 1)
     }
 
     /// 程序化滚动（侧栏点击）期间挂起"顶部块 → 高亮"，避免动画途中逐个章节高亮
@@ -286,3 +299,4 @@ enum FileOpener {
         }
     }
 }
+

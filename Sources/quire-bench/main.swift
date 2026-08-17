@@ -1,9 +1,10 @@
 import Foundation
+import AppKit
 import QuireCore
 import QuireRender
 
 // quire-bench：性能基准 CLI。输出 JSON 到 stdout，人类可读摘要到 stderr。
-// 用法：quire-bench [all|parse|highlight|themes|render|full|theme|incremental|gen <dir>] [--iterations N]
+// 用法：quire-bench [all|parse|highlight|themes|render|full|theme|incremental|views|gen <dir>] [--iterations N]
 
 let args = Array(CommandLine.arguments.dropFirst())
 let command = args.first ?? "all"
@@ -88,9 +89,8 @@ func runRender() {
     measure("full/medium-200k", bytes: medium.utf8.count) { _ = renderer.render(parser.parse(medium)) }
     _ = docMedium
     // 主题切换：不重解析，重渲染
-    let rendered = renderer.render(doc)
     let darkRenderer = DocumentRenderer(theme: dark)
-    measure("theme/switch-large-1mb", bytes: large.utf8.count) { _ = darkRenderer.rerender(rendered, document: doc) }
+    measure("theme/switch-large-1mb", bytes: large.utf8.count) { _ = darkRenderer.render(doc) }   // 主题切换 = 同一 Document 换 style 全量重建
     // 增量：改中间一段
     var lines = large.components(separatedBy: "\n")
     lines[lines.count / 2] += " 修改"
@@ -100,6 +100,40 @@ func runRender() {
         let diff = BlockDiff.compute(old: doc.blocks, new: editedDoc.blocks)
         _ = renderer.render(blocks: Array(editedDoc.blocks[diff.newChanged]))
     }
+}
+
+/// 视图层：ReaderTextView.setRendered（含附件扫描）、EditorTextView 单次按键路径（行索引重建 + 段落增量高亮）
+@MainActor
+func runViews() {
+    let catalog = ThemeStore.loadBuiltIn()
+    guard let light = catalog.theme(id: "github-light") else { return }
+    let style = RenderStyle(theme: light)
+    let doc = parser.parse(large)
+    let rendered = DocumentRenderer(style: style).render(doc)
+    // 与 app 一致：放在 NSScrollView 里（TextKit 2 只布局视口；不放滚动视图会全量布局）
+    let reader = ReaderTextView(style: style)
+    let readerScroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+    readerScroll.documentView = reader
+    reader.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
+    measure("view/reader-setRendered-1mb", bytes: large.utf8.count) {
+        reader.setRendered(rendered, style: style)
+        reader.textLayoutManager?.textViewportLayoutController.layoutViewport()   // 首屏布局
+    }
+    let editor = EditorTextView(style: style)
+    let editorScroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+    editorScroll.documentView = editor
+    editor.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
+    editor.setSource(large)
+    let mid = (large as NSString).length / 2
+    let lineStart = (large as NSString).range(of: "\n", options: [], range: NSRange(location: mid, length: (large as NSString).length - mid)).location + 1
+    var toggle = false
+    measure("view/editor-keystroke-1mb", bytes: large.utf8.count) {
+        // 交替插入/删除一个字符，保持文档不变
+        if toggle { editor.insertText("", replacementRange: NSRange(location: lineStart, length: 1)) }
+        else { editor.insertText("x", replacementRange: NSRange(location: lineStart, length: 0)) }
+        toggle.toggle()
+    }
+    if toggle { editor.insertText("", replacementRange: NSRange(location: lineStart, length: 1)) }
 }
 
 func generate(to dir: String) throws {
@@ -118,12 +152,13 @@ case "parse": runParse()
 case "highlight": runHighlight()
 case "themes": runThemes()
 case "render", "full", "theme", "incremental": runRender()
+case "views": runViews()
 case "gen":
     let dir = args.count > 1 ? args[1] : "Tests/QuireCoreTests/Fixtures"
     try generate(to: dir)
     exit(0)
 case "all":
-    runParse(); runHighlight(); runThemes(); runRender()
+    runParse(); runHighlight(); runThemes(); runRender(); runViews()
 default:
     FileHandle.standardError.write("未知命令 \(command)\n".data(using: .utf8)!); exit(2)
 }

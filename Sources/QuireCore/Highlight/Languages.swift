@@ -7,8 +7,6 @@ extension LanguageSpec {
         dockerfile, makefile, graphql, protobuf, nginx, latex, r, scala, perl, haskell, elixir, zig,
     ]
 
-    private static let cLikeConstants: Set<String> = ["true", "false", "null", "nil", "NULL", "undefined", "None", "True", "False"]
-
     static var swift: LanguageSpec {
         var s = LanguageSpec(name: "swift")
         s.keywords = ["associatedtype", "class", "deinit", "enum", "extension", "fileprivate", "func", "import", "init", "inout", "internal", "let", "open", "operator", "private", "precedencegroup", "protocol", "public", "rethrows", "static", "struct", "subscript", "typealias", "var", "break", "case", "catch", "continue", "default", "defer", "do", "else", "fallthrough", "for", "guard", "if", "in", "repeat", "return", "throw", "switch", "where", "while", "as", "await", "async", "is", "super", "self", "Self", "throws", "try", "some", "any", "actor", "nonisolated", "isolated", "consuming", "borrowing", "macro", "package", "each", "weak", "unowned", "lazy", "mutating", "nonmutating", "override", "final", "required", "convenience", "dynamic", "optional", "indirect", "prefix", "postfix", "infix", "willSet", "didSet", "get", "set"]
@@ -74,7 +72,8 @@ extension LanguageSpec {
 
     static var objectiveC: LanguageSpec {
         var s = c; s.name = "objective-c"; s.aliases = ["objc", "objectivec", "m", "mm"]
-        s.keywords.formUnion(["@interface", "@implementation", "@end", "@property", "@synthesize", "@protocol", "@class", "@selector", "@try", "@catch", "@finally", "@throw", "@autoreleasepool", "@synchronized", "self", "super", "nonatomic", "atomic", "strong", "weak", "copy", "assign", "readonly", "readwrite", "instancetype", "id", "in", "out", "inout", "bycopy", "byref", "oneway"])
+        // @interface / @property 等由 attributePrefix(@) 识别为 attribute，不入关键字表
+        s.keywords.formUnion(["self", "super", "nonatomic", "atomic", "strong", "weak", "copy", "assign", "readonly", "readwrite", "instancetype", "id", "in", "out", "inout", "bycopy", "byref", "oneway"])
         s.types.formUnion(["NSString", "NSArray", "NSDictionary", "NSObject", "NSInteger", "NSUInteger", "CGFloat", "BOOL", "NSNumber", "NSError", "NSData", "NSURL", "NSMutableArray", "NSMutableDictionary", "NSSet", "UIView", "NSView", "CGRect", "CGPoint", "CGSize", "SEL", "IMP", "Class"])
         s.constants.formUnion(["YES", "NO", "nil", "Nil"])
         s.attributePrefix = 0x40

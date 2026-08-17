@@ -11,20 +11,6 @@ public enum QuireAttribute {
     public static let codeLanguage = NSAttributedString.Key("quire.codeLanguage")
     /// 标题级别（Int 1…6）
     public static let headingLevel = NSAttributedString.Key("quire.headingLevel")
-    /// 标题 anchor id（String）
-    public static let headingID = NSAttributedString.Key("quire.headingID")
-    /// 图片源（String），附件所在字符
-    public static let imageSource = NSAttributedString.Key("quire.imageSource")
-    /// 任务复选框（Bool）
-    public static let taskChecked = NSAttributedString.Key("quire.taskChecked")
-    /// 列表深度（Int）
-    public static let listDepth = NSAttributedString.Key("quire.listDepth")
-    /// 表格模型（TableModel），附件字符上
-    public static let table = NSAttributedString.Key("quire.table")
-    /// Mermaid 源码（String），附件字符上
-    public static let mermaidSource = NSAttributedString.Key("quire.mermaidSource")
-    /// 脚注定义标签（String），整段
-    public static let footnoteLabel = NSAttributedString.Key("quire.footnoteLabel")
     /// 行内代码 run（Bool）：背景由 BlockLayoutFragment 自绘（垂直居中的圆角框），不用 .backgroundColor
     public static let inlineCode = NSAttributedString.Key("quire.inlineCode")
 }

@@ -47,13 +47,13 @@ public final class BlockLayoutFragment: NSTextLayoutFragment {
             let baseX = (ps?.headIndent ?? 0) - CGFloat(quoteDepth) * step
             for d in 0..<quoteDepth {
                 let x = originX + baseX + CGFloat(d) * step
-                let barRect = CGRect(x: x, y: point.y, width: style.blockquoteBarWidth, height: height - (ps?.paragraphSpacing ?? 0) * (isLastQuoteParagraph ? 0.5 : 0))
+                let barRect = CGRect(x: x, y: point.y, width: style.blockquoteBarWidth, height: height)
                 context.setFillColor(style.quoteBorder.cgColor)
                 context.fill(barRect)
             }
             if style.quoteBackground.alphaComponent > 0.01 {
                 let x = originX + baseX
-                let bg = CGRect(x: x, y: point.y, width: width - baseX, height: height - (ps?.paragraphSpacing ?? 0) * (isLastQuoteParagraph ? 0.5 : 0))
+                let bg = CGRect(x: x, y: point.y, width: width - baseX, height: height)
                 context.setFillColor(style.quoteBackground.cgColor)
                 context.fill(bg)
             }
@@ -184,11 +184,4 @@ public final class BlockLayoutFragment: NSTextLayoutFragment {
         }
     }
 
-    /// 是否是引用的最后一段（决定竖条是否延伸到段后间距）：由渲染层在属性里标记，暂按 false（竖条覆盖整个段落含间距，视觉上连续）
-    private var isLastQuoteParagraph: Bool { paragraphAttributes[QuireAttribute.quoteLast] as? Bool ?? false }
-}
-
-extension QuireAttribute {
-    /// 引用块最后一个段落标记（Bool），用于竖条收尾
-    public static let quoteLast = NSAttributedString.Key("quire.quoteLast")
 }
