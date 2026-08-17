@@ -109,7 +109,7 @@
 - [ ] 表格文本可查找（镜像隐藏文本或自定义 finder client）
 - [ ] 主题级字体覆盖（设置里选字体 / 字号）
 - [ ] 数学公式（评估 SwiftMath 或自绘 KaTeX 子集，不引入 WebView）
-- [ ] 内部锚点跳转 / 相对链接打开 / 图片查看器
+- [x] 内部锚点跳转 / 相对链接打开 / 图片（点击用系统看图器打开）
 - [ ] 本地化：zh-Hans / en
 - [ ] Homebrew cask、Sparkle 或手动更新检查（可关闭）
 - [ ] Quick Look 预览扩展（复用 QuireRender）
