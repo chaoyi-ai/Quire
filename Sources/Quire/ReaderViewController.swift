@@ -95,11 +95,17 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
         return LinkOpener.open(target, from: session.document?.fileURL, in: self)
     }
 
-    /// 内部锚点跳转
+    /// 内部锚点跳转：标题 id 或脚注 fn-<label>
     func scroll(toAnchor id: String) -> Bool {
         guard let rendered = textView.rendered else { return false }
         for (i, b) in rendered.blocks.enumerated() {
-            if case .heading(_, _, let hid) = b.block.kind, hid == id { textView.scroll(toBlock: i, animated: true); return true }
+            switch b.block.kind {
+            case .heading(_, _, let hid) where hid == id:
+                textView.scroll(toBlock: i, animated: true); return true
+            case .footnoteDefinition(let label, _) where id == "fn-\(label)":
+                textView.scroll(toBlock: i, animated: true); return true
+            default: continue
+            }
         }
         return false
     }

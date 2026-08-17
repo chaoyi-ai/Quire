@@ -23,6 +23,8 @@ public enum QuireAttribute {
     public static let table = NSAttributedString.Key("quire.table")
     /// Mermaid 源码（String），附件字符上
     public static let mermaidSource = NSAttributedString.Key("quire.mermaidSource")
+    /// 脚注定义标签（String），整段
+    public static let footnoteLabel = NSAttributedString.Key("quire.footnoteLabel")
 }
 
 /// 段落在文档中的角色（决定自定义绘制）

@@ -82,7 +82,8 @@ public final class BlockLayoutFragment: NSTextLayoutFragment {
                 let sz = label.size()
                 NSGraphicsContext.saveGraphicsState()
                 NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
-                label.draw(at: CGPoint(x: rect.maxX - sz.width - pad * 0.75, y: rect.minY + pad * 0.5))
+                // 右侧给复制按钮留 26pt
+                label.draw(at: CGPoint(x: rect.maxX - sz.width - pad * 0.75 - 26, y: rect.minY + pad * 0.7))
                 NSGraphicsContext.restoreGraphicsState()
             }
         case .thematicBreak:

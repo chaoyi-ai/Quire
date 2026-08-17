@@ -103,8 +103,8 @@ public final class AttributedStringBuilder: @unchecked Sendable {
             appendImageBlock(source: src, title: title, alt: alt, into: out, ctx: ctx)
         case .table(let table):
             appendTablePlaceholder(table, into: out, ctx: ctx)
-        case .footnoteDefinition(_, let blocks):
-            for b in blocks { append(b, into: out, ctx: ctx) }
+        case .footnoteDefinition(let label, let blocks):
+            appendFootnoteDefinition(label: label, blocks: blocks, into: out, ctx: ctx)
         }
     }
 
@@ -330,6 +330,33 @@ public final class AttributedStringBuilder: @unchecked Sendable {
             cpara.color = style.muted
             appendRun(title + "\n", into: out, ctx: InlineContext(para: cpara))
         }
+    }
+
+    /// 脚注定义：像有序列表项一样带 "n." 标记与悬挂缩进，小号弱化，段首带锚点属性
+    private func appendFootnoteDefinition(label: String, blocks: [Block], into out: NSMutableAttributedString, ctx: BlockContext) {
+        let markerWidth = (style.baseSize * 1.75).rounded()
+        let capFont = NSFont(descriptor: style.bodyFont.fontDescriptor, size: (style.baseSize * 0.85).rounded()) ?? style.bodyFont
+        let marker = NSAttributedString(string: "\(label).", attributes: [.font: capFont, .foregroundColor: style.accent])
+        var c = ctx
+        c.listDepth = ctx.listDepth + 1
+        c.indent = ctx.indent + markerWidth
+        c.marker = marker; c.markerWidth = markerWidth
+        let start = out.length
+        let items = blocks.isEmpty ? [Block(kind: .paragraph([]))] : blocks
+        for (j, b) in items.enumerated() {
+            var cc = c
+            cc.isFirstInItem = (j == 0)
+            if j > 0 { cc.marker = nil }
+            append(b, into: out, ctx: cc)
+        }
+        let range = NSRange(location: start, length: out.length - start)
+        // 弱化 + 小号（一处 enumerate，脚注很短）
+        out.enumerateAttribute(.font, in: range) { v, r, _ in
+            if let f = v as? NSFont, f.pointSize >= style.baseSize - 0.5 {
+                out.addAttribute(.font, value: NSFont(descriptor: f.fontDescriptor, size: (f.pointSize * 0.85).rounded()) ?? f, range: r)
+            }
+        }
+        out.addAttribute(QuireAttribute.footnoteLabel, value: label, range: range)
     }
 
     /// Mermaid：占位附件（缓存命中则直接带图），实际渲染由 ReaderTextView 触发 MermaidRenderer

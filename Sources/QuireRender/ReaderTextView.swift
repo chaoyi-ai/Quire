@@ -13,6 +13,9 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
     public var baseURL: URL?
     /// 已渲染文档（用于块范围查询）
     public private(set) var rendered: RenderedDocument?
+    private lazy var overlays = CodeBlockOverlayController(textView: self)
+    /// 是否显示代码块复制按钮
+    public var showsCodeCopyButtons = true { didSet { if !showsCodeCopyButtons { overlays.removeAll() } else { overlays.setNeedsUpdate() } } }
 
     public init(style: RenderStyle) {
         self.style = style
@@ -93,6 +96,11 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
     }
 
     public override var isOpaque: Bool { true }
+
+    public override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        if showsCodeCopyButtons { overlays.setNeedsUpdate() }
+    }
 
     // MARK: - 布局：内容列居中
 
