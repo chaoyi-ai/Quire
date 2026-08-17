@@ -11,6 +11,11 @@ DRAFT="${2:-}"
 BUILD=$(git rev-list --count HEAD)
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" assets/Info.plist
 
+echo "▸ CI 状态（main 最近一次完成的运行）"
+CI=$(gh run list --branch main --status completed --limit 1 --json conclusion --jq '.[0].conclusion' 2>/dev/null || echo unknown)
+if [[ "$CI" != "success" && -z "${SKIP_CI_CHECK:-}" ]]; then
+  echo "✗ main 上最近一次 CI 结论为 $CI（CI 用的 Xcode/Swift 比本机严格）。先修红再发；确要跳过：SKIP_CI_CHECK=1"; exit 1
+fi
 echo "▸ 测试"
 swift test 2>&1 | grep -E "Executed .* tests" | tail -1
 echo "▸ 基准门禁"
