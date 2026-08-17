@@ -395,32 +395,58 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
 
     // MARK: - 定位
 
-    /// 滚动到某个顶级块顶部
-    public func scroll(toBlock index: Int, animated: Bool = false) {
-        guard let rendered, index < rendered.ranges.count, let tlm = textLayoutManager, let cs = textContentStorage else { return }
+    /// 目标块顶部与视口顶部的留白
+    static let scrollTopMargin: CGFloat = 8
+
+    /// 滚动到某个顶级块顶部；`completion` 在动画结束（或立即）时调用。
+    /// TextKit 2 对视口外内容只估算高度，直接按估算 y 滚会落空；策略：先用 NSTextView 自己的
+    /// scrollRangeToVisible 把目标拉进视口（内部会处理估算修正），再按真实片段位置对齐到顶部，必要时再修一次。
+    public func scroll(toBlock index: Int, animated: Bool = false, completion: (@MainActor () -> Void)? = nil) {
+        guard let rendered, index < rendered.ranges.count, let sv = enclosingScrollView else { completion?(); return }
         let r = rendered.ranges[index]
-        guard let loc = cs.location(cs.documentRange.location, offsetBy: r.location) else { return }
-        tlm.ensureLayout(for: NSTextRange(location: loc))
-        guard let frag = tlm.textLayoutFragment(for: loc) else { return }
-        var y = frag.layoutFragmentFrame.minY + textContainerInset.height - 8
-        y = max(0, y)
-        if index == 0 { y = 0 }
-        let target = CGPoint(x: 0, y: y)
-        if animated {
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.2
-                enclosingScrollView?.contentView.animator().setBoundsOrigin(target)
-            }
-        } else {
-            enclosingScrollView?.contentView.setBoundsOrigin(target)
+        if index == 0 {
+            sv.contentView.setBoundsOrigin(.zero); sv.reflectScrolledClipView(sv.contentView); completion?(); return
         }
-        enclosingScrollView?.reflectScrolledClipView(enclosingScrollView!.contentView)
+        // 第一步：进入视口（非动画）
+        scrollRangeToVisible(NSRange(location: r.location, length: 0))
+        // 第二步：对齐到顶部（此时目标片段已真实布局）
+        let align: () -> CGPoint? = { [weak self] in
+            guard let self, let tlm = self.textLayoutManager, let cs = self.textContentStorage,
+                  let loc = cs.location(cs.documentRange.location, offsetBy: r.location),
+                  let frag = tlm.textLayoutFragment(for: loc) else { return nil }
+            var y = frag.layoutFragmentFrame.minY + self.textContainerInset.height - Self.scrollTopMargin
+            let maxY = max(0, self.frame.height - sv.contentView.bounds.height)
+            y = min(max(0, y), maxY)
+            return CGPoint(x: 0, y: y)
+        }
+        guard let target = align() else { completion?(); return }
+        let finish: @MainActor () -> Void = { [weak self] in
+            // 视口移动后 TextKit 可能再次修正估算：再对齐一次（无动画、幅度小）
+            if let self, let t2 = align(), abs(t2.y - sv.contentView.bounds.minY) > 1 {
+                sv.contentView.setBoundsOrigin(t2); sv.reflectScrolledClipView(sv.contentView)
+                _ = self
+            }
+            completion?()
+        }
+        if animated, abs(target.y - sv.contentView.bounds.minY) < sv.contentView.bounds.height * 3 {
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.2
+                sv.contentView.animator().setBoundsOrigin(target)
+            }, completionHandler: {
+                sv.reflectScrolledClipView(sv.contentView)
+                finish()
+            })
+        } else {
+            sv.contentView.setBoundsOrigin(target)
+            sv.reflectScrolledClipView(sv.contentView)
+            DispatchQueue.main.async { finish() }
+        }
     }
 
-    /// 视口顶部所在的顶级块下标
+    /// 视口顶部所在的顶级块下标（取样点在留白之下，保证刚滚到的目标块被算作"当前块"）
     public func topVisibleBlockIndex() -> Int? {
         guard let rendered, let tlm = textLayoutManager, let cs = textContentStorage, let sv = enclosingScrollView else { return nil }
-        let y = sv.contentView.bounds.minY - textContainerInset.height + 4
+        let y = sv.contentView.bounds.minY - textContainerInset.height + Self.scrollTopMargin + 4
         let point = CGPoint(x: 0, y: max(0, y))
         guard let frag = tlm.textLayoutFragment(for: point) else { return nil }
         let offset = cs.offset(from: cs.documentRange.location, to: frag.rangeInElement.location)
@@ -438,7 +464,7 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
         scroll(toBlock: index)
         guard let sv = enclosingScrollView else { return }
         var o = sv.contentView.bounds.origin
-        o.y = max(0, o.y + 8 + offset)
+        o.y = max(0, o.y + Self.scrollTopMargin + offset)
         sv.contentView.setBoundsOrigin(o)
         sv.reflectScrolledClipView(sv.contentView)
     }

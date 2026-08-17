@@ -376,6 +376,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
 
     // MARK: - 交互
 
+
     @objc private func rowClicked(_ sender: Any?) {
         let row = outlineView.clickedRow
         guard row >= 0, let node = outlineView.item(atRow: row) as? SidebarNode else { return }
@@ -388,7 +389,12 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         else { activate(node) }
     }
 
+    private var lastActivation: (ObjectIdentifier, TimeInterval)?
     private func activate(_ node: SidebarNode) {
+        // 鼠标点击会同时触发 action 与 selectionDidChange：100 ms 内同一节点只处理一次
+        let now = ProcessInfo.processInfo.systemUptime
+        if let last = lastActivation, last.0 == ObjectIdentifier(node), now - last.1 < 0.1 { return }
+        lastActivation = (ObjectIdentifier(node), now)
         switch node.kind {
         case .heading:
             if let file = fileNode(of: node), file === currentFileNode, let bi = node.blockIndex {

@@ -157,14 +157,24 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
         viewportDidScroll()
     }
 
+    /// 程序化滚动（侧栏点击）期间挂起"顶部块 → 高亮"，避免动画途中逐个章节高亮
+    private var isNavigating = false
+
     private func viewportDidScroll() {
-        guard let idx = textView.topVisibleBlockIndex(), idx != lastTopBlock else { return }
+        guard !isNavigating, let idx = textView.topVisibleBlockIndex(), idx != lastTopBlock else { return }
         lastTopBlock = idx
         onTopBlockChanged?(idx)
     }
 
+    /// 侧栏点击：动画滚到块，结束后把"当前块"明确设为目标块（哪怕它滚不到顶部，如文末章节）
     func scroll(toBlock index: Int) {
-        textView.scroll(toBlock: index, animated: true)
+        isNavigating = true
+        textView.scroll(toBlock: index, animated: true) { [weak self] in
+            guard let self else { return }
+            self.isNavigating = false
+            self.lastTopBlock = index
+            self.onTopBlockChanged?(index)
+        }
     }
 
     // MARK: - 链接
@@ -181,9 +191,9 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
         for (i, b) in rendered.blocks.enumerated() {
             switch b.block.kind {
             case .heading(_, _, let hid) where hid == id:
-                textView.scroll(toBlock: i, animated: true); return true
+                scroll(toBlock: i); return true
             case .footnoteDefinition(let label, _) where id == "fn-\(label)":
-                textView.scroll(toBlock: i, animated: true); return true
+                scroll(toBlock: i); return true
             default: continue
             }
         }
