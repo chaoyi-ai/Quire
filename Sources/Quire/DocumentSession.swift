@@ -20,8 +20,9 @@ final class DocumentSession {
     private var watcher: FileWatcher?
     nonisolated(unsafe) private var themeObserver: NSObjectProtocol?
 
-    /// UI 订阅：每次有新渲染结果时调用（主线程）
-    var onRendered: ((RenderedDocument, RenderStyle, ChangeReason) -> Void)?
+    /// UI 订阅：每次有新渲染结果时调用（主线程）；`diff` 非空表示可增量替换（相对上一次发布的 rendered）
+    var onRendered: ((RenderedDocument, RenderStyle, ChangeReason, BlockDiff?) -> Void)?
+    private var editDebounce: DispatchWorkItem?
     var onOutline: ((Outline) -> Void)?
 
     private let parser = MarkdownParser()
@@ -40,8 +41,21 @@ final class DocumentSession {
 
     // MARK: - 输入
 
+    /// 编辑器击键：合并 50 ms 内的多次变化
+    func sourceDidChangeDebounced(_ newSource: String) {
+        source = newSource
+        editDebounce?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.sourceDidChange(self.source, reason: .edited)
+        }
+        editDebounce = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: item)
+    }
+
     func sourceDidChange(_ newSource: String, reason: ChangeReason) {
         source = newSource
+        editDebounce?.cancel()
         generation += 1
         let gen = generation
         let parser = self.parser
@@ -56,17 +70,19 @@ final class DocumentSession {
             var diff: BlockDiff? = nil
             if let previous, reason == .externalChange || reason == .edited {
                 let (r, d) = renderer.render(doc, reusing: previous)
-                out = r; diff = d
+                out = r
+                // 变化块太多（如粘贴大段）就整体替换，避免逐块拼接开销
+                diff = (d.newChanged.count <= 64 && d.oldChanged.count <= 64) ? d : nil
             } else {
                 out = renderer.render(doc)
             }
             os_signpost(.end, log: perfLog, name: "parse+render", signpostID: sp, "%d blocks", doc.blocks.count)
+            let d = diff
             await MainActor.run { [weak self] in
                 guard let self, gen == self.generation else { return }
                 self.parsed = doc
                 self.rendered = out
-                _ = diff
-                self.onRendered?(out, self.style, reason)
+                self.onRendered?(out, self.style, reason, d)
                 self.onOutline?(doc.outline)
             }
         }
@@ -95,7 +111,7 @@ final class DocumentSession {
             await MainActor.run { [weak self] in
                 guard let self, gen == self.generation else { return }
                 self.rendered = out
-                self.onRendered?(out, s, reason)
+                self.onRendered?(out, s, reason, nil)
             }
         }
     }

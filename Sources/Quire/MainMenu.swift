@@ -1,5 +1,6 @@
 import AppKit
 import QuireCore
+import QuireRender
 
 /// 主菜单（纯代码构建，无 nib）。
 @MainActor
@@ -27,6 +28,7 @@ enum MainMenu {
 
         // File
         let file = NSMenu(title: "文件")
+        file.addItem(withTitle: "新建", action: #selector(NSDocumentController.newDocument(_:)), keyEquivalent: "n")
         file.addItem(withTitle: "打开…", action: #selector(NSDocumentController.openDocument(_:)), keyEquivalent: "o")
         let recent = NSMenu(title: "打开最近使用")
         let recentItem = file.addItem(withTitle: "打开最近使用", action: nil, keyEquivalent: "")
@@ -34,6 +36,10 @@ enum MainMenu {
         recent.addItem(withTitle: "清除菜单", action: #selector(NSDocumentController.clearRecentDocuments(_:)), keyEquivalent: "")
         file.addItem(.separator())
         file.addItem(withTitle: "关闭", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        file.addItem(withTitle: "存储…", action: #selector(NSDocument.save(_:)), keyEquivalent: "s")
+        let saveAs = file.addItem(withTitle: "存储为…", action: #selector(NSDocument.saveAs(_:)), keyEquivalent: "S"); saveAs.keyEquivalentModifierMask = [.command, .shift]
+        file.addItem(withTitle: "复原到已存储版本", action: #selector(NSDocument.revertToSaved(_:)), keyEquivalent: "")
+        file.addItem(.separator())
         file.addItem(withTitle: "重新载入", action: #selector(Handler.reload(_:)), keyEquivalent: "r").target = Handler.shared
         file.addItem(withTitle: "在 Finder 中显示", action: #selector(Handler.revealInFinder(_:)), keyEquivalent: "").target = Handler.shared
         file.addItem(.separator())
@@ -58,10 +64,22 @@ enum MainMenu {
         edit.addItem(withTitle: "查找", action: nil, keyEquivalent: "").submenu = find
         main.addItem(withTitle: "编辑", action: nil, keyEquivalent: "").submenu = edit
 
+        // Format（编辑器）
+        let format = NSMenu(title: "格式")
+        format.addItem(withTitle: "粗体", action: #selector(EditorTextView.toggleBold(_:)), keyEquivalent: "b")
+        format.addItem(withTitle: "斜体", action: #selector(EditorTextView.toggleItalic(_:)), keyEquivalent: "i")
+        format.addItem(withTitle: "行内代码", action: #selector(EditorTextView.toggleInlineCode(_:)), keyEquivalent: "e")
+        format.addItem(withTitle: "链接", action: #selector(EditorTextView.insertLink(_:)), keyEquivalent: "k")
+        main.addItem(withTitle: "格式", action: nil, keyEquivalent: "").submenu = format
+
         // View
         let view = NSMenu(title: "显示")
         let sidebar = view.addItem(withTitle: "显示/隐藏目录", action: #selector(DocumentWindowController.toggleSidebar(_:)), keyEquivalent: "s")
         sidebar.keyEquivalentModifierMask = [.command, .option]
+        view.addItem(.separator())
+        view.addItem(withTitle: "阅读", action: #selector(DocumentWindowController.setModeReader(_:)), keyEquivalent: "1")
+        view.addItem(withTitle: "编辑", action: #selector(DocumentWindowController.setModeEditor(_:)), keyEquivalent: "2")
+        view.addItem(withTitle: "分栏", action: #selector(DocumentWindowController.setModeSplit(_:)), keyEquivalent: "3")
         view.addItem(.separator())
         view.addItem(withTitle: "放大", action: #selector(Handler.zoomIn(_:)), keyEquivalent: "+").target = Handler.shared
         view.addItem(withTitle: "缩小", action: #selector(Handler.zoomOut(_:)), keyEquivalent: "-").target = Handler.shared

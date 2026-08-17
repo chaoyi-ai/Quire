@@ -28,25 +28,34 @@ final class QuireDocumentController: NSDocumentController {
     }
 }
 
-/// Markdown 文档（M1：只读；M3 加入编辑与保存）
+/// Markdown 文档：读 / 写 / 自动保存；源码变化通过 DocumentSession 驱动渲染。
 final class MarkdownDocument: NSDocument {
-    /// 原始源码
+    /// 原始源码（编辑器与磁盘的唯一真相）
     private(set) var source: String = ""
     private(set) var encoding: String.Encoding = .utf8
+    /// 新建文档默认进入分栏
+    var isNewDocument = false
     /// 渲染会话（解析 / 渲染 / 监控），窗口控制器持有 UI
     private(set) lazy var session = DocumentSession(document: self)
 
-    override class var autosavesInPlace: Bool { false }
+    override class var autosavesInPlace: Bool { true }
     override class var readableTypes: [String] { [QuireDocumentController.markdownType, "public.plain-text", "public.text"] }
+    override class var writableTypes: [String] { [QuireDocumentController.markdownType, "public.plain-text"] }
     override class func isNativeType(_ type: String) -> Bool { type == QuireDocumentController.markdownType }
-    override var isDocumentEdited: Bool { false }
+
+    override init() {
+        super.init()
+        isNewDocument = true
+    }
 
     override func makeWindowControllers() {
         addWindowController(DocumentWindowController(document: self))
     }
 
+    override func fileNameExtension(forType typeName: String, saveOperation: NSDocument.SaveOperationType) -> String? { "md" }
+
     override func read(from data: Data, ofType typeName: String) throws {
-        // UTF-8 优先；失败退回 GB18030 / Latin-1（不静默丢字）
+        // UTF-8 优先；失败退回 UTF-16 / GB18030 / Latin-1（不静默丢字）
         if let s = String(data: data, encoding: .utf8) { source = s; encoding = .utf8 }
         else if let s = String(data: data, encoding: .utf16) { source = s; encoding = .utf16 }
         else {
@@ -55,28 +64,40 @@ final class MarkdownDocument: NSDocument {
             else if let s = String(data: data, encoding: .isoLatin1) { source = s; encoding = .isoLatin1 }
             else { throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownStringEncodingError, userInfo: [NSLocalizedDescriptionKey: "无法识别文件编码"]) }
         }
-        // NSDocument 读文件在主线程（未开启并发读取）
+        isNewDocument = false
         let src = source
-        MainActor.assumeIsolated { session.sourceDidChange(src, reason: .opened) }
-    }
-
-    override func data(ofType typeName: String) throws -> Data {
-        guard let d = source.data(using: encoding) else { throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteInapplicableStringEncodingError) }
-        return d
-    }
-
-    /// 外部修改后重新读取（保留编码）
-    func reloadFromDisk() {
-        guard let url = fileURL, let data = try? Data(contentsOf: url) else { return }
-        if let s = String(data: data, encoding: encoding), s != source {
-            source = s
-            session.sourceDidChange(source, reason: .externalChange)
+        MainActor.assumeIsolated {
+            session.sourceDidChange(src, reason: .opened)
+            (windowControllers.first as? DocumentWindowController)?.documentDidReload(src)
         }
     }
 
-    // 只读文档：不提示保存
-    override func canClose(withDelegate delegate: Any, shouldClose shouldCloseSelector: Selector?, contextInfo: UnsafeMutableRawPointer?) {
-        super.canClose(withDelegate: delegate, shouldClose: shouldCloseSelector, contextInfo: contextInfo)
+    override func data(ofType typeName: String) throws -> Data {
+        guard let d = source.data(using: encoding) ?? source.data(using: .utf8) else {
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteInapplicableStringEncodingError)
+        }
+        return d
+    }
+
+    /// 编辑器每次击键调用（撤销由 NSTextView 走文档 undoManager，自动标脏）
+    func setSourceFromEditor(_ text: String) {
+        source = text
+    }
+
+    /// 外部修改后重新读取（保留编码）；自己刚保存的写入会被忽略（内容相同）
+    func reloadFromDisk() {
+        guard let url = fileURL, let data = try? Data(contentsOf: url) else { return }
+        guard let s = String(data: data, encoding: encoding), s != source else { return }
+        if isDocumentEdited {
+            // 有未保存改动：不覆盖，只提示（M4：冲突处理 UI）
+            NSLog("Quire: 文件在磁盘上被修改，但当前有未保存改动，跳过重载")
+            return
+        }
+        source = s
+        MainActor.assumeIsolated {
+            session.sourceDidChange(s, reason: .externalChange)
+            (windowControllers.first as? DocumentWindowController)?.documentDidReload(s)
+        }
     }
 
     override func printOperation(withSettings printSettings: [NSPrintInfo.AttributeKey: Any]) throws -> NSPrintOperation {

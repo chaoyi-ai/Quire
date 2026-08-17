@@ -43,17 +43,24 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
             MainActor.assumeIsolated { self?.viewportDidScroll() }
         }
 
-        session.onRendered = { [weak self] doc, style, reason in
-            self?.apply(doc, style: style, reason: reason)
+        session.onRendered = { [weak self] doc, style, reason, diff in
+            self?.apply(doc, style: style, reason: reason, diff: diff)
         }
-        if let r = session.rendered { apply(r, style: session.style, reason: .opened) }
+        if let r = session.rendered { apply(r, style: session.style, reason: .opened, diff: nil) }
     }
 
     deinit {
         if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
     }
 
-    private func apply(_ doc: RenderedDocument, style: RenderStyle, reason: DocumentSession.ChangeReason) {
+    private func apply(_ doc: RenderedDocument, style: RenderStyle, reason: DocumentSession.ChangeReason, diff: BlockDiff?) {
+        // 增量路径：编辑时只替换变化块，视口不动
+        if reason == .edited, let diff, let previous = textView.rendered, previous.blocks.count == diff.oldChanged.upperBound + (previous.blocks.count - diff.oldChanged.upperBound), style === textView.style {
+            if diff.isEmpty { textView.updateRendered(doc); return }
+            textView.replaceBlocks(with: doc, diff: diff, previous: previous)
+            viewportDidScroll()
+            return
+        }
         // 记住位置：顶部块 + 块内偏移
         let top = textView.topVisibleBlockIndex()
         let offset = top.map { textView.scrollOffset(withinBlock: $0) } ?? 0

@@ -79,6 +79,9 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
         loadImages()
     }
 
+    /// 仅更新块表（内容未变，如 diff 为空）
+    public func updateRendered(_ doc: RenderedDocument) { self.rendered = doc }
+
     /// 增量替换若干块（M3 编辑器路径）
     public func replaceBlocks(with doc: RenderedDocument, diff: BlockDiff, previous: RenderedDocument) {
         guard let ts = textContentStorage?.textStorage else { return setRendered(doc, style: style) }
@@ -263,6 +266,7 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
         guard let frag = tlm.textLayoutFragment(for: loc) else { return }
         var y = frag.layoutFragmentFrame.minY + textContainerInset.height - 8
         y = max(0, y)
+        if index == 0 { y = 0 }
         let target = CGPoint(x: 0, y: y)
         if animated {
             NSAnimationContext.runAnimationGroup { ctx in

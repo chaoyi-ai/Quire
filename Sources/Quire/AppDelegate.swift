@@ -26,7 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async { ThemeManager.shared.startWatchingUserThemes() }
     }
 
-    /// 阅读器：无文档启动时弹开文件面板，而不是空白窗口（系统只在没有文件参数时调用）
+    /// 无文档启动：弹开文件面板（⌘N 仍可新建）
     func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
         // 命令行传了路径的话由 didFinishLaunching 处理
         if !CommandLine.arguments.dropFirst().filter({ !$0.hasPrefix("-") }).isEmpty { return true }
