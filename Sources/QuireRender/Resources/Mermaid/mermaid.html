@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; }
+  #stage { position: absolute; left: 0; top: 0; }
+</style>
+<script src="mermaid.min.js"></script>
+<script>
+  // Quire Mermaid 壳：由 MermaidRenderer 通过 callAsyncJavaScript 调用 quireRender。
+  // 使用 htmlLabels:false 生成纯 SVG 文本节点，便于 CoreSVG（NSImage）解析。
+  let currentTheme = null;
+  function quireInit(theme, fontFamily) {
+    if (currentTheme === theme) return;
+    currentTheme = theme;
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: theme || 'default',
+      securityLevel: 'strict',
+      fontFamily: fontFamily || '-apple-system, "PingFang SC", "Helvetica Neue", sans-serif',
+      flowchart: { htmlLabels: false, useMaxWidth: false },
+      sequence: { useMaxWidth: false },
+      gantt: { useMaxWidth: false },
+      class: { useMaxWidth: false },
+      state: { useMaxWidth: false },
+      er: { useMaxWidth: false },
+      pie: { useMaxWidth: false },
+      journey: { useMaxWidth: false },
+      gitGraph: { useMaxWidth: false },
+      mindmap: { useMaxWidth: false },
+      timeline: { useMaxWidth: false },
+    });
+  }
+  // 把 stage 按倍率放大（Retina 截图用）
+  function quireScale(k, w, h, bg) {
+    const stage = document.getElementById('stage');
+    document.body.style.background = bg || 'transparent';
+    stage.style.transform = 'scale(' + k + ')';
+    stage.style.transformOrigin = '0 0';
+    document.body.style.width = (w * k) + 'px';
+    document.body.style.height = (h * k) + 'px';
+    return true;
+  }
+  function quireClear() { document.getElementById('stage').innerHTML = ''; document.getElementById('stage').style.transform = ''; return true; }
+  let counter = 0;
+  async function quireRender(code, theme, fontFamily) {
+    quireInit(theme, fontFamily);
+    const id = 'q' + (++counter);
+    try {
+      const { svg } = await mermaid.render(id, code);
+      // 测量真实尺寸：把 svg 放进 stage 读取 bbox
+      const stage = document.getElementById('stage');
+      stage.style.transform = '';
+      stage.innerHTML = svg;
+      const el = stage.querySelector('svg');
+      let w = 0, h = 0, dbg = '';
+      if (el) {
+        // 去掉 max-width/百分比宽度，让 svg 按内容尺寸显示
+        const vb = el.getAttribute('viewBox');
+        el.style.maxWidth = 'none';
+        if (vb) {
+          const p = vb.split(/\s+/).map(Number);
+          w = Math.ceil(p[2]); h = Math.ceil(p[3]);
+          el.setAttribute('width', w); el.setAttribute('height', h);
+          el.style.width = w + 'px'; el.style.height = h + 'px';
+        } else {
+          const bb = el.getBoundingClientRect(); w = Math.ceil(bb.width); h = Math.ceil(bb.height);
+        }
+        dbg = 'vb=' + vb + ' attrW=' + el.getAttribute('width') + ' bb=' + JSON.stringify(el.getBoundingClientRect());
+      }
+      return { ok: true, svg: svg, width: w, height: h, debug: dbg };
+    } catch (e) {
+      const el = document.getElementById('d' + id); if (el) el.remove();
+      return { ok: false, error: String(e && e.message ? e.message : e) };
+    }
+  }
+</script>
+</head>
+<body><div id="stage"></div></body>
+</html>

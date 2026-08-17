@@ -1,7 +1,6 @@
 # SwiftPM
 .build/
 .swiftpm/
-Package.resolved.bak
 *.xcodeproj
 xcuserdata/
 DerivedData/
@@ -12,9 +11,8 @@ dist/
 # macOS
 .DS_Store
 
-# Vendored / generated at build time
-Vendor/mermaid/*.js
-!Vendor/mermaid/.gitkeep
+# Vendored at build time by scripts/fetch_mermaid.sh（校验值入库，文件不入库）
+Sources/QuireRender/Resources/Mermaid/mermaid.min.js
 
 # Benchmarks output
 bench/results/

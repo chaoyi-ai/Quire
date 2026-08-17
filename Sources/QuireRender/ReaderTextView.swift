@@ -145,12 +145,16 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
 
     private var imageRequestsInFlight = 0
 
-    /// 扫描附件，异步加载未加载的图片
+    /// 扫描附件，异步加载未加载的图片 / 渲染 Mermaid
     public func loadImages() {
         guard let ts = textStorage, ts.length > 0 else { return }
         let scale = window?.backingScaleFactor ?? 2
         let maxW = max(200, contentWidth)
         ts.enumerateAttribute(.attachment, in: NSRange(location: 0, length: ts.length), options: [.longestEffectiveRangeNotRequired]) { value, range, _ in
+            if let m = value as? MermaidAttachment, !m.isRendered, !m.failed {
+                renderMermaid(m, at: range, maxWidth: maxW)
+                return
+            }
             guard let att = value as? ImageAttachment, !att.isLoaded, !att.loadFailed, let src = att.source else { return }
             guard let url = ImageLoader.resolve(src, relativeTo: baseURL) else { att.loadFailed = true; return }
             let inline = att.isInline
@@ -162,8 +166,69 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
         }
     }
 
-    private func apply(image: NSImage?, to att: ImageAttachment, at range: NSRange, maxWidth: CGFloat, inline: Bool) {
+    private func renderMermaid(_ att: MermaidAttachment, at range: NSRange, maxWidth: CGFloat) {
+        Task { @MainActor [weak self] in
+            do {
+                let bg = self?.style.theme.colors.background.hexString ?? "transparent"
+                let img = try await MermaidRenderer.shared.render(source: att.source, theme: att.mermaidTheme, background: bg)
+                att.isRendered = true
+                var w = img.size.width, h = img.size.height
+                if w > maxWidth { h *= maxWidth / w; w = maxWidth }
+                att.image = img
+                att.bounds = CGRect(x: 0, y: 0, width: w.rounded(), height: h.rounded())
+            } catch {
+                att.failed = true
+                att.errorText = "\(error)"
+                let msg = "Mermaid 渲染失败：\(error)"
+                let img = Self.errorImage(message: msg, source: att.source, width: maxWidth, style: self?.style)
+                att.image = img
+                att.bounds = CGRect(origin: .zero, size: img.size)
+            }
+            self?.relayoutAttachment(att, hint: range)
+        }
+    }
+
+    /// 错误框：消息 + 源码（等宽）
+    static func errorImage(message: String, source: String, width: CGFloat, style: RenderStyle?) -> NSImage {
+        let font = style?.codeFont ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let msgAttrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.systemRed]
+        let srcAttrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: style?.codeForeground ?? .labelColor]
+        let pad: CGFloat = 12
+        let m = NSAttributedString(string: message, attributes: msgAttrs)
+        let src = NSAttributedString(string: source, attributes: srcAttrs)
+        let inner = width - pad * 2
+        let mh = m.boundingRect(with: CGSize(width: inner, height: 1000), options: [.usesLineFragmentOrigin]).height.rounded(.up)
+        let sh = src.boundingRect(with: CGSize(width: inner, height: 4000), options: [.usesLineFragmentOrigin]).height.rounded(.up)
+        let size = CGSize(width: width, height: mh + sh + pad * 3)
+        return NSImage(size: size, flipped: true) { rect in
+            (style?.codeBackground ?? NSColor.windowBackgroundColor).setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6).fill()
+            NSColor.systemRed.withAlphaComponent(0.4).setStroke()
+            NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6).stroke()
+            m.draw(with: CGRect(x: pad, y: pad, width: inner, height: mh), options: [.usesLineFragmentOrigin])
+            src.draw(with: CGRect(x: pad, y: pad * 2 + mh, width: inner, height: sh), options: [.usesLineFragmentOrigin])
+            return true
+        }
+    }
+
+    /// 附件内容/尺寸变化后触发该处重排（附件位置可能已变化：按对象重新定位）
+    private func relayoutAttachment(_ att: NSTextAttachment, hint range: NSRange) {
         guard let ts = textStorage else { return }
+        var target = range
+        if range.location >= ts.length || (ts.attribute(.attachment, at: range.location, effectiveRange: nil) as? NSTextAttachment) !== att {
+            var found: NSRange?
+            ts.enumerateAttribute(.attachment, in: NSRange(location: 0, length: ts.length), options: []) { v, r, stop in
+                if (v as? NSTextAttachment) === att { found = r; stop.pointee = true }
+            }
+            guard let f = found else { return }
+            target = f
+        }
+        ts.beginEditing()
+        ts.addAttribute(.attachment, value: att, range: target)
+        ts.endEditing()
+    }
+
+    private func apply(image: NSImage?, to att: ImageAttachment, at range: NSRange, maxWidth: CGFloat, inline: Bool) {
         guard let image else { att.loadFailed = true; return }
         att.isLoaded = true
         var size = image.size
@@ -176,19 +241,7 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
         if w > maxWidth { h *= maxWidth / w; w = maxWidth }
         att.image = image
         att.bounds = CGRect(x: 0, y: inline ? -(h * 0.25) : 0, width: w.rounded(), height: h.rounded())
-        // 位置可能已变化（增量编辑）：重新定位该附件
-        var target = range
-        if range.location >= ts.length || (ts.attribute(.attachment, at: range.location, effectiveRange: nil) as? ImageAttachment) !== att {
-            var found: NSRange?
-            ts.enumerateAttribute(.attachment, in: NSRange(location: 0, length: ts.length), options: []) { v, r, stop in
-                if (v as? ImageAttachment) === att { found = r; stop.pointee = true }
-            }
-            guard let f = found else { return }
-            target = f
-        }
-        ts.beginEditing()
-        ts.addAttribute(.attachment, value: att, range: target)   // 触发该范围重排
-        ts.endEditing()
+        relayoutAttachment(att, hint: range)
     }
 
     // MARK: - 定位

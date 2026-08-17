@@ -79,7 +79,8 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         case .codeBlock(let lang, let code):
             appendCode(code, language: lang, role: .codeBlock, into: out, ctx: ctx)
         case .mermaid(let source):
-            appendCode(source, language: "mermaid", role: .mermaid, into: out, ctx: ctx)
+            if MermaidRenderer.isAvailable { appendMermaid(source, into: out, ctx: ctx) }
+            else { appendCode(source, language: "mermaid", role: .codeBlock, into: out, ctx: ctx) }
         case .html(let html):
             appendCode(html, language: "html", role: .htmlBlock, into: out, ctx: ctx)
         case .frontMatter(let yaml):
@@ -266,7 +267,7 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         QAAppendRun(out, ns, plain)
 
         var tokens: [Token] = []
-        if role != .mermaid, let language, highlighter.supports(language) {
+        if let language, highlighter.supports(language) {
             tokens = highlighter.highlight(code, language: language) // \n → U+2028 同为 1 单元，偏移一致
         }
         if !tokens.isEmpty {
@@ -289,9 +290,7 @@ public final class AttributedStringBuilder: @unchecked Sendable {
             }
         }
         QAAppendRun(out, "\n" as NSString, plain)
-        if role == .mermaid {
-            out.addAttribute(QuireAttribute.mermaidSource, value: code, range: NSRange(location: start, length: out.length - start))
-        }
+        _ = start
     }
 
     private func appendThematicBreak(into out: NSMutableAttributedString, ctx: BlockContext) {
@@ -331,6 +330,37 @@ public final class AttributedStringBuilder: @unchecked Sendable {
             cpara.color = style.muted
             appendRun(title + "\n", into: out, ctx: InlineContext(para: cpara))
         }
+    }
+
+    /// Mermaid：占位附件（缓存命中则直接带图），实际渲染由 ReaderTextView 触发 MermaidRenderer
+    private func appendMermaid(_ source: String, into out: NSMutableAttributedString, ctx: BlockContext) {
+        let psKey = "mermaid-\(ctx.indent)"
+        let ps = paragraphStyle(key: psKey) { p in
+            p.alignment = .center
+            p.paragraphSpacing = style.paragraphSpacing
+            p.paragraphSpacingBefore = 4
+            p.headIndent = ctx.indent; p.firstLineHeadIndent = ctx.indent
+        }
+        let para = paragraphContext(role: .mermaid, psKey: psKey, ps: ps, ctx: ctx)
+        let att = MermaidAttachment(source: source, mermaidTheme: style.theme.mermaid.theme)
+        let key = MermaidCache.key(source: source, theme: style.theme.mermaid.theme + "|" + style.theme.colors.background.hexString)
+        if let cached = MermaidCache.shared.image(forKey: key) {
+            att.image = cached
+            att.isRendered = true
+            let maxW = max(200, style.maxContentWidth > 0 ? style.maxContentWidth : 760) - ctx.indent
+            var size = cached.size
+            if size.width > maxW { size.height *= maxW / size.width; size.width = maxW }
+            att.bounds = CGRect(x: 0, y: 0, width: size.width.rounded(), height: size.height.rounded())
+        } else {
+            att.bounds = CGRect(x: 0, y: 0, width: 240, height: style.baseSize * 4)
+            att.image = ImageAttachment.placeholder(size: att.bounds.size, alt: "Mermaid…", style: style)
+        }
+        var a = para.base
+        a[.font] = style.bodyFont
+        a[.attachment] = att
+        a[QuireAttribute.mermaidSource] = source
+        out.append(NSAttributedString(string: "\u{FFFC}", attributes: a))
+        appendRun("\n", into: out, ctx: InlineContext(para: para))
     }
 
     /// 图片附件：占位尺寸，实际图片由 ImageLoader 异步填充

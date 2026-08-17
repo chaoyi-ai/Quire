@@ -60,7 +60,7 @@ public final class BlockLayoutFragment: NSTextLayoutFragment {
         }
 
         switch role {
-        case .codeBlock, .mermaid, .htmlBlock, .frontMatter:
+        case .codeBlock, .htmlBlock, .frontMatter:
             let pad = style.codeBlockPadding
             let spacingBefore = ps?.paragraphSpacingBefore ?? pad
             let spacingAfter = ps?.paragraphSpacing ?? pad
