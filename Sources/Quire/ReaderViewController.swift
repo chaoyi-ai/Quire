@@ -27,6 +27,10 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
         textView = ReaderTextView(style: style)
         textView.delegate = self
         textView.baseURL = session.document?.fileURL
+        textView.onImageClick = { [weak self] src in
+            guard let url = ImageLoader.resolve(src, relativeTo: self?.session.document?.fileURL) else { return }
+            NSWorkspace.shared.open(url)   // 系统看图 / 浏览器
+        }
 
         scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         scrollView.hasVerticalScroller = true

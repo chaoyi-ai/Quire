@@ -243,6 +243,33 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
         return f
     }
 
+    // MARK: - 点击图片
+
+    /// 点击块级/行内图片：回调图片来源（App 层决定用系统打开还是自己看图）
+    public var onImageClick: ((String) -> Void)?
+
+    public override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 1, let ts = textStorage, onImageClick != nil {
+            let p = convert(event.locationInWindow, from: nil)
+            let idx = characterIndexForInsertion(at: p)
+            if idx < ts.length, let att = ts.attribute(.attachment, at: idx, effectiveRange: nil) as? ImageAttachment, att.isLoaded, let src = att.source {
+                // 确认点在附件的实际矩形内（characterIndexForInsertion 可能落在附件旁边）
+                if let tlm = textLayoutManager, let cs = textContentStorage, let loc = cs.location(cs.documentRange.location, offsetBy: idx),
+                   let frag = tlm.textLayoutFragment(for: loc) {
+                    var r = frag.frameForTextAttachment(at: loc)
+                    r.origin.x += frag.layoutFragmentFrame.minX + textContainerInset.width
+                    r.origin.y += frag.layoutFragmentFrame.minY + textContainerInset.height
+                    if r.contains(p) { onImageClick?(src); return }
+                }
+            }
+        }
+        super.mouseDown(with: event)
+    }
+
+    public override func resetCursorRects() {
+        super.resetCursorRects()
+    }
+
     // MARK: - 复制：U+2028 → \n
 
     public override func copy(_ sender: Any?) {
