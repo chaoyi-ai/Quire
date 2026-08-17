@@ -31,11 +31,11 @@ final class QuireDocumentController: NSDocumentController {
 
 /// Markdown 文档：读 / 写 / 自动保存；源码变化通过 DocumentSession 驱动渲染。
 final class MarkdownDocument: NSDocument {
-    /// 原始源码（编辑器与磁盘的唯一真相）
-    private(set) var source: String = ""
-    private(set) var encoding: String.Encoding = .utf8
+    /// 原始源码（编辑器与磁盘的唯一真相）。NSDocument.read(from:) 在 SDK 里是 nonisolated（实际主线程调用），故 unsafe 标注
+    nonisolated(unsafe) private(set) var source: String = ""
+    nonisolated(unsafe) private(set) var encoding: String.Encoding = .utf8
     /// 新建文档默认进入分栏
-    var isNewDocument = false
+    nonisolated(unsafe) var isNewDocument = false
     /// 渲染会话（解析 / 渲染 / 监控），窗口控制器持有 UI
     private(set) lazy var session = DocumentSession(document: self)
 
