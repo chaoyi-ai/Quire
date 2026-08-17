@@ -53,7 +53,20 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
         if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
     }
 
+    private static var didReportLaunch = false
+    /// QUIRE_MEASURE_LAUNCH=1：首个文档首帧后打印进程启动 → 首帧耗时并退出（scripts/bench.sh launch）
+    private func reportLaunchIfNeeded() {
+        guard !Self.didReportLaunch, ProcessInfo.processInfo.environment["QUIRE_MEASURE_LAUNCH"] != nil else { return }
+        Self.didReportLaunch = true
+        DispatchQueue.main.async {   // 等这一帧真正画出来
+            let ms = LaunchClock.millisecondsSinceProcessStart()
+            FileHandle.standardError.write("QUIRE_LAUNCH_MS=\(Int(ms))\n".data(using: .utf8)!)
+            if ProcessInfo.processInfo.environment["QUIRE_MEASURE_LAUNCH"] == "exit" { exit(0) }
+        }
+    }
+
     private func apply(_ doc: RenderedDocument, style: RenderStyle, reason: DocumentSession.ChangeReason, diff: BlockDiff?) {
+        defer { if reason == .opened { reportLaunchIfNeeded() } }
         // 增量路径：编辑时只替换变化块，视口不动
         if reason == .edited, let diff, let previous = textView.rendered, previous.blocks.count == diff.oldChanged.upperBound + (previous.blocks.count - diff.oldChanged.upperBound), style === textView.style {
             if diff.isEmpty { textView.updateRendered(doc); return }
@@ -69,6 +82,7 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
         scrollView.backgroundColor = style.background
         textView.baseURL = session.document?.fileURL
         textView.setRendered(doc, style: style)
+        LaunchClock.mark("setRendered done")
 
         switch reason {
         case .opened:
@@ -160,4 +174,26 @@ enum LinkOpener {
 
 extension Array {
     subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
+}
+
+
+/// 进程启动时刻（kernel p_starttime）到现在的毫秒数
+public enum LaunchClock {
+    public static let enabled = ProcessInfo.processInfo.environment["QUIRE_MEASURE_LAUNCH"] != nil
+    public static func mark(_ label: String) {
+        guard enabled else { return }
+        FileHandle.standardError.write("  [launch] \(String(format: "%6.0f", millisecondsSinceProcessStart())) ms  \(label)\n".data(using: .utf8)!)
+    }
+    public static func millisecondsSinceProcessStart() -> Double {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return -1 }
+        let start = info.kp_proc.p_starttime
+        let startMs = Double(start.tv_sec) * 1000 + Double(start.tv_usec) / 1000
+        var now = timeval()
+        gettimeofday(&now, nil)
+        let nowMs = Double(now.tv_sec) * 1000 + Double(now.tv_usec) / 1000
+        return nowMs - startMs
+    }
 }

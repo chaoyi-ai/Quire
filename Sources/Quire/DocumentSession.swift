@@ -53,6 +53,9 @@ final class DocumentSession {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: item)
     }
 
+    /// 首次打开的小文件同步渲染的阈值：256 KB 内 parse+render ≈ 40 ms，比再来一轮空视图布局更划算
+    static let syncRenderThreshold = 256 * 1024
+
     func sourceDidChange(_ newSource: String, reason: ChangeReason) {
         source = newSource
         editDebounce?.cancel()
@@ -62,6 +65,17 @@ final class DocumentSession {
         let renderer = DocumentRenderer(style: style)
         let previous = rendered
         let src = newSource
+        if reason == .opened, src.utf8.count <= Self.syncRenderThreshold {
+            // 同步路径：窗口首帧就带内容
+            let doc = parser.parse(src)
+            let out = renderer.render(doc)
+            parsed = doc
+            rendered = out
+            LaunchClock.mark("parse+render done (sync)")
+            onRendered?(out, style, reason, nil)
+            onOutline?(doc.outline)
+            return
+        }
         Task.detached(priority: .userInitiated) { [weak self] in
             let sp = OSSignpostID(log: perfLog)
             os_signpost(.begin, log: perfLog, name: "parse+render", signpostID: sp, "%d bytes", src.utf8.count)
@@ -78,8 +92,10 @@ final class DocumentSession {
             }
             os_signpost(.end, log: perfLog, name: "parse+render", signpostID: sp, "%d blocks", doc.blocks.count)
             let d = diff
+            LaunchClock.mark("parse+render done (bg)")
             await MainActor.run { [weak self] in
                 guard let self, gen == self.generation else { return }
+                LaunchClock.mark("publish to UI")
                 self.parsed = doc
                 self.rendered = out
                 self.onRendered?(out, self.style, reason, d)

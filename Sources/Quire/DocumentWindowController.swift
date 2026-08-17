@@ -8,11 +8,13 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     enum Mode: Int { case reader = 0, editor = 1, split = 2 }
 
     let readerViewController: ReaderViewController
-    let editorViewController: EditorViewController
+    /// 编辑器按需创建（阅读模式启动时不构建，省启动时间）
+    private(set) lazy var editorViewController: EditorViewController = makeEditor()
     let outlineViewController: OutlineViewController
     private let splitViewController = NSSplitViewController()
-    private var editorItem: NSSplitViewItem!
+    private var editorItem: NSSplitViewItem?
     private var readerItem: NSSplitViewItem!
+    private let session: DocumentSession
     private var modeControl: NSSegmentedControl?
     private var isSyncingScroll = false
 
@@ -23,9 +25,10 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     }
 
     init(document: MarkdownDocument) {
+        session = document.session
         readerViewController = ReaderViewController(session: document.session)
-        editorViewController = EditorViewController(session: document.session)
         outlineViewController = OutlineViewController()
+        LaunchClock.mark("  wc: view controllers")
 
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -35,6 +38,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         window.setFrameAutosaveName("QuireDocumentWindow")
         window.isReleasedWhenClosed = false
         super.init(window: window)
+        LaunchClock.mark("  wc: window")
         // 注意：不要在这里 self.document = document —— NSDocument.addWindowController 会因"已关联"而跳过登记
         window.delegate = self
 
@@ -44,18 +48,15 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         sidebar.maximumThickness = 360
         sidebar.canCollapse = true
         sidebar.isCollapsed = UserDefaults.standard.bool(forKey: "sidebar.collapsed")
-        editorItem = NSSplitViewItem(viewController: editorViewController)
-        editorItem.minimumThickness = 280
-        editorItem.canCollapse = true
         readerItem = NSSplitViewItem(viewController: readerViewController)
         readerItem.minimumThickness = 280
         readerItem.canCollapse = true
         splitViewController.addSplitViewItem(sidebar)
-        splitViewController.addSplitViewItem(editorItem)
         splitViewController.addSplitViewItem(readerItem)
         splitViewController.splitView.autosaveName = "QuireSplit3"
         splitViewController.splitView.dividerStyle = .thin
         window.contentViewController = splitViewController
+        LaunchClock.mark("  wc: split view")
 
         // 工具栏
         let toolbar = NSToolbar(identifier: "QuireToolbar")
@@ -64,6 +65,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         toolbar.allowsUserCustomization = false
         window.toolbar = toolbar
         window.toolbarStyle = .unified
+        LaunchClock.mark("  wc: toolbar")
 
         // 目录 → 跳转（阅读视图 + 编辑器）
         outlineViewController.onSelect = { [weak self] entry in
@@ -76,10 +78,6 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             guard let self else { return }
             self.outlineViewController.highlight(blockIndex: index)
             self.syncEditorToReader(blockIndex: index)
-        }
-        // 编辑器滚动 → 阅读视图同步
-        editorViewController.onScroll = { [weak self] line in
-            self?.syncReaderToEditor(line: line)
         }
         document.session.onOutline = { [weak self] outline in
             self?.outlineViewController.outline = outline
@@ -96,9 +94,30 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
     override func showWindow(_ sender: Any?) {
+        LaunchClock.mark("showWindow")
         super.showWindow(sender)
+        LaunchClock.mark("window shown")
         markdownDocument?.session.startWatching()
         if mode != .reader { window?.makeFirstResponder(editorViewController.textView) }
+    }
+
+    private func makeEditor() -> EditorViewController {
+        let vc = EditorViewController(session: session)
+        vc.onScroll = { [weak self] line in self?.syncReaderToEditor(line: line) }
+        return vc
+    }
+
+    /// 首次进入编辑/分栏时把编辑器插入 split view（sidebar 之后、reader 之前）
+    private func ensureEditorPane() {
+        guard editorItem == nil else { return }
+        let item = NSSplitViewItem(viewController: editorViewController)
+        item.minimumThickness = 280
+        item.canCollapse = true
+        item.isCollapsed = true
+        splitViewController.insertSplitViewItem(item, at: 1)
+        editorItem = item
+        // 编辑器可能晚于文档打开创建：同步当前源码
+        if let doc = markdownDocument { editorViewController.replaceSource(doc.source) }
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -112,18 +131,25 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
 
     /// 文档从磁盘（重新）读入：同步编辑器文本
     func documentDidReload(_ source: String) {
-        guard editorViewController.isViewLoaded else { return }
+        guard editorItem != nil, editorViewController.isViewLoaded else { return }
         editorViewController.replaceSource(source)
     }
 
     // MARK: - 模式
 
     private func applyMode() {
-        guard editorItem != nil else { return }
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.15
-            editorItem.animator().isCollapsed = (mode == .reader)
-            readerItem.animator().isCollapsed = (mode == .editor)
+        guard readerItem != nil else { return }
+        if mode != .reader { ensureEditorPane() }
+        if window?.isVisible == true {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.15
+                editorItem?.animator().isCollapsed = (mode == .reader)
+                readerItem.animator().isCollapsed = (mode == .editor)
+            }
+        } else {
+            // 启动路径：不动画（runAnimationGroup 在初始化阶段要 40 ms）
+            editorItem?.isCollapsed = (mode == .reader)
+            readerItem.isCollapsed = (mode == .editor)
         }
         modeControl?.selectedSegment = mode.rawValue
         if mode != .reader, let w = window, w.isVisible { w.makeFirstResponder(editorViewController.textView) }

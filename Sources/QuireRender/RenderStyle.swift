@@ -121,9 +121,9 @@ public final class RenderStyle: @unchecked Sendable {
             case "system-mono", "monospace": return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
             default:
                 if let f = NSFont(name: name, size: size) { return f }
-                // 家族名（如 "SF Mono" 而非 PostScript 名）
-                if NSFontManager.shared.availableFontFamilies.contains(name),
-                   let f = NSFontManager.shared.font(withFamily: name, traits: [], weight: 5, size: size) { return f }
+                // 家族名（如 "SF Mono" 而非 PostScript 名）：用描述符匹配，避免枚举全部字体族（慢且占内存）
+                let d = NSFontDescriptor(fontAttributes: [.family: name])
+                if let m = d.matchingFontDescriptors(withMandatoryKeys: [.family]).first, let f = NSFont(descriptor: m, size: size) { return f }
             }
         }
         return mono ? NSFont.monospacedSystemFont(ofSize: size, weight: .regular) : NSFont.systemFont(ofSize: size)

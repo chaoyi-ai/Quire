@@ -10,6 +10,7 @@ final class QuireDocumentController: NSDocumentController {
     static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "mkdn", "mdwn", "mdtxt", "mdtext", "txt", "text"]
 
     override func typeForContents(of url: URL) throws -> String {
+        LaunchClock.mark("typeForContents")
         if Self.markdownExtensions.contains(url.pathExtension.lowercased()) { return Self.markdownType }
         if let t = try? super.typeForContents(of: url) { return t }
         return Self.markdownType
@@ -46,10 +47,13 @@ final class MarkdownDocument: NSDocument {
     override init() {
         super.init()
         isNewDocument = true
+        LaunchClock.mark("document init")
     }
 
     override func makeWindowControllers() {
+        LaunchClock.mark("makeWindowControllers begin")
         addWindowController(DocumentWindowController(document: self))
+        LaunchClock.mark("makeWindowControllers end")
     }
 
     override func fileNameExtension(forType typeName: String, saveOperation: NSDocument.SaveOperationType) -> String? { "md" }
@@ -66,6 +70,7 @@ final class MarkdownDocument: NSDocument {
         }
         isNewDocument = false
         let src = source
+        LaunchClock.mark("file read (\(data.count) bytes)")
         MainActor.assumeIsolated {
             session.sourceDidChange(src, reason: .opened)
             (windowControllers.first as? DocumentWindowController)?.documentDidReload(src)

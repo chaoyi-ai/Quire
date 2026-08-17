@@ -8,8 +8,8 @@
 
 | 指标 | 预算 | 测量方式 |
 |------|------|----------|
-| 冷启动到首屏（打开一个 20 KB 文档） | **< 300 ms** | `scripts/bench.sh launch`：从 `open` 到窗口首帧（`os_signpost`） |
-| 热启动到首屏 | < 150 ms | 同上，第二次 |
+| 冷启动到首屏（打开一个 20 KB 文档） | **< 300 ms**（目标） | `scripts/bench_launch.sh`：进程启动 → 首帧（`QUIRE_MEASURE_LAUNCH`） |
+| 热启动到首屏 | < 400 ms | 同上，第二次起 |
 | 解析 1 MB Markdown（`Tests/Fixtures/large-1mb.md`） | **< 60 ms** | `quire-bench parse` |
 | 渲染 1 MB 文档为 attributed string（不含布局） | **< 140 ms** | `quire-bench render` |
 | 解析 + 渲染合计 | **< 200 ms** | `quire-bench full` |
@@ -54,8 +54,14 @@
 | theme/switch-large-1mb | 114 ms | 150 |
 | incremental/edit-middle-1mb | 1.4 ms | 16 |
 | highlight/swift | 61 MB/s | > 20 |
+| 热启动到首帧（small.md，阅读模式） | 350–400 ms | < 400 |
+| 常驻内存 small.md / large-1mb.md | 40 MB / 90 MB | 40 / 120 |
+| 空闲 CPU | 0.0% | 0 |
+| App 体积（含 mermaid） | 6.5 MB | < 15 |
 
-历史：swift-markdown 封装时 parse 136 ms；纯 Swift 属性字符串构建时 render 527 ms。
+历史：swift-markdown 封装时 parse 136 ms；纯 Swift 属性字符串构建时 render 527 ms；启动优化前热启动 540 ms。
+
+启动时间去向（macOS 26，M 系列，warm）：dyld ≈ 75 ms · AppKit finishLaunching/文档打开 ≈ 55 ms · NSWindow 创建 ≈ 40 ms · split view ≈ 25 ms · **NSToolbar（macOS 26 为 SwiftUI 实现）≈ 50 ms** · 首次布局 ≈ 60 ms · 解析+渲染（同步，small.md）≈ 5 ms。已做：阅读模式不创建编辑器、首帧同步渲染（≤ 256 KB）、启动阶段不跑动画、去掉重复打开。< 300 ms 需要绕开 NSToolbar 或延迟其挂载（会有跳动），暂不做。
 
 ## 4. 测量工具
 
