@@ -1,0 +1,20 @@
+# SwiftPM
+.build/
+.swiftpm/
+Package.resolved.bak
+*.xcodeproj
+xcuserdata/
+DerivedData/
+
+# App bundle output
+dist/
+
+# macOS
+.DS_Store
+
+# Vendored / generated at build time
+Vendor/mermaid/*.js
+!Vendor/mermaid/.gitkeep
+
+# Benchmarks output
+bench/results/
