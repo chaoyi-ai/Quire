@@ -9,6 +9,9 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
     private(set) var textView: ReaderTextView!
     private var scrollView: NSScrollView!
     nonisolated(unsafe) private var boundsObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var prefsObserver: NSObjectProtocol?
+    private var banner: NSView!
+    private var bannerTop: NSLayoutConstraint!
     private var lastTopBlock: Int?
     /// 视口顶部块变化回调（目录高亮）
     var onTopBlockChanged: ((Int) -> Void)?
@@ -36,7 +39,31 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
         scrollView.contentView.postsBoundsChangedNotifications = true
         scrollView.scrollerStyle = .overlay
         scrollView.automaticallyAdjustsContentInsets = true
-        view = scrollView
+        textView.showsCodeCopyButtons = Preferences.shared.codeCopyButton
+
+        // 容器：顶部可选横幅（大文件模式）+ 滚动视图
+        let container = NSView(frame: scrollView.frame)
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(scrollView)
+        banner = makeBanner()
+        banner.isHidden = true
+        container.addSubview(banner)
+        NSLayoutConstraint.activate([
+            banner.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            banner.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            banner.topAnchor.constraint(equalTo: container.topAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        bannerTop = scrollView.topAnchor.constraint(equalTo: container.topAnchor)
+        bannerTop.isActive = true
+        view = container
+        session.onLargeFileModeChanged = { [weak self] on in self?.setBanner(visible: on) }
+        if session.isLargeFile { setBanner(visible: true) }
+        prefsObserver = NotificationCenter.default.addObserver(forName: Preferences.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.textView.showsCodeCopyButtons = Preferences.shared.codeCopyButton }
+        }
 
         // 滚动 → 目录高亮（通知驱动，无定时器）
         boundsObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: .main) { [weak self] _ in
@@ -51,6 +78,34 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
 
     deinit {
         if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
+        if let prefsObserver { NotificationCenter.default.removeObserver(prefsObserver) }
+    }
+
+    private func makeBanner() -> NSView {
+        let v = NSVisualEffectView()
+        v.material = .headerView
+        v.blendingMode = .withinWindow
+        v.translatesAutoresizingMaskIntoConstraints = false
+        let label = NSTextField(labelWithString: "大文件模式：已关闭代码高亮与 Mermaid 渲染以保持流畅（阈值可在设置中调整）")
+        label.font = .systemFont(ofSize: 12)
+        label.textColor = .secondaryLabelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.lineBreakMode = .byTruncatingTail
+        v.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 16),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: v.trailingAnchor, constant: -16),
+            label.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+            v.heightAnchor.constraint(equalToConstant: 30),
+        ])
+        return v
+    }
+
+    private func setBanner(visible: Bool) {
+        banner.isHidden = !visible
+        bannerTop.isActive = false
+        bannerTop = visible ? scrollView.topAnchor.constraint(equalTo: banner.bottomAnchor) : scrollView.topAnchor.constraint(equalTo: view.topAnchor)
+        bannerTop.isActive = true
     }
 
     private static var didReportLaunch = false
@@ -131,14 +186,20 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
         return false
     }
 
-    /// 打印用视图：独立一份文本视图，宽度按纸张
-    func printableView() -> NSView {
-        let style = RenderStyle(theme: session.style.theme, scale: 1)
+    /// 打印 / PDF 用视图：独立一份文本视图，宽度按纸张；缩放固定为 1，主题为当前主题
+    func printableView(width: CGFloat = 540) -> NSView {
+        let style = RenderStyle(theme: session.style.theme, scale: 1, options: session.style.options)
         let tv = ReaderTextView(style: style)
-        if let r = session.rendered { tv.setRendered(r, style: style) }
-        tv.frame = NSRect(x: 0, y: 0, width: 540, height: 100)
+        tv.showsCodeCopyButtons = false
+        tv.frame = NSRect(x: 0, y: 0, width: width, height: 100)
         tv.textContainerInset = CGSize(width: 0, height: 0)
-        tv.sizeToFit()
+        tv.setPrintingWidth(width)
+        // 打印用同一份 Document 重新渲染（可能与屏幕缩放不同）
+        let rendered = DocumentRenderer(style: style).render(session.parsed)
+        tv.setRendered(rendered, style: style)
+        tv.textContainerInset = CGSize(width: 0, height: 0)
+        tv.setPrintingWidth(width)
+        tv.layoutAllForPrinting()
         return tv
     }
 }

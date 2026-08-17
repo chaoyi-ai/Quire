@@ -108,11 +108,12 @@ final class MarkdownDocument: NSDocument {
     override func printOperation(withSettings printSettings: [NSPrintInfo.AttributeKey: Any]) throws -> NSPrintOperation {
         guard let wc = windowControllers.first as? DocumentWindowController else { throw NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError) }
         let info = NSPrintInfo(dictionary: printSettings)
-        info.horizontalPagination = .fit
-        info.verticalPagination = .automatic
+        info.horizontalPagination = .clip
+        info.verticalPagination = .clip
         info.isVerticallyCentered = false
+        info.isHorizontallyCentered = false
         info.topMargin = 36; info.bottomMargin = 36; info.leftMargin = 36; info.rightMargin = 36
-        let op = NSPrintOperation(view: wc.readerViewController.printableView(), printInfo: info)
+        let op = NSPrintOperation(view: wc.readerViewController.printableView(width: info.paperSize.width - info.leftMargin - info.rightMargin), printInfo: info)
         op.showsPrintPanel = true
         op.showsProgressPanel = true
         return op

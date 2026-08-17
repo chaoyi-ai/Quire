@@ -79,7 +79,7 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         case .codeBlock(let lang, let code):
             appendCode(code, language: lang, role: .codeBlock, into: out, ctx: ctx)
         case .mermaid(let source):
-            if MermaidRenderer.isAvailable { appendMermaid(source, into: out, ctx: ctx) }
+            if MermaidRenderer.isAvailable, !style.options.largeFile { appendMermaid(source, into: out, ctx: ctx) }
             else { appendCode(source, language: "mermaid", role: .codeBlock, into: out, ctx: ctx) }
         case .html(let html):
             appendCode(html, language: "html", role: .htmlBlock, into: out, ctx: ctx)
@@ -202,16 +202,30 @@ public final class AttributedStringBuilder: @unchecked Sendable {
     private func checkboxAttachment(checked: Bool, font: NSFont) -> NSAttributedString {
         cacheLock.lock(); defer { cacheLock.unlock() }
         if let c = checkboxCache[checked] { return c }
-        let name = checked ? "checkmark.square.fill" : "square"
-        let size = font.pointSize * 0.95
-        let att = NSTextAttachment()
-        if let img = NSImage(systemSymbolName: name, accessibilityDescription: checked ? "已完成" : "未完成")?
-            .withSymbolConfiguration(.init(pointSize: size, weight: .regular)) {
-            let tinted = img.tinted(checked ? style.accent : style.muted)
-            att.image = tinted
-            let h = tinted.size.height, w = tinted.size.width
-            att.bounds = CGRect(x: 0, y: (font.capHeight - h) / 2 + 1, width: w, height: h)
+        let size = (font.pointSize * 0.95).rounded()
+        let accent = style.accent, muted = style.muted, bg = style.background
+        // 矢量绘制（PDF / 打印上下文同样正确；不用 destinationIn 合成）
+        let img = NSImage(size: CGSize(width: size, height: size), flipped: false) { rect in
+            let r = rect.insetBy(dx: 0.75, dy: 0.75)
+            let path = NSBezierPath(roundedRect: r, xRadius: size * 0.22, yRadius: size * 0.22)
+            if checked {
+                accent.setFill(); path.fill()
+                let check = NSBezierPath()
+                check.lineWidth = max(1.5, size * 0.14)
+                check.lineCapStyle = .round; check.lineJoinStyle = .round
+                check.move(to: CGPoint(x: r.minX + r.width * 0.26, y: r.minY + r.height * 0.50))
+                check.line(to: CGPoint(x: r.minX + r.width * 0.44, y: r.minY + r.height * 0.31))
+                check.line(to: CGPoint(x: r.minX + r.width * 0.75, y: r.minY + r.height * 0.68))
+                bg.setStroke(); check.stroke()
+            } else {
+                path.lineWidth = 1.2
+                muted.setStroke(); path.stroke()
+            }
+            return true
         }
+        let att = NSTextAttachment()
+        att.image = img
+        att.bounds = CGRect(x: 0, y: (font.capHeight - size) / 2 + 1, width: size, height: size)
         let s = NSMutableAttributedString(attachment: att)
         s.addAttributes([QuireAttribute.taskChecked: checked, .font: font], range: NSRange(location: 0, length: s.length))
         checkboxCache[checked] = s
@@ -246,7 +260,7 @@ public final class AttributedStringBuilder: @unchecked Sendable {
             p.minimumLineHeight = lh; p.maximumLineHeight = lh
             p.paragraphSpacingBefore = pad
             p.paragraphSpacing = pad + style.paragraphSpacing
-            p.headIndent = ctx.indent + pad; p.firstLineHeadIndent = ctx.indent + pad
+            p.headIndent = ctx.indent + pad + style.codeGutterWidth; p.firstLineHeadIndent = ctx.indent + pad + style.codeGutterWidth
             p.tailIndent = -pad
             p.lineBreakMode = .byCharWrapping
             p.tabStops = []; p.defaultTabInterval = style.codeFont.pointSize * 0.6 * 4
@@ -267,7 +281,7 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         QAAppendRun(out, ns, plain)
 
         var tokens: [Token] = []
-        if let language, highlighter.supports(language) {
+        if !style.options.largeFile, let language, highlighter.supports(language) {
             tokens = highlighter.highlight(code, language: language) // \n → U+2028 同为 1 单元，偏移一致
         }
         if !tokens.isEmpty {
@@ -482,7 +496,10 @@ public final class AttributedStringBuilder: @unchecked Sendable {
             a[.foregroundColor] = color
         }
         if ctx.strike { a[.strikethroughStyle] = NSUnderlineStyle.single.rawValue; a[.strikethroughColor] = a[.foregroundColor] }
-        if ctx.link != nil { a[.cursor] = NSCursor.pointingHand }
+        if ctx.link != nil {
+            a[.cursor] = NSCursor.pointingHand
+            if style.options.linkUnderline { a[.underlineStyle] = NSUnderlineStyle.single.rawValue }
+        }
         let u = QAUniqueAttributes(a as NSDictionary) as AnyObject
         cacheLock.lock(); attrsCache[key] = u; cacheLock.unlock()
         return u

@@ -11,6 +11,7 @@ final class EditorViewController: NSViewController {
     private var ruler: LineNumberRulerView!
     nonisolated(unsafe) private var boundsObserver: NSObjectProtocol?
     nonisolated(unsafe) private var themeObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var prefsObserver: NSObjectProtocol?
     /// 编辑器滚动回调（顶部行号）
     var onScroll: ((Int) -> Void)?
     /// 文本变化（由控制器已经转发给 session 后再调用）
@@ -39,8 +40,11 @@ final class EditorViewController: NSViewController {
         ruler.style = style
         scrollView.verticalRulerView = ruler
         scrollView.hasVerticalRuler = true
-        scrollView.rulersVisible = true
+        scrollView.rulersVisible = Preferences.shared.editorLineNumbers
         view = scrollView
+        prefsObserver = NotificationCenter.default.addObserver(forName: Preferences.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.scrollView.rulersVisible = Preferences.shared.editorLineNumbers }
+        }
 
         textView.onTextChange = { [weak self] in
             guard let self else { return }
@@ -71,6 +75,7 @@ final class EditorViewController: NSViewController {
     deinit {
         if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
         if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
+        if let prefsObserver { NotificationCenter.default.removeObserver(prefsObserver) }
     }
 
     /// 外部（磁盘）变化：替换编辑器文本但保留光标

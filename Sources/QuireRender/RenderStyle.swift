@@ -5,12 +5,26 @@ extension ThemeColor {
     public var nsColor: NSColor { NSColor(srgbRed: red, green: green, blue: blue, alpha: alpha) }
 }
 
+/// 渲染选项（来自偏好设置），随 RenderStyle 一起传给渲染层
+public struct RenderOptions: Hashable, Sendable {
+    /// 代码块行号
+    public var codeLineNumbers = false
+    /// 链接下划线
+    public var linkUnderline = false
+    /// 大文件模式：不高亮、不渲染 Mermaid、图片不加载
+    public var largeFile = false
+    public init(codeLineNumbers: Bool = false, linkUnderline: Bool = false, largeFile: Bool = false) {
+        self.codeLineNumbers = codeLineNumbers; self.linkUnderline = linkUnderline; self.largeFile = largeFile
+    }
+}
+
 /// 主题 → 已解析的 AppKit 字体/颜色/段落样式。所有属性不可变，可跨线程共享。
 /// 一次构造（< 1 ms），整份文档渲染期间复用；主题或缩放变化时重建。
 public final class RenderStyle: @unchecked Sendable {
     public let theme: Theme
     /// 缩放倍率（⌘+/⌘-），作用于所有字号与间距
     public let scale: CGFloat
+    public let options: RenderOptions
 
     // 字号
     public let baseSize: CGFloat
@@ -47,12 +61,15 @@ public final class RenderStyle: @unchecked Sendable {
     public let verticalPadding: CGFloat
     public let codeBlockRadius: CGFloat
     public let codeBlockPadding: CGFloat
+    /// 代码块行号栏宽度（0 = 关闭）
+    public let codeGutterWidth: CGFloat
     public let blockquoteBarWidth: CGFloat
     public let tableCellPadding: (vertical: CGFloat, horizontal: CGFloat)
 
-    public init(theme: Theme, scale: CGFloat = 1) {
+    public init(theme: Theme, scale: CGFloat = 1, options: RenderOptions = RenderOptions()) {
         self.theme = theme
         self.scale = scale
+        self.options = options
         let t = theme.typography
         baseSize = CGFloat(t.baseSize) * scale
         codeSize = (CGFloat(t.baseSize) * CGFloat(t.codeSize) * scale).rounded()
@@ -101,6 +118,7 @@ public final class RenderStyle: @unchecked Sendable {
         verticalPadding = CGFloat(l.verticalPadding)
         codeBlockRadius = CGFloat(l.codeBlockRadius)
         codeBlockPadding = (CGFloat(l.codeBlockPadding) * scale).rounded()
+        codeGutterWidth = options.codeLineNumbers ? (codeSize * 2.6).rounded() : 0
         blockquoteBarWidth = CGFloat(l.blockquoteBarWidth)
         tableCellPadding = (CGFloat(l.tableCellPadding.first ?? 6) * scale, CGFloat(l.tableCellPadding.dropFirst().first ?? 12) * scale)
     }

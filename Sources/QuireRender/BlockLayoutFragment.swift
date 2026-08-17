@@ -64,7 +64,8 @@ public final class BlockLayoutFragment: NSTextLayoutFragment {
             let pad = style.codeBlockPadding
             let spacingBefore = ps?.paragraphSpacingBefore ?? pad
             let spacingAfter = ps?.paragraphSpacing ?? pad
-            let left = (ps?.headIndent ?? pad) - pad
+            let gutter = role == .codeBlock ? style.codeGutterWidth : 0
+            let left = (ps?.headIndent ?? pad) - pad - gutter
             let rect = CGRect(x: originX + left,
                               y: point.y + spacingBefore - pad,
                               width: width - left,
@@ -75,6 +76,31 @@ public final class BlockLayoutFragment: NSTextLayoutFragment {
             context.fillPath()
             if style.codeBorder.alphaComponent > 0.01 {
                 context.addPath(path); context.setStrokeColor(style.codeBorder.cgColor); context.setLineWidth(1); context.strokePath()
+            }
+            // 行号（偏好开启时）：每个软换行前的"真行"编号
+            if style.codeGutterWidth > 0, role == .codeBlock, let p = textElement as? NSTextParagraph {
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+                let numFont = NSFont.monospacedDigitSystemFont(ofSize: max(9, style.codeSize * 0.85), weight: .regular)
+                let attrs: [NSAttributedString.Key: Any] = [.font: numFont, .foregroundColor: style.lineNumber]
+                let text = p.attributedString.string as NSString
+                var lineNo = 1
+                var lastLineStart = -1
+                let gutterRight = originX + left + pad + gutter - 8
+                for lf in textLineFragments {
+                    let r = lf.characterRange
+                    // 该行片段起点是否是"真行"开头（前一个字符是 U+2028 或起点）
+                    let isLineStart = r.location == 0 || (r.location > 0 && r.location - 1 < text.length && text.character(at: r.location - 1) == 0x2028)
+                    if isLineStart, r.location != lastLineStart {
+                        let s = NSAttributedString(string: "\(lineNo)", attributes: attrs)
+                        let sz = s.size()
+                        let y = point.y + lf.typographicBounds.minY + (lf.typographicBounds.height - sz.height) / 2
+                        s.draw(at: CGPoint(x: gutterRight - sz.width, y: y))
+                        lineNo += 1
+                        lastLineStart = r.location
+                    }
+                }
+                NSGraphicsContext.restoreGraphicsState()
             }
             // 语言标签（右上角，小字，弱化）
             if let lang = attrs[QuireAttribute.codeLanguage] as? String, role != .frontMatter, role != .htmlBlock, rect.height > 30 {

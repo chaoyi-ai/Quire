@@ -56,13 +56,26 @@ final class DocumentSession {
     /// 首次打开的小文件同步渲染的阈值：256 KB 内 parse+render ≈ 40 ms，比再来一轮空视图布局更划算
     static let syncRenderThreshold = 256 * 1024
 
+    /// 大文件模式（超过阈值：不高亮、不渲染 Mermaid）
+    private(set) var isLargeFile = false
+    var onLargeFileModeChanged: ((Bool) -> Void)?
+
+    /// 当前有效 style（大文件模式下带 largeFile 选项）
+    private func effectiveStyle() -> RenderStyle {
+        let large = source.utf8.count > Preferences.shared.largeFileThresholdBytes
+        if large != isLargeFile { isLargeFile = large; onLargeFileModeChanged?(large) }
+        guard large else { return style }
+        var o = style.options; o.largeFile = true
+        return RenderStyle(theme: style.theme, scale: style.scale, options: o)
+    }
+
     func sourceDidChange(_ newSource: String, reason: ChangeReason) {
         source = newSource
         editDebounce?.cancel()
         generation += 1
         let gen = generation
         let parser = self.parser
-        let renderer = DocumentRenderer(style: style)
+        let renderer = DocumentRenderer(style: effectiveStyle())
         let previous = rendered
         let src = newSource
         if reason == .opened, src.utf8.count <= Self.syncRenderThreshold {
@@ -72,7 +85,7 @@ final class DocumentSession {
             parsed = doc
             rendered = out
             LaunchClock.mark("parse+render done (sync)")
-            onRendered?(out, style, reason, nil)
+            onRendered?(out, renderer.style, reason, nil)
             onOutline?(doc.outline)
             return
         }
@@ -98,7 +111,7 @@ final class DocumentSession {
                 LaunchClock.mark("publish to UI")
                 self.parsed = doc
                 self.rendered = out
-                self.onRendered?(out, self.style, reason, d)
+                self.onRendered?(out, renderer.style, reason, d)
                 self.onOutline?(doc.outline)
             }
         }
@@ -117,8 +130,8 @@ final class DocumentSession {
         generation += 1
         let gen = generation
         let doc = parsed
-        let renderer = DocumentRenderer(style: style)
-        let s = style
+        let renderer = DocumentRenderer(style: effectiveStyle())
+        let s = renderer.style
         Task.detached(priority: .userInitiated) { [weak self] in
             let sp = OSSignpostID(log: perfLog)
             os_signpost(.begin, log: perfLog, name: "rerender", signpostID: sp)
@@ -135,7 +148,7 @@ final class DocumentSession {
     // MARK: - 文件监控
 
     func startWatching() {
-        guard let url = document?.fileURL else { return }
+        guard Preferences.shared.autoReload, let url = document?.fileURL else { return }
         watcher = FileWatcher(url: url) { [weak self] in
             Task { @MainActor [weak self] in
                 self?.document?.reloadFromDisk()

@@ -60,7 +60,7 @@ final class ThemeManager {
         let fallback = catalog.theme(id: "github-light") ?? catalog.themes.first!
         currentStyle = RenderStyle(theme: fallback, scale: 1)
         applyAppAppearance()
-        currentStyle = RenderStyle(theme: resolveTheme(), scale: zoom)
+        currentStyle = RenderStyle(theme: resolveTheme(), scale: zoom, options: Preferences.shared.renderOptions)
         appearanceObserver = NSApp.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
             Task { @MainActor in self?.refresh() }
         }
@@ -97,11 +97,12 @@ final class ThemeManager {
         return catalog.themes(for: effectiveAppearance).first ?? catalog.themes.first!
     }
 
-    private func refresh() {
+    func refresh() {
         let t = resolveTheme()
         let z = zoom
-        if t == currentStyle.theme, z == currentStyle.scale { return }
-        currentStyle = RenderStyle(theme: t, scale: z)
+        let o = Preferences.shared.renderOptions
+        if t == currentStyle.theme, z == currentStyle.scale, o == currentStyle.options { return }
+        currentStyle = RenderStyle(theme: t, scale: z, options: o)
         NotificationCenter.default.post(name: Self.didChange, object: self)
     }
 

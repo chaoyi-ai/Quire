@@ -12,6 +12,7 @@ enum MainMenu {
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "关于 Quire", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "设置…", action: #selector(Handler.showPreferences(_:)), keyEquivalent: ",").target = Handler.shared
         appMenu.addItem(withTitle: "打开主题文件夹", action: #selector(Handler.openThemesFolder(_:)), keyEquivalent: "").target = Handler.shared
         appMenu.addItem(.separator())
         let services = NSMenu(title: "服务")
@@ -39,6 +40,11 @@ enum MainMenu {
         file.addItem(withTitle: "存储…", action: #selector(NSDocument.save(_:)), keyEquivalent: "s")
         let saveAs = file.addItem(withTitle: "存储为…", action: #selector(NSDocument.saveAs(_:)), keyEquivalent: "S"); saveAs.keyEquivalentModifierMask = [.command, .shift]
         file.addItem(withTitle: "复原到已存储版本", action: #selector(NSDocument.revertToSaved(_:)), keyEquivalent: "")
+        file.addItem(.separator())
+        let export = NSMenu(title: "导出")
+        export.addItem(withTitle: "HTML…", action: #selector(Handler.exportHTML(_:)), keyEquivalent: "").target = Handler.shared
+        export.addItem(withTitle: "PDF…", action: #selector(Handler.exportPDF(_:)), keyEquivalent: "").target = Handler.shared
+        file.addItem(withTitle: "导出", action: nil, keyEquivalent: "").submenu = export
         file.addItem(.separator())
         file.addItem(withTitle: "重新载入", action: #selector(Handler.reload(_:)), keyEquivalent: "r").target = Handler.shared
         file.addItem(withTitle: "在 Finder 中显示", action: #selector(Handler.revealInFinder(_:)), keyEquivalent: "").target = Handler.shared
@@ -180,6 +186,15 @@ enum MainMenu {
             alert.messageText = "部分主题加载失败"
             alert.informativeText = ThemeManager.shared.loadErrors.map { "\(($0.path as NSString).lastPathComponent)：\($0.error)" }.joined(separator: "\n\n")
             alert.runModal()
+        }
+        @objc func showPreferences(_ sender: Any?) { PreferencesWindowController.shared.show() }
+        @objc func exportHTML(_ sender: Any?) {
+            guard let doc = NSDocumentController.shared.currentDocument as? MarkdownDocument, let w = doc.windowControllers.first?.window else { return }
+            Exporter.exportHTML(document: doc, from: w)
+        }
+        @objc func exportPDF(_ sender: Any?) {
+            guard let doc = NSDocumentController.shared.currentDocument as? MarkdownDocument, let w = doc.windowControllers.first?.window else { return }
+            Exporter.exportPDF(document: doc, from: w)
         }
         @objc func openHomepage(_ sender: Any?) { NSWorkspace.shared.open(URL(string: "https://github.com/chaoyi-ai/Quire")!) }
         @objc func openThemeDocs(_ sender: Any?) { NSWorkspace.shared.open(URL(string: "https://github.com/chaoyi-ai/Quire/blob/main/docs/THEMES.md")!) }

@@ -113,6 +113,7 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
     }
 
     private func updateContentInsets() {
+        if fixedPrintingWidth != nil { textContainerInset = .zero; return }
         let w = bounds.width
         let maxW = style.maxContentWidth
         var inset = style.horizontalPadding
@@ -126,6 +127,70 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
 
     /// 内容列宽度（pt）
     public var contentWidth: CGFloat { bounds.width - textContainerInset.width * 2 }
+
+    private var fixedPrintingWidth: CGFloat?
+    /// 打印 / PDF：固定容器宽度，忽略 maxContentWidth 居中逻辑
+    public func setPrintingWidth(_ w: CGFloat) {
+        fixedPrintingWidth = w
+        textContainerInset = .zero
+        textContainer?.size = CGSize(width: w, height: .greatestFiniteMagnitude)
+        setFrameSize(NSSize(width: w, height: frame.height))
+    }
+    /// 强制全部布局并把 frame 高度撑到内容高度（打印分页需要）
+    public func layoutAllForPrinting() {
+        guard let tlm = textLayoutManager else { return }
+        tlm.ensureLayout(for: tlm.documentRange)
+        var maxY: CGFloat = 0
+        tlm.enumerateTextLayoutFragments(from: nil, options: [.reverse, .ensuresLayout]) { frag in
+            maxY = frag.layoutFragmentFrame.maxY; return false
+        }
+        setFrameSize(NSSize(width: frame.width, height: maxY.rounded(.up) + 1))
+        pageRects = nil
+    }
+
+    // MARK: - 打印分页（TextKit 2 片段边界；NSTextView 自带的分页走 TextKit 1 路径，不可用）
+
+    private var pageRects: [CGRect]?
+
+    private func computePageRects(pageHeight: CGFloat) -> [CGRect] {
+        guard let tlm = textLayoutManager, pageHeight > 10 else { return [bounds] }
+        var rects: [CGRect] = []
+        var pageTop: CGFloat = 0
+        var lastBottom: CGFloat = 0
+        let width = bounds.width
+        tlm.enumerateTextLayoutFragments(from: nil, options: [.ensuresLayout]) { frag in
+            let f = frag.layoutFragmentFrame
+            let bottom = f.maxY + self.textContainerInset.height
+            if bottom - pageTop > pageHeight {
+                // 当前片段放不下：在它之前分页（若它本身超过一页，硬切）
+                if lastBottom > pageTop { rects.append(CGRect(x: 0, y: pageTop, width: width, height: lastBottom - pageTop)); pageTop = lastBottom }
+                while bottom - pageTop > pageHeight {
+                    rects.append(CGRect(x: 0, y: pageTop, width: width, height: pageHeight)); pageTop += pageHeight
+                }
+            }
+            lastBottom = bottom
+            return true
+        }
+        if lastBottom > pageTop { rects.append(CGRect(x: 0, y: pageTop, width: width, height: lastBottom - pageTop)) }
+        return rects.isEmpty ? [bounds] : rects
+    }
+
+    public override func knowsPageRange(_ range: NSRangePointer) -> Bool {
+        guard fixedPrintingWidth != nil, let op = NSPrintOperation.current else { return super.knowsPageRange(range) }
+        let info = op.printInfo
+        let pageHeight = (info.paperSize.height - info.topMargin - info.bottomMargin).rounded(.down)
+        if pageRects == nil { pageRects = computePageRects(pageHeight: pageHeight) }
+        range.pointee = NSRange(location: 1, length: pageRects!.count)
+        return true
+    }
+
+    public override func rectForPage(_ page: Int) -> NSRect {
+        guard fixedPrintingWidth != nil, let rects = pageRects, page >= 1, page <= rects.count else { return super.rectForPage(page) }
+        return rects[page - 1]
+    }
+
+    /// 打印时不画背景外的选区、光标等
+    public override var isFlipped: Bool { true }
 
     // MARK: - NSTextLayoutManagerDelegate
 
