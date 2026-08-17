@@ -14,6 +14,10 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     private var isHighlighting = false
     /// 文本变化回调（编辑器 → 文档）
     public var onTextChange: (() -> Void)?
+    /// 拖入 Markdown 文件（打开）
+    public var onDropFiles: (([URL]) -> Void)?
+    /// 当前文档 URL（用于生成拖入图片/文件的相对路径）
+    public var documentURL: URL?
     /// 是否显示行号
     public var showsLineNumbers = true { didSet { enclosingScrollView?.rulersVisible = showsLineNumbers } }
 
@@ -292,6 +296,39 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         let y = max(0, frag.layoutFragmentFrame.minY + textContainerInset.height - 8)
         sv.contentView.setBoundsOrigin(CGPoint(x: 0, y: y))
         sv.reflectScrolledClipView(sv.contentView)
+    }
+
+    // MARK: - 拖放：.md 打开；图片插入 ![]()；其他文件插入 []()
+
+    public override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if !DropSupport.fileURLs(from: sender).isEmpty { return .copy }
+        return super.draggingEntered(sender)
+    }
+    public override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if !DropSupport.fileURLs(from: sender).isEmpty { return .copy }
+        return super.draggingUpdated(sender)
+    }
+    public override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = DropSupport.fileURLs(from: sender)
+        guard !urls.isEmpty else { return super.performDragOperation(sender) }
+        let mds = urls.filter(DropSupport.isMarkdown)
+        let others = urls.filter { !DropSupport.isMarkdown($0) }
+        if !mds.isEmpty { onDropFiles?(mds) }
+        if !others.isEmpty {
+            let point = convert(sender.draggingLocation, from: nil)
+            let idx = characterIndexForInsertion(at: point)
+            let text = others.map { u -> String in
+                let rel = DropSupport.relativePath(of: u, to: documentURL)
+                let name = u.deletingPathExtension().lastPathComponent
+                return DropSupport.isImage(u) ? "![\(name)](\(rel))" : "[\(u.lastPathComponent)](\(rel))"
+            }.joined(separator: "\n")
+            let r = NSRange(location: idx, length: 0)
+            if shouldChangeText(in: r, replacementString: text) {
+                insertText(text, replacementRange: r)
+                didChangeText()
+            }
+        }
+        return true
     }
 
     // MARK: - 输入辅助

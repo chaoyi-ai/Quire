@@ -163,10 +163,14 @@ public final class BlockLayoutFragment: NSTextLayoutFragment {
             let lr = lf.characterRange
             guard lr.length > 0 else { continue }
             let tb = lf.typographicBounds
-            // 框高：代码字体的上下伸 + 内边距，且不超过行高
-            let codeH = style.inlineCodeFont.ascender - style.inlineCodeFont.descender
-            let h = min(tb.height - 1, (codeH + 4).rounded())
-            let y = point.y + tb.minY + (tb.height - h) / 2
+            // 以基线为准（固定行高时多余空间在行上方，字形贴底，不能按整行居中）
+            let font = style.inlineCodeFont
+            let baseline = point.y + tb.minY + lf.glyphOrigin.y
+            let pad: CGFloat = 2
+            let top = (baseline - font.ascender - pad).rounded()
+            let bottom = (baseline - font.descender + pad).rounded()
+            let h = bottom - top
+            let y = top
             attr.enumerateAttribute(QuireAttribute.inlineCode, in: lr, options: []) { v, r, _ in
                 guard v as? Bool == true else { return }
                 let x0 = lf.locationForCharacter(at: r.location).x

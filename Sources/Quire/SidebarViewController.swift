@@ -1,5 +1,6 @@
 import AppKit
 import QuireCore
+import QuireRender
 
 /// 侧栏节点：文件夹 / 文件 / 标题。子节点懒加载。
 @MainActor
@@ -68,6 +69,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         outlineView.outlineTableColumn = col
         outlineView.dataSource = self
         outlineView.delegate = self
+        outlineView.registerForDraggedTypes([.fileURL])
         outlineView.target = self
         outlineView.action = #selector(rowClicked(_:))
         outlineView.doubleAction = #selector(rowDoubleClicked(_:))
@@ -413,6 +415,20 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         var n: SidebarNode? = heading
         while let cur = n, cur.kind == .heading { n = cur.parent }
         return n
+    }
+
+    // MARK: - 拖放（打开 Markdown 文件）
+
+    func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo, proposedItem item: Any?, proposedChildIndex index: Int) -> NSDragOperation {
+        guard DropSupport.fileURLs(from: info).contains(where: DropSupport.isMarkdown) else { return [] }
+        outlineView.setDropItem(nil, dropChildIndex: NSOutlineViewDropOnItemIndex)
+        return .copy
+    }
+    func outlineView(_ outlineView: NSOutlineView, acceptDrop info: NSDraggingInfo, item: Any?, childIndex index: Int) -> Bool {
+        let urls = DropSupport.fileURLs(from: info).filter(DropSupport.isMarkdown)
+        guard !urls.isEmpty else { return false }
+        FileOpener.open(urls)
+        return true
     }
 
     // MARK: - DataSource

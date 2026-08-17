@@ -99,7 +99,10 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         if !document.session.parsed.blocks.isEmpty { sidebarViewController.outline = document.session.parsed.outline }
         // 存储为 / 首次存储后 URL 变化 → 侧栏跟随
         fileURLObserver = document.observe(\.fileURL, options: [.new]) { [weak self] doc, _ in
-            Task { @MainActor [weak self] in self?.sidebarViewController.currentURL = doc.fileURL }
+            Task { @MainActor [weak self] in
+                self?.sidebarViewController.currentURL = doc.fileURL
+                if self?.editorItem != nil { self?.editorViewController.documentURLDidChange(doc.fileURL) }
+            }
         }
 
         // 初始模式：新文档 → 分栏；已有文档 → 上次选择（默认阅读）

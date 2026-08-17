@@ -46,6 +46,8 @@ final class EditorViewController: NSViewController {
             MainActor.assumeIsolated { self?.scrollView.rulersVisible = Preferences.shared.editorLineNumbers }
         }
 
+        textView.documentURL = session.document?.fileURL
+        textView.onDropFiles = { urls in FileOpener.open(urls) }
         textView.onTextChange = { [weak self] in
             guard let self else { return }
             let src = self.textView.source
@@ -77,6 +79,9 @@ final class EditorViewController: NSViewController {
         if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
         if let prefsObserver { NotificationCenter.default.removeObserver(prefsObserver) }
     }
+
+    /// 文档 URL 变化（存储为）
+    func documentURLDidChange(_ url: URL?) { textView.documentURL = url }
 
     /// 外部（磁盘）变化：替换编辑器文本但保留光标
     func replaceSource(_ text: String) {

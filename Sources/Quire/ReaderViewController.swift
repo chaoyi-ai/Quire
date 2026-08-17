@@ -27,6 +27,7 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
         textView = ReaderTextView(style: style)
         textView.delegate = self
         textView.baseURL = session.document?.fileURL
+        textView.onDropFiles = { urls in FileOpener.open(urls) }
         textView.onImageClick = { [weak self] src in
             guard let url = ImageLoader.resolve(src, relativeTo: self?.session.document?.fileURL) else { return }
             NSWorkspace.shared.open(url)   // 系统看图 / 浏览器
@@ -270,5 +271,18 @@ public enum LaunchClock {
         gettimeofday(&now, nil)
         let nowMs = Double(now.tv_sec) * 1000 + Double(now.tv_usec) / 1000
         return nowMs - startMs
+    }
+}
+
+
+/// 打开一组文件（拖放 / 侧栏）
+@MainActor
+enum FileOpener {
+    static func open(_ urls: [URL]) {
+        for url in urls {
+            NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { _, _, error in
+                if let error { NSApp.presentError(error) }
+            }
+        }
     }
 }

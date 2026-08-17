@@ -96,3 +96,14 @@ extension BuilderTests {
         XCTAssertEqual(a[.strikethroughStyle] as? Int, NSUnderlineStyle.single.rawValue, "\(a)")
     }
 }
+
+final class DropSupportTests: XCTestCase {
+    func testRelativePath() {
+        let doc = URL(fileURLWithPath: "/Users/me/notes/a/doc.md")
+        XCTAssertEqual(DropSupport.relativePath(of: URL(fileURLWithPath: "/Users/me/notes/a/img/x y.png"), to: doc), "img/x%20y.png")
+        XCTAssertEqual(DropSupport.relativePath(of: URL(fileURLWithPath: "/Users/me/notes/b/x.png"), to: doc), "../b/x.png")
+        XCTAssertEqual(DropSupport.relativePath(of: URL(fileURLWithPath: "/tmp/x.png"), to: nil), "/tmp/x.png")
+        XCTAssertTrue(DropSupport.isMarkdown(URL(fileURLWithPath: "/a/b.MD")))
+        XCTAssertTrue(DropSupport.isImage(URL(fileURLWithPath: "/a/b.webp")))
+    }
+}

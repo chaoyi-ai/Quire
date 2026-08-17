@@ -34,7 +34,11 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
+    /// 拖入 Markdown 文件（App 层决定打开方式）
+    public var onDropFiles: (([URL]) -> Void)?
+
     private func commonInit() {
+        registerForDraggedTypes([.fileURL])
         isEditable = false
         isSelectable = true
         isRichText = true
@@ -244,6 +248,20 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
         let f = BlockLayoutFragment(textElement: textElement, range: textElement.elementRange)
         f.style = style
         return f
+    }
+
+    // MARK: - 拖放：Markdown 文件 → 打开
+
+    public override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        DropSupport.fileURLs(from: sender).contains(where: DropSupport.isMarkdown) ? .copy : []
+    }
+    public override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
+    public override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { true }
+    public override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = DropSupport.fileURLs(from: sender).filter(DropSupport.isMarkdown)
+        guard !urls.isEmpty else { return false }
+        onDropFiles?(urls)
+        return true
     }
 
     // MARK: - 点击图片
