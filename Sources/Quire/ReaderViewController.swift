@@ -15,6 +15,9 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
     private var lastTopBlock: Int?
     /// 视口顶部块变化回调（目录高亮）
     var onTopBlockChanged: ((Int) -> Void)?
+    /// 侧栏"当前章节"所在块变化（取样点在可见区上部，见 ReaderTextView.sectionBlockIndex）
+    var onSectionChanged: ((Int) -> Void)?
+    private var lastSectionBlock: Int?
 
     init(session: DocumentSession) {
         self.session = session
@@ -146,7 +149,7 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
 
         switch reason {
         case .opened:
-            scrollView.contentView.setBoundsOrigin(.zero)
+            scrollView.contentView.setBoundsOrigin(CGPoint(x: 0, y: -scrollView.contentInsets.top))
         case .externalChange, .edited, .theme, .zoom:
             // 优先按内容哈希找回原块（块可能移动），否则按下标
             if let top, let idx = Self.nearestBlock(withHash: topHash, around: top, in: doc) {
@@ -175,9 +178,9 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
     private var isNavigating = false
 
     private func viewportDidScroll() {
-        guard !isNavigating, let idx = textView.topVisibleBlockIndex(), idx != lastTopBlock else { return }
-        lastTopBlock = idx
-        onTopBlockChanged?(idx)
+        guard !isNavigating else { return }
+        if let idx = textView.topVisibleBlockIndex(), idx != lastTopBlock { lastTopBlock = idx; onTopBlockChanged?(idx) }
+        if let s = textView.sectionBlockIndex(), s != lastSectionBlock { lastSectionBlock = s; onSectionChanged?(s) }
     }
 
     /// 侧栏点击：动画滚到块，结束后把"当前块"明确设为目标块（哪怕它滚不到顶部，如文末章节）
@@ -188,6 +191,8 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
             self.isNavigating = false
             self.lastTopBlock = index
             self.onTopBlockChanged?(index)
+            self.lastSectionBlock = index
+            self.onSectionChanged?(index)
         }
     }
 

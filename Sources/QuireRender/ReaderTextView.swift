@@ -419,14 +419,14 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
 
     /// 可见位置锚点：顶部块下标 + 视口顶到该块顶的偏移
     private func captureScrollAnchor() -> (Int, CGFloat)? {
-        guard let idx = topVisibleBlockIndex(), let sv = enclosingScrollView, sv.contentView.bounds.minY > 0 else { return nil }
+        guard let idx = topVisibleBlockIndex(), enclosingScrollView != nil, visibleTop > 0 else { return nil }
         return (idx, scrollOffset(withinBlock: idx))
     }
 
     private func restoreScrollAnchor(_ anchor: (Int, CGFloat)?) {
         guard let (idx, offset) = anchor, let rendered, idx < rendered.ranges.count, let sv = enclosingScrollView,
               let frag = layoutFragment(atCharacter: rendered.ranges[idx].location) else { return }
-        let y = max(0, frag.layoutFragmentFrame.minY + textContainerInset.height + offset)
+        let y = max(-topInset, frag.layoutFragmentFrame.minY + textContainerInset.height + offset - topInset)
         if abs(y - sv.contentView.bounds.minY) > 0.5 {
             sv.contentView.setBoundsOrigin(CGPoint(x: 0, y: y))
             sv.reflectScrolledClipView(sv.contentView)
@@ -466,32 +466,38 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
         return result
     }
 
-    /// 滚到块顶（块顶留 scrollTopMargin），或按 offset（视口顶到块顶的偏移）恢复位置。
+    /// 滚动视图顶部被工具栏 / 标签栏盖住的高度（`automaticallyAdjustsContentInsets`）：
+    /// 可见区顶部 = bounds.minY + 这个值；滚到顶时 bounds.minY 是负的
+    private var topInset: CGFloat { enclosingScrollView?.contentInsets.top ?? 0 }
+    /// 可见区顶部在文档坐标里的 y
+    private var visibleTop: CGFloat { (enclosingScrollView?.contentView.bounds.minY ?? 0) + topInset }
+
+    /// 滚到块顶（块顶在可见区顶部下方 scrollTopMargin），或按 offset（可见区顶到块顶的偏移）恢复位置。
     /// TextKit 2 是估算布局：先按估算位置滚过去，视口真实布局后再对齐，直到稳定。
     public func scroll(toBlock index: Int, animated: Bool = false, offset: CGFloat = 0, completion: (@MainActor () -> Void)? = nil) {
         guard let rendered, index < rendered.ranges.count, let sv = enclosingScrollView, let tlm = textLayoutManager else { completion?(); return }
         let r = rendered.ranges[index]
+        let clip = sv.contentView
         if index == 0, offset <= 0 {
-            sv.contentView.setBoundsOrigin(.zero); sv.reflectScrolledClipView(sv.contentView); completion?(); return
+            clip.setBoundsOrigin(CGPoint(x: 0, y: -topInset)); sv.reflectScrolledClipView(clip); completion?(); return
         }
         let align: () -> CGPoint? = { [weak self] in
             guard let self, let frag = self.layoutFragment(atCharacter: r.location) else { return nil }
+            // 目标是"可见区顶部"，bounds.minY 还要再减去被盖住的 topInset。
             // 不在这里按 frame 高度夹紧：内容刚替换时 frame 只是估算，会把目标夹到很靠前
-            let y = frag.layoutFragmentFrame.minY + self.textContainerInset.height + (offset == 0 ? -Self.scrollTopMargin : offset)
-            return CGPoint(x: 0, y: max(0, y))
+            let y = frag.layoutFragmentFrame.minY + self.textContainerInset.height + (offset == 0 ? -Self.scrollTopMargin : offset) - self.topInset
+            return CGPoint(x: 0, y: max(-self.topInset, y))
         }
         // 同步收敛：设视口 → 布局视口 → 重算，最多 4 轮；最后按真实 frame 夹紧
-        let settle: () -> Void = { [weak self] in
+        let settle: () -> Void = {
             for _ in 0..<4 {
-                guard let t = align(), abs(t.y - sv.contentView.bounds.minY) > 0.5 else { break }
-                sv.contentView.setBoundsOrigin(t)
-                sv.reflectScrolledClipView(sv.contentView)
+                guard let t = align(), abs(t.y - clip.bounds.minY) > 0.5 else { break }
+                clip.setBoundsOrigin(t)
+                sv.reflectScrolledClipView(clip)
                 tlm.textViewportLayoutController.layoutViewport()
             }
-            if let self {
-                let maxY = max(0, self.frame.height - sv.contentView.bounds.height)
-                if sv.contentView.bounds.minY > maxY { sv.contentView.setBoundsOrigin(CGPoint(x: 0, y: maxY)); sv.reflectScrolledClipView(sv.contentView) }
-            }
+            let constrained = clip.constrainBoundsRect(clip.bounds)
+            if abs(constrained.minY - clip.bounds.minY) > 0.5 { clip.setBoundsOrigin(constrained.origin); sv.reflectScrolledClipView(clip) }
         }
         guard let target = align() else { completion?(); return }
         if animated, abs(target.y - sv.contentView.bounds.minY) < sv.contentView.bounds.height * 3 {
@@ -509,21 +515,37 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
         }
     }
 
-    /// 视口顶部所在的顶级块下标（取样点在留白之下，保证刚滚到的目标块被算作"当前块"）
-    public func topVisibleBlockIndex() -> Int? {
-        guard let rendered, let tlm = textLayoutManager, let cs = textContentStorage, let sv = enclosingScrollView else { return nil }
-        let y = sv.contentView.bounds.minY - textContainerInset.height + Self.scrollTopMargin + 4
-        let point = CGPoint(x: 0, y: max(0, y))
-        guard let frag = tlm.textLayoutFragment(for: point) else { return nil }
+    /// 文档坐标 y 处的顶级块下标
+    private func blockIndex(atY y: CGFloat) -> Int? {
+        guard let rendered, let tlm = textLayoutManager, let cs = textContentStorage else { return nil }
+        guard let frag = tlm.textLayoutFragment(for: CGPoint(x: 0, y: max(0, y - textContainerInset.height))) else { return nil }
         let offset = cs.offset(from: cs.documentRange.location, to: frag.rangeInElement.location)
         return rendered.blockIndex(at: offset)
     }
 
-    /// 视口顶部到指定块顶部的像素偏移（用于重载后恢复位置）
+    /// 可见区顶部所在的顶级块下标（取样点在留白之下，保证刚滚到的目标块被算作"当前块"）。用于滚动同步 / 位置锚点。
+    public func topVisibleBlockIndex() -> Int? {
+        guard enclosingScrollView != nil else { return nil }
+        return blockIndex(atY: visibleTop + Self.scrollTopMargin + 4)
+    }
+
+    /// 侧栏"当前章节"用的块下标：读者的注意力在可见区上部，不是最顶上一行——
+    /// 取样点在可见区顶部往下 40%，下一标题升到屏幕中线以上就算读到它了；
+    /// 顶上刚好是标题（如刚从侧栏跳过来）时以它为准；滚到底时取最后一块，让末章也能高亮。
+    public func sectionBlockIndex() -> Int? {
+        guard let rendered, let sv = enclosingScrollView else { return nil }
+        let clip = sv.contentView
+        if clip.bounds.maxY >= frame.height + sv.contentInsets.bottom - 1, !rendered.blocks.isEmpty { return rendered.blocks.count - 1 }
+        if let top = topVisibleBlockIndex(), case .heading = rendered.blocks[top].block.kind { return top }
+        let visibleH = clip.bounds.height - topInset - sv.contentInsets.bottom
+        return blockIndex(atY: visibleTop + visibleH * 0.4)
+    }
+
+    /// 可见区顶部到指定块顶部的像素偏移（用于重载后恢复位置）
     public func scrollOffset(withinBlock index: Int) -> CGFloat {
-        guard let rendered, index < rendered.ranges.count, let sv = enclosingScrollView,
+        guard let rendered, index < rendered.ranges.count, enclosingScrollView != nil,
               let frag = layoutFragment(atCharacter: rendered.ranges[index].location) else { return 0 }
-        return sv.contentView.bounds.minY - (frag.layoutFragmentFrame.minY + textContainerInset.height)
+        return visibleTop - (frag.layoutFragmentFrame.minY + textContainerInset.height)
     }
 
     /// 恢复位置：块 index 顶部到视口顶部的偏移为 offset（由 scrollOffset(withinBlock:) 得到）

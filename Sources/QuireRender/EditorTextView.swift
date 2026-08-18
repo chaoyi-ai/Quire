@@ -311,7 +311,8 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     /// 视口顶部所在行（1-based）
     public func topVisibleLine() -> Int {
         guard let tlm = textLayoutManager, let cs = textContentStorage, let sv = enclosingScrollView else { return 1 }
-        let y = max(0, sv.contentView.bounds.minY - textContainerInset.height)
+        // 可见区顶部 = bounds.minY + 被工具栏盖住的 contentInsets.top
+        let y = max(0, sv.contentView.bounds.minY + sv.contentInsets.top - textContainerInset.height)
         guard let frag = tlm.textLayoutFragment(for: CGPoint(x: 0, y: y)) else { return 1 }
         return lineNumber(at: cs.offset(from: cs.documentRange.location, to: frag.rangeInElement.location))
     }
@@ -326,7 +327,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
             var frag: NSTextLayoutFragment?
             tlm.enumerateTextLayoutFragments(from: l, options: [.ensuresLayout]) { f in frag = f; return false }
             guard let frag else { return }
-            let y = max(0, frag.layoutFragmentFrame.minY + textContainerInset.height - 8)
+            let y = max(-sv.contentInsets.top, frag.layoutFragmentFrame.minY + textContainerInset.height - 8 - sv.contentInsets.top)
             if abs(y - sv.contentView.bounds.minY) <= 0.5 { break }
             sv.contentView.setBoundsOrigin(CGPoint(x: 0, y: y))
             sv.reflectScrolledClipView(sv.contentView)

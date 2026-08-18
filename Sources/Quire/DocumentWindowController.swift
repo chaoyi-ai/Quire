@@ -88,9 +88,10 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         }
         // 阅读视图滚动 → 侧栏高亮 + 编辑器同步
         readerViewController.onTopBlockChanged = { [weak self] index in
-            guard let self else { return }
-            self.sidebarViewController.highlight(blockIndex: index)
-            self.syncEditorToReader(blockIndex: index)
+            self?.syncEditorToReader(blockIndex: index)
+        }
+        readerViewController.onSectionChanged = { [weak self] index in
+            self?.sidebarViewController.highlight(blockIndex: index)
         }
         document.session.onOutline = { [weak self] outline in
             self?.sidebarViewController.outline = outline
