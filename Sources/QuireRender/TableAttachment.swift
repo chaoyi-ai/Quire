@@ -56,6 +56,10 @@ public final class TableAttachment: NSTextAttachment {
 public struct TableLayout: Equatable, Sendable {
     public var columnWidths: [CGFloat]
     public var rowHeights: [CGFloat]      // [0] 是表头
+    /// 每个单元格文字的实际高度（[行][列]，与 rowHeights 同序）：绘制时用来垂直居中——
+    /// 行高至少 lineHeight + 内边距，而单行文字的自然高度（字体 ascent+descent）比 lineHeight 小，
+    /// 顶对齐会显得上窄下宽。
+    public var textHeights: [[CGFloat]] = []
     public var width: CGFloat { columnWidths.reduce(0, +) }
     public var height: CGFloat { rowHeights.reduce(0, +) }
 
@@ -116,16 +120,20 @@ public enum TableRenderer {
         for c in 0..<cols { minimum[c] = max(minimum[c], min(natural[c], (style.baseSize * 5 + padH * 2).rounded())) }
         let widths = TableLayout.distribute(natural: natural, minimum: minimum, available: available)
         var heights: [CGFloat] = []
+        var textHeights: [[CGFloat]] = []
         for row in allRows {
             var h: CGFloat = style.lineHeight + padV * 2
+            var th: [CGFloat] = []
             for (c, cell) in row.enumerated() where c < cols {
                 let inner = max(10, widths[c] - padH * 2)
                 let r = cell.boundingRect(with: CGSize(width: inner, height: .greatestFiniteMagnitude), options: measureOptions)
+                th.append(r.height.rounded(.up))
                 h = max(h, (r.height + padV * 2).rounded(.up))
             }
             heights.append(h)
+            textHeights.append(th)
         }
-        return TableLayout(columnWidths: widths, rowHeights: heights)
+        return TableLayout(columnWidths: widths, rowHeights: heights, textHeights: textHeights)
     }
 
     /// 最长"单词"宽度（按空白切分；CJK 连续文本视为可任意断行，取单字宽）
@@ -197,7 +205,10 @@ public enum TableRenderer {
                 let w = layout.columnWidths[c]
                 if c < row.count {
                     let cell = aligned(row[c], alignment: c < att.model.alignments.count ? att.model.alignments[c] : .none)
-                    let inner = CGRect(x: x + padH, y: y + padV, width: max(10, w - padH * 2), height: h - padV * 2)
+                    // 垂直居中：单元格文字比行高矮时（单行、或同一行里别的单元格更高）
+                    let th = (r < layout.textHeights.count && c < layout.textHeights[r].count) ? layout.textHeights[r][c] : h - padV * 2
+                    let dy = max(0, ((h - padV * 2 - th) / 2).rounded())
+                    let inner = CGRect(x: x + padH, y: y + padV + dy, width: max(10, w - padH * 2), height: h - padV * 2 - dy)
                     cell.draw(with: inner, options: measureOptions)
                 }
                 x += w

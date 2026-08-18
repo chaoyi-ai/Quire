@@ -39,4 +39,25 @@ final class TableTests: XCTestCase {
         XCTAssertLessThanOrEqual(narrow.width, 200)
         XCTAssertGreaterThan(narrow.rowHeights[1], wide.rowHeights[1], "窄表应换行变高")
     }
+
+    /// 单行单元格：行高按 lineHeight + 内边距，文字自然高度更小，绘制时必须垂直居中（textHeights 供绘制用）
+    func testSingleLineCellTextHeightsForCentering() {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let renderer = DocumentRenderer(theme: theme)
+        let r = renderer.render(MarkdownParser().parse("| a | b |\n|--|--|\n| 1 | 2 |\n"))
+        var att: TableAttachment?
+        r.attributed.enumerateAttribute(.attachment, in: NSRange(location: 0, length: r.attributed.length)) { v, _, _ in if let t = v as? TableAttachment { att = t } }
+        let a = try! XCTUnwrap(att)
+        let layout = a.layout(available: 700)
+        let padV = renderer.style.tableCellPadding.vertical
+        XCTAssertEqual(layout.textHeights.count, 2)
+        XCTAssertEqual(layout.textHeights[1].count, 2)
+        for row in 0..<2 {
+            XCTAssertEqual(layout.rowHeights[row], renderer.style.lineHeight + padV * 2, "单行行高 = lineHeight + 2·padV")
+            for th in layout.textHeights[row] {
+                XCTAssertGreaterThan(th, 0)
+                XCTAssertLessThan(th, renderer.style.lineHeight, "文字自然高度小于 lineHeight → 需要居中偏移")
+            }
+        }
+    }
 }
