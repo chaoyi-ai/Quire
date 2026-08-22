@@ -28,7 +28,7 @@
 - 不做云同步 / 账号
 - 不做插件系统（先把内核做扎实；主题是唯一扩展点）
 - 不做 Windows / Linux（原生是有代价的，我们付这个代价）
-- 不做完整 WYSIWYG（Typora 式）——M5 只做"行内实时预览"，M6 在其上补表格 / 图片 / 数学的就地编辑（见 `docs/research/typora.md`），仍不追求所见即所得的完备性
+- 不做完整 WYSIWYG（Typora 式）——M5 只做"行内实时预览"，M6 在其上补表格 / 图片 / 数学的就地编辑（见 `docs/research/typora.md`），M7 补 iA Writer 式的写作环境与本地文本智能（见 `docs/research/ia-writer.md`），仍不追求所见即所得的完备性
 - 不用 WebView 渲染正文（Mermaid 是唯一例外，且被严格隔离）
 
 ## 3. 关键技术决策（ADR 摘要）
