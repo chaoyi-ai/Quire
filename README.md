@@ -79,7 +79,7 @@ open Package.swift             # 用 Xcode 开发
 | [docs/DESIGN.md](docs/DESIGN.md) | 架构、关键决策（ADR）、渲染管线、模块划分 |
 | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | 性能预算、原则、禁止事项、基准工具 |
 | [docs/THEMES.md](docs/THEMES.md) | 主题 JSON 规范、内置主题、自定义主题 |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | 里程碑 M0–M5 与任务拆分 |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | 里程碑 M0–M6 与任务拆分 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 构建、测试、提交约定 |
 
 ## 路线图（摘要）
@@ -92,6 +92,7 @@ open Package.swift             # 用 Xcode 开发
 | ✅ M3 编辑器 | 源码编辑、分栏同步预览、增量渲染 |
 | ✅ M4 性能与打磨 | 基准门禁、启动优化、大文件模式、设置、导出、0.1 发布 |
 | M5 可视化编辑 | 行内实时预览、数学、本地化、1.0 |
+| M6 写作工作台 | 对标 Typora：表格 / 图片就地编辑、快速打开、全局搜索、字数、剪贴板互通（[调研](docs/research/typora.md)） |
 
 详见 [docs/ROADMAP.md](docs/ROADMAP.md) 与 [GitHub Milestones](https://github.com/chaoyi-ai/Quire/milestones)。
 
