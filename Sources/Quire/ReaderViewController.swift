@@ -94,7 +94,7 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
         v.material = .headerView
         v.blendingMode = .withinWindow
         v.translatesAutoresizingMaskIntoConstraints = false
-        let label = NSTextField(labelWithString: "大文件模式：已关闭代码高亮与 Mermaid 渲染以保持流畅（阈值可在设置中调整）")
+        let label = NSTextField(labelWithString: L("大文件模式：已关闭代码高亮与 Mermaid 渲染以保持流畅（阈值可在设置中调整）"))
         label.font = .systemFont(ofSize: 12)
         label.textColor = .secondaryLabelColor
         label.translatesAutoresizingMaskIntoConstraints = false

@@ -49,9 +49,9 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     nonisolated private static let maxChildren = 5000
     nonisolated private static let maxScanBytes = 4 * 1024 * 1024
 
-    private static let folderIcon = NSImage(systemSymbolName: "folder", accessibilityDescription: "文件夹")
-    private static let fileIcon = NSImage(systemSymbolName: "doc.text", accessibilityDescription: "文档")
-    private static let otherIcon = NSImage(systemSymbolName: "doc", accessibilityDescription: "文件")
+    private static let folderIcon = NSImage(systemSymbolName: "folder", accessibilityDescription: L("文件夹"))
+    private static let fileIcon = NSImage(systemSymbolName: "doc.text", accessibilityDescription: L("文档"))
+    private static let otherIcon = NSImage(systemSymbolName: "doc", accessibilityDescription: L("文件"))
 
     override func loadView() {
         outlineView = NSOutlineView()
@@ -86,7 +86,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         pathControl.pathStyle = .popUp
         pathControl.isEditable = true
         pathControl.allowedTypes = ["public.folder"]
-        pathControl.placeholderString = "选择文件夹…"
+        pathControl.placeholderString = L("选择文件夹…")
         pathControl.font = .systemFont(ofSize: 11)
         pathControl.controlSize = .small
         pathControl.target = self
@@ -94,7 +94,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         pathControl.translatesAutoresizingMaskIntoConstraints = false
         pathControl.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        emptyLabel = NSTextField(wrappingLabelWithString: "存储文档后显示所在文件夹的文件树")
+        emptyLabel = NSTextField(wrappingLabelWithString: L("存储文档后显示所在文件夹的文件树"))
         emptyLabel.textColor = .tertiaryLabelColor
         emptyLabel.font = .systemFont(ofSize: 12)
         emptyLabel.alignment = .center
@@ -228,7 +228,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         for (level, title, line, blockIndex) in entries {
             while let last = stack.last, last.level >= level { stack.removeLast() }
             let parent = stack.last ?? fileNode
-            let n = SidebarNode(kind: .heading, url: fileNode.url, name: title.isEmpty ? "（无标题）" : title, parent: parent)
+            let n = SidebarNode(kind: .heading, url: fileNode.url, name: title.isEmpty ? L("（无标题）") : title, parent: parent)
             n.level = level; n.line = line; n.blockIndex = blockIndex
             n.children = []
             if let p = stack.last { p.children!.append(n) } else { roots.append(n) }

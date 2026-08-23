@@ -52,7 +52,7 @@ final class PreferencesWindowController: NSWindowController {
     private init() {
         let host = NSHostingController(rootView: PreferencesView())
         let window = NSWindow(contentViewController: host)
-        window.title = "Quire 设置"
+        window.title = L("Quire 设置")
         window.styleMask = [.titled, .closable]
         window.setContentSize(NSSize(width: 460, height: 560))
         window.isReleasedWhenClosed = false
@@ -72,52 +72,88 @@ struct PreferencesView: View {
     @State private var lightTheme = ThemeManager.shared.lightThemeID
     @State private var darkTheme = ThemeManager.shared.darkThemeID
     @State private var mode = ThemeManager.shared.mode
+    @State private var language = AppLanguage.current
+    @State private var languageChanged = false
 
     var body: some View {
         Form {
-            Section("外观") {
-                Picker("模式", selection: $mode) {
-                    Text("跟随系统").tag(ThemeManager.AppearanceMode.system)
-                    Text("浅色").tag(ThemeManager.AppearanceMode.light)
-                    Text("深色").tag(ThemeManager.AppearanceMode.dark)
+            Section(L("语言")) {
+                Picker(L("界面语言"), selection: $language) {
+                    Text(L("跟随系统")).tag(AppLanguage.system)
+                    Text("简体中文").tag(AppLanguage.zhHans)
+                    Text("English").tag(AppLanguage.en)
+                }
+                .onChange(of: language) { _, l in AppLanguage.current = l; languageChanged = true }
+                if languageChanged {
+                    Text(L("重新打开 Quire 后生效")).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Section(L("外观")) {
+                Picker(L("模式"), selection: $mode) {
+                    Text(L("跟随系统")).tag(ThemeManager.AppearanceMode.system)
+                    Text(L("浅色")).tag(ThemeManager.AppearanceMode.light)
+                    Text(L("深色")).tag(ThemeManager.AppearanceMode.dark)
                 }
                 .pickerStyle(.segmented)
                 .onChange(of: mode) { _, m in ThemeManager.shared.mode = m }
-                Picker("浅色主题", selection: $lightTheme) {
+                Picker(L("浅色主题"), selection: $lightTheme) {
                     ForEach(ThemeManager.shared.catalog.themes(for: .light), id: \.id) { Text($0.name).tag($0.id) }
                 }
                 .onChange(of: lightTheme) { _, id in ThemeManager.shared.lightThemeID = id }
-                Picker("深色主题", selection: $darkTheme) {
+                Picker(L("深色主题"), selection: $darkTheme) {
                     ForEach(ThemeManager.shared.catalog.themes(for: .dark), id: \.id) { Text($0.name).tag($0.id) }
                 }
                 .onChange(of: darkTheme) { _, id in ThemeManager.shared.darkThemeID = id }
                 HStack {
-                    Button("打开主题文件夹") {
+                    Button(L("打开主题文件夹")) {
                         let dir = ThemeStore.userThemesDirectory
                         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
                         NSWorkspace.shared.open(dir)
                     }
                     Spacer()
                     if !ThemeManager.shared.loadErrors.isEmpty {
-                        Text("\(ThemeManager.shared.loadErrors.count) 个主题加载失败")
+                        Text(String(format: L("%d 个主题加载失败"), ThemeManager.shared.loadErrors.count))
                             .foregroundStyle(.red).font(.caption)
                             .help(ThemeManager.shared.loadErrors.map(\.description).joined(separator: "\n"))
                     }
                 }
             }
-            Section("阅读") {
-                Toggle("代码块显示行号", isOn: $prefs.codeLineNumbers)
-                Toggle("代码块显示复制按钮", isOn: $prefs.codeCopyButton)
-                Toggle("链接显示下划线", isOn: $prefs.linkUnderline)
-                Toggle("文件被外部修改时自动重新载入", isOn: $prefs.autoReload)
-                Stepper("大文件模式阈值：\(prefs.largeFileThresholdMB) MB", value: $prefs.largeFileThresholdMB, in: 1...64)
-                    .help("超过阈值的文件关闭代码高亮与 Mermaid 渲染")
+            Section(L("阅读")) {
+                Toggle(L("代码块显示行号"), isOn: $prefs.codeLineNumbers)
+                Toggle(L("代码块显示复制按钮"), isOn: $prefs.codeCopyButton)
+                Toggle(L("链接显示下划线"), isOn: $prefs.linkUnderline)
+                Toggle(L("文件被外部修改时自动重新载入"), isOn: $prefs.autoReload)
+                Stepper(String(format: L("大文件模式阈值：%d MB"), prefs.largeFileThresholdMB), value: $prefs.largeFileThresholdMB, in: 1...64)
+                    .help(L("超过阈值的文件关闭代码高亮与 Mermaid 渲染"))
             }
-            Section("编辑") {
-                Toggle("显示行号", isOn: $prefs.editorLineNumbers)
+            Section(L("编辑")) {
+                Toggle(L("显示行号"), isOn: $prefs.editorLineNumbers)
             }
         }
         .formStyle(.grouped)
         .frame(width: 460)
+    }
+}
+
+/// 界面语言覆盖：写 App 自己的 `AppleLanguages`（标准做法，重启后 Bundle 按此选语言）；跟随系统 = 删除覆盖。
+enum AppLanguage: String, CaseIterable {
+    case system, zhHans = "zh-Hans", en
+
+    static var current: AppLanguage {
+        get {
+            guard let langs = UserDefaults.standard.array(forKey: "AppleLanguages") as? [String],
+                  UserDefaults.standard.objectIsForced(forKey: "AppleLanguages") == false,
+                  let first = langs.first else { return .system }
+            // 只有显式写入 App 域的才算覆盖（全局域的值由系统提供）
+            guard UserDefaults.standard.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "")?["AppleLanguages"] != nil else { return .system }
+            return first.hasPrefix("zh") ? .zhHans : (first.hasPrefix("en") ? .en : .system)
+        }
+        set {
+            switch newValue {
+            case .system: UserDefaults.standard.removeObject(forKey: "AppleLanguages")
+            case .zhHans: UserDefaults.standard.set(["zh-Hans"], forKey: "AppleLanguages")
+            case .en: UserDefaults.standard.set(["en"], forKey: "AppleLanguages")
+            }
+        }
     }
 }

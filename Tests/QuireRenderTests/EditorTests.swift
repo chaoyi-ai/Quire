@@ -115,7 +115,7 @@ final class EditorTests: XCTestCase {
         editor.setSource("x")
         editor.setSelectedRange(NSRange(location: 1, length: 0))
         editor.insertLink(nil)
-        XCTAssertEqual(editor.source, "x[链接文字](url)")
+        XCTAssertEqual(editor.source, "x[\(RL("链接文字"))](url)")   // 占位文字随界面语言
     }
 
     func testIndent() {

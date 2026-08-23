@@ -1,0 +1,15 @@
+/* Quire — 键为中文原文；由 LocalizationTests 保证与代码及另一语言一致 */
+
+"Mermaid 不可用：%@" = "Mermaid unavailable: %@";
+"Mermaid 渲染失败：%@" = "Mermaid rendering failed: %@";
+"SVG 解码失败" = "Failed to decode SVG";
+"WebView 未创建" = "WebView not created";
+"图片" = "Image";
+"复制代码" = "Copy Code";
+"已复制" = "Copied";
+"截图失败：%@" = "Snapshot failed: %@";
+"文本" = "text";
+"无返回" = "No result";
+"未知错误" = "Unknown error";
+"缺少 mermaid.min.js，请运行 scripts/fetch_mermaid.sh 后重新构建" = "mermaid.min.js is missing; run scripts/fetch_mermaid.sh and rebuild";
+"链接文字" = "link text";

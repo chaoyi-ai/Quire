@@ -87,9 +87,9 @@ public final class MermaidRenderer: NSObject, WKNavigationDelegate {
         case decode
         public var description: String {
             switch self {
-            case .unavailable(let m): "Mermaid 不可用：\(m)"
+            case .unavailable(let m): String(format: RL("Mermaid 不可用：%@"), m)
             case .render(let m): m
-            case .decode: "SVG 解码失败"
+            case .decode: RL("SVG 解码失败")
             }
         }
     }
@@ -121,7 +121,7 @@ public final class MermaidRenderer: NSObject, WKNavigationDelegate {
         defer { release(); inflight -= 1; scheduleIdle() }
         if let cached = MermaidCache.shared.image(forKey: key) { return cached }
         try await ensureReady()
-        guard let webView else { throw Failure.unavailable("WebView 未创建") }
+        guard let webView else { throw Failure.unavailable(RL("WebView 未创建")) }
         let result: Any?
         do {
             result = try await webView.callAsyncJavaScript("return await quireRender(code, theme, font);",
@@ -130,8 +130,8 @@ public final class MermaidRenderer: NSObject, WKNavigationDelegate {
         } catch {
             throw Failure.render(error.localizedDescription)
         }
-        guard let dict = result as? [String: Any] else { throw Failure.render("无返回") }
-        if dict["ok"] as? Bool != true { throw Failure.render((dict["error"] as? String) ?? "未知错误") }
+        guard let dict = result as? [String: Any] else { throw Failure.render(RL("无返回")) }
+        if dict["ok"] as? Bool != true { throw Failure.render((dict["error"] as? String) ?? RL("未知错误")) }
         var w = ((dict["width"] as? Double) ?? 0).rounded(.up), h = ((dict["height"] as? Double) ?? 0).rounded(.up)
         if w < 1 || h < 1 { w = 400; h = 200 }
         w = min(w, 4000); h = min(h, 4000)
@@ -144,7 +144,7 @@ public final class MermaidRenderer: NSObject, WKNavigationDelegate {
         cfg.rect = CGRect(x: 0, y: 0, width: w * k, height: h * k)
         cfg.afterScreenUpdates = true
         let shot: NSImage
-        do { shot = try await webView.takeSnapshot(configuration: cfg) } catch { throw Failure.render("截图失败：\(error.localizedDescription)") }
+        do { shot = try await webView.takeSnapshot(configuration: cfg) } catch { throw Failure.render(String(format: RL("截图失败：%@"), error.localizedDescription)) }
         _ = try? await webView.callAsyncJavaScript("return quireClear();", arguments: [:], contentWorld: .page)
         guard let tiff = shot.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff), let png = rep.representation(using: .png, properties: [:]) else { throw Failure.decode }
         guard let img = Self.image(fromPNG: png, pointSize: CGSize(width: w, height: h)) else { throw Failure.decode }
@@ -179,7 +179,7 @@ public final class MermaidRenderer: NSObject, WKNavigationDelegate {
         if ready, webView != nil { return }
         if webView == nil {
             guard let html = Self.resourceURL(for: "mermaid.html"), Self.resourceURL(for: "mermaid.min.js") != nil else {
-                throw Failure.unavailable("缺少 mermaid.min.js，请运行 scripts/fetch_mermaid.sh 后重新构建")
+                throw Failure.unavailable(RL("缺少 mermaid.min.js，请运行 scripts/fetch_mermaid.sh 后重新构建"))
             }
             let cfg = WKWebViewConfiguration()
             cfg.suppressesIncrementalRendering = true

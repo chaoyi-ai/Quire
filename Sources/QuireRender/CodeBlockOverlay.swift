@@ -77,9 +77,9 @@ final class CopyButton: NSButton {
         super.init(frame: NSRect(x: 0, y: 0, width: 22, height: 22))
         bezelStyle = .inline
         isBordered = false
-        image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "复制代码")?.withSymbolConfiguration(.init(pointSize: 12, weight: .regular))
+        image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: RL("复制代码"))?.withSymbolConfiguration(.init(pointSize: 12, weight: .regular))
         imagePosition = .imageOnly
-        toolTip = "复制代码"
+        toolTip = RL("复制代码")
         alphaValue = 0.55
         target = self
         action = #selector(copyCode)
@@ -100,12 +100,12 @@ final class CopyButton: NSButton {
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(code, forType: .string)
-        image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "已复制")?.withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
+        image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: RL("已复制"))?.withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
         confirmTask?.cancel()
         confirmTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             guard !Task.isCancelled else { return }
-            self?.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "复制代码")?.withSymbolConfiguration(.init(pointSize: 12, weight: .regular))
+            self?.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: RL("复制代码"))?.withSymbolConfiguration(.init(pointSize: 12, weight: .regular))
         }
     }
 }

@@ -1,0 +1,15 @@
+/* Quire — 键为中文原文；由 LocalizationTests 保证与代码及另一语言一致 */
+
+"Mermaid 不可用：%@" = "Mermaid 不可用：%@";
+"Mermaid 渲染失败：%@" = "Mermaid 渲染失败：%@";
+"SVG 解码失败" = "SVG 解码失败";
+"WebView 未创建" = "WebView 未创建";
+"图片" = "图片";
+"复制代码" = "复制代码";
+"已复制" = "已复制";
+"截图失败：%@" = "截图失败：%@";
+"文本" = "文本";
+"无返回" = "无返回";
+"未知错误" = "未知错误";
+"缺少 mermaid.min.js，请运行 scripts/fetch_mermaid.sh 后重新构建" = "缺少 mermaid.min.js，请运行 scripts/fetch_mermaid.sh 后重新构建";
+"链接文字" = "链接文字";

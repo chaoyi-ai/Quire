@@ -16,7 +16,7 @@ public final class ImageAttachment: NSTextAttachment {
             NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4).fill()
             if rect.height > 30 {
                 let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: style.muted]
-                let s = NSAttributedString(string: alt.isEmpty ? "图片" : alt, attributes: attrs)
+                let s = NSAttributedString(string: alt.isEmpty ? RL("图片") : alt, attributes: attrs)
                 let sz = s.size()
                 s.draw(at: CGPoint(x: (rect.width - sz.width) / 2, y: (rect.height - sz.height) / 2))
             }

@@ -222,7 +222,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "选择"
+        panel.prompt = L("选择")
         panel.directoryURL = sidebarViewController.rootURL ?? markdownDocument?.fileURL?.deletingLastPathComponent()
         guard let window else { return }
         panel.beginSheetModal(for: window) { [weak self] resp in
@@ -263,22 +263,22 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         switch id {
         case Item.sidebar:
             let item = NSToolbarItem(itemIdentifier: id)
-            item.label = "目录"; item.toolTip = "显示/隐藏目录（⌘⌥S）"
-            item.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: "目录")
+            item.label = L("目录"); item.toolTip = L("显示/隐藏目录（⌘⌥S）")
+            item.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: L("目录"))
             item.target = self; item.action = #selector(toggleSidebar(_:))
             item.isNavigational = true
             return item
         case Item.mode:
             let item = NSToolbarItem(itemIdentifier: id)
-            item.label = "视图"
+            item.label = L("视图")
             let control = NSSegmentedControl(images: [
-                NSImage(systemSymbolName: "doc.richtext", accessibilityDescription: "阅读")!,
-                NSImage(systemSymbolName: "chevron.left.forwardslash.chevron.right", accessibilityDescription: "编辑")!,
-                NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: "分栏")!,
+                NSImage(systemSymbolName: "doc.richtext", accessibilityDescription: L("阅读"))!,
+                NSImage(systemSymbolName: "chevron.left.forwardslash.chevron.right", accessibilityDescription: L("编辑"))!,
+                NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: L("分栏"))!,
             ], trackingMode: .selectOne, target: self, action: #selector(modeChanged(_:)))
-            control.setToolTip("阅读（⌘1）", forSegment: 0)
-            control.setToolTip("编辑（⌘2）", forSegment: 1)
-            control.setToolTip("分栏（⌘3）", forSegment: 2)
+            control.setToolTip(L("阅读（⌘1）"), forSegment: 0)
+            control.setToolTip(L("编辑（⌘2）"), forSegment: 1)
+            control.setToolTip(L("分栏（⌘3）"), forSegment: 2)
             control.selectedSegment = mode.rawValue
             control.segmentStyle = .automatic
             item.view = control
@@ -286,14 +286,14 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             return item
         case Item.theme:
             let item = NSToolbarItem(itemIdentifier: id)
-            item.label = "主题"; item.toolTip = "选择主题"
-            item.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: "主题")
+            item.label = L("主题"); item.toolTip = L("选择主题")
+            item.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: L("主题"))
             item.target = self; item.action = #selector(showThemeMenu(_:))
             return item
         case Item.appearance:
             let item = NSToolbarItem(itemIdentifier: id)
-            item.label = "外观"; item.toolTip = "切换亮 / 暗"
-            item.image = NSImage(systemSymbolName: "circle.lefthalf.filled", accessibilityDescription: "外观")
+            item.label = L("外观"); item.toolTip = L("切换亮 / 暗")
+            item.image = NSImage(systemSymbolName: "circle.lefthalf.filled", accessibilityDescription: L("外观"))
             item.target = MainMenu.Handler.shared; item.action = #selector(MainMenu.Handler.toggleAppearance(_:))
             return item
         default: return nil

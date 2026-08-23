@@ -34,6 +34,11 @@ for b in "$BUILD_DIR"/Quire_*.bundle; do
   [ -d "$b" ] && cp -R "$b" "$APP/Contents/Resources/"
 done
 cp assets/Info.plist "$APP/Contents/Info.plist"
+# 主 bundle 的语言目录：AppKit 按这里决定系统面板 / 标准菜单项的语言（字符串本身在 Quire_*.bundle 里）
+for loc in zh-Hans en; do
+  mkdir -p "$APP/Contents/Resources/$loc.lproj"
+  printf 'CFBundleDisplayName = "Quire";\nCFBundleName = "Quire";\n' > "$APP/Contents/Resources/$loc.lproj/InfoPlist.strings"
+done
 
 # 图标（缺失时现场生成）
 if [ ! -f assets/AppIcon.icns ]; then

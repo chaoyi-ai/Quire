@@ -459,7 +459,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     }
 
     /// 用标记包裹选区（⌘B → **、⌘I → *、⌘K → [text](url)）
-    public func wrapSelection(prefix: String, suffix: String, placeholder: String = "文本") {
+    public func wrapSelection(prefix: String, suffix: String, placeholder: String = RL("文本")) {
         guard let ns = textStorage?.string as NSString? else { return }
         let sel = selectedRange()
         let text = sel.length > 0 ? ns.substring(with: sel) : placeholder
@@ -475,7 +475,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     @objc public func insertLink(_ sender: Any?) {
         guard let ns = textStorage?.string as NSString? else { return }
         let sel = selectedRange()
-        let text = sel.length > 0 ? ns.substring(with: sel) : "链接文字"
+        let text = sel.length > 0 ? ns.substring(with: sel) : RL("链接文字")
         let replacement = "[\(text)](url)"
         guard shouldChangeText(in: sel, replacementString: replacement) else { return }
         insertText(replacement, replacementRange: sel)

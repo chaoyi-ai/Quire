@@ -66,7 +66,7 @@ final class MarkdownDocument: NSDocument {
             let gb = CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))
             if let s = String(data: data, encoding: String.Encoding(rawValue: gb)) { source = s; encoding = String.Encoding(rawValue: gb) }
             else if let s = String(data: data, encoding: .isoLatin1) { source = s; encoding = .isoLatin1 }
-            else { throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownStringEncodingError, userInfo: [NSLocalizedDescriptionKey: "无法识别文件编码"]) }
+            else { throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownStringEncodingError, userInfo: [NSLocalizedDescriptionKey: L("无法识别文件编码")]) }
         }
         isNewDocument = false
         let src = source
@@ -116,11 +116,11 @@ final class MarkdownDocument: NSDocument {
     @MainActor
     private func promptReloadConflict(diskSource: String) {
         let alert = NSAlert()
-        alert.messageText = "文件在磁盘上被修改"
-        alert.informativeText = "\(fileURL?.lastPathComponent ?? displayName ?? "文档") 已被其他程序修改，而当前有未保存的改动。要重新载入磁盘上的版本吗？"
+        alert.messageText = L("文件在磁盘上被修改")
+        alert.informativeText = String(format: L("%@ 已被其他程序修改，而当前有未保存的改动。要重新载入磁盘上的版本吗？"), fileURL?.lastPathComponent ?? displayName ?? L("文档"))
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "保留我的改动")
-        alert.addButton(withTitle: "重新载入（丢弃改动）")
+        alert.addButton(withTitle: L("保留我的改动"))
+        alert.addButton(withTitle: L("重新载入（丢弃改动）"))
         let handle: (NSApplication.ModalResponse) -> Void = { [weak self] r in
             guard let self, r == .alertSecondButtonReturn else { return }
             self.applyReloaded(diskSource)

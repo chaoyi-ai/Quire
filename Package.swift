@@ -38,12 +38,13 @@ let package = Package(
         .target(
             name: "QuireRender",
             dependencies: ["QuireCore", "CQuireAttr"],
-            resources: [.copy("Resources/Mermaid")]
+            resources: [.copy("Resources/Mermaid"), .process("Resources/Localizable")]
         ),
         // App 壳
         .executableTarget(
             name: "Quire",
-            dependencies: ["QuireCore", "QuireRender"]
+            dependencies: ["QuireCore", "QuireRender"],
+            resources: [.process("Resources")]
         ),
         // 性能基准 CLI
         .executableTarget(

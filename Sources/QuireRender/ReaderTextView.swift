@@ -367,7 +367,7 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
                 att.bounds = CGRect(x: 0, y: 0, width: w.rounded(), height: h.rounded())
             } catch {
                 att.failed = true
-                let msg = "Mermaid 渲染失败：\(error)"
+                let msg = String(format: RL("Mermaid 渲染失败：%@"), String(describing: error))
                 let img = Self.errorImage(message: msg, source: att.source, width: maxWidth, style: self?.style)
                 att.image = img
                 att.bounds = CGRect(origin: .zero, size: img.size)

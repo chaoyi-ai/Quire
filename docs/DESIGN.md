@@ -252,6 +252,14 @@ Quire/
 - 渲染管线：`DocumentSession`（actor）持有当前 `Document` 与已渲染块缓存；UI 层通过 `@MainActor` 视图模型订阅。
 - 绝不在主线程做解析 / 高亮 / 图片解码。
 
+## 11.5 本地化
+
+- 键 = 中文原文：代码里写 `L("设置…")`（App 层）/ `RL("复制代码")`（QuireRender），源码保持可读；`zh-Hans.lproj` 是恒等映射，`en.lproj` 是译文；找不到键时返回键本身。
+- 字符串随各自的 SwiftPM 资源 bundle（`Quire_Quire.bundle` / `Quire_QuireRender.bundle`）；主 bundle 只放空的 `*.lproj/InfoPlist.strings`，让 AppKit 的系统面板 / 标准菜单项跟随同一语言。
+- `LocalizationTests` 扫源码：每个 `L()` / `RL()` 键都在两套 .strings 里、两套键集合相等、无未用键、占位符数量一致——加字符串忘了翻译会直接红。
+- SwiftUI 里不用 `Text("字面量")` 的隐式查表（它查主 bundle），统一 `Text(L("…"))`。
+- 界面语言：默认跟随系统；设置里可覆盖（写 App 域的 `AppleLanguages`，重启生效）。
+
 ## 12. 错误与降级策略
 
 - 解析永不失败（cmark 容错）；渲染单块失败 → 该块显示为纯文本 + 日志，不影响其他块。
