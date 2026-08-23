@@ -24,3 +24,7 @@
 "链接" = "Link";
 "引用" = "Quote";
 "列表" = "List";
+"文风：填充词，可删" = "Style: filler — can be cut";
+"文风：冗余，留一个就够" = "Style: redundancy — keep one";
+"文风：陈词滥调，换个说法" = "Style: cliché — rephrase";
+"文风：自定义规则" = "Style: custom rule";

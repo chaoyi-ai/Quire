@@ -20,6 +20,15 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     }
     var posGeneration = 0
     var posWork: DispatchWorkItem?
+    /// 文风检查（nil = 关闭）
+    public var styleChecker: StyleChecker? {
+        didSet {
+            styleCheckGeneration += 1
+            if styleChecker == nil { clearAllStyleMarks() } else { scheduleStyleCheck(delay: 0) }
+        }
+    }
+    var styleCheckGeneration = 0
+    var styleCheckWork: DispatchWorkItem?
 
     /// 专注模式；变化时重算淡化 / 留白
     public var focusMode: EditorFocusMode = .off {
@@ -381,6 +390,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         onTextChange?()
         updateFormatToolbar()
         schedulePOSRecolor()
+        scheduleStyleCheck()
         if focusMode != .off {
             applyFocusDim()
             if focusMode == .typewriter { centerCaretLine() }

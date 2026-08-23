@@ -407,3 +407,27 @@ final class POSTests: XCTestCase {
         XCTAssertEqual(color("jumps"), e.style.foreground)
     }
 }
+
+@MainActor
+final class StyleCheckViewTests: XCTestCase {
+    func testMarksAppearAndClear() {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let e = EditorTextView(style: RenderStyle(theme: theme))
+        let sv = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 400)); sv.documentView = e
+        e.setSource("Basically this is ~~gone~~ fine.\n\n众所周知，好。\n")
+        e.styleChecker = StyleChecker()
+        let exp = expectation(description: "sc"); DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { exp.fulfill() }; wait(for: [exp], timeout: 3)
+        let ns = e.textStorage!.string as NSString
+        func strike(_ w: String) -> (Int?, NSColor?) {
+            let a = e.textStorage!.attributes(at: ns.range(of: w).location, effectiveRange: nil)
+            return (a[.strikethroughStyle] as? Int, a[.strikethroughColor] as? NSColor)
+        }
+        XCTAssertEqual(strike("Basically").1, EditorTextView.styleCheckColor)
+        XCTAssertEqual(strike("众所周知").1, EditorTextView.styleCheckColor)
+        XCTAssertNotEqual(strike("gone").1, EditorTextView.styleCheckColor, "Markdown 删除线不受影响")
+        XCTAssertEqual(e.textStorage!.attribute(.toolTip, at: ns.range(of: "Basically").location, effectiveRange: nil) as? String, RL("文风：填充词，可删"))
+        e.styleChecker = nil
+        XCTAssertNil(strike("Basically").1)
+        XCTAssertEqual(e.source, "Basically this is ~~gone~~ fine.\n\n众所周知，好。\n", "不改文本")
+    }
+}

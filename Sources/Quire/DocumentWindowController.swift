@@ -162,6 +162,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         if let doc = markdownDocument { editorViewController.replaceSource(doc.source) }
         editorViewController.textView.focusMode = focusMode
         editorViewController.textView.posMode = posMode
+        if styleCheckOn { editorViewController.textView.styleChecker = StyleRulesStore.checker() }
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -183,6 +184,17 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             if editorItem != nil || posMode != .off { editorViewController.textView.posMode = posMode }
         }
     }
+    private(set) var styleCheckOn: Bool = UserDefaults.standard.bool(forKey: "editor.styleCheck") {
+        didSet {
+            UserDefaults.standard.set(styleCheckOn, forKey: "editor.styleCheck")
+            if editorItem != nil || styleCheckOn { editorViewController.textView.styleChecker = styleCheckOn ? StyleRulesStore.checker() : nil }
+        }
+    }
+    @objc func toggleStyleCheck(_ sender: Any?) {
+        if mode == .reader { mode = .editor }
+        styleCheckOn.toggle()
+    }
+
     @objc func setPOSMode(_ sender: NSMenuItem) {
         if mode == .reader { mode = .editor }
         posMode = POSMode(rawValue: sender.tag) ?? .off
@@ -248,6 +260,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(setFocusMode(_:)) { item.state = item.tag == focusMode.rawValue ? .on : .off }
         if item.action == #selector(setPOSMode(_:)) { item.state = item.tag == posMode.rawValue ? .on : .off }
+        if item.action == #selector(toggleStyleCheck(_:)) { item.state = styleCheckOn ? .on : .off }
         if item.action == #selector(toggleImmersive(_:)) { item.title = isImmersive ? L("退出沉浸写作") : L("沉浸写作") }
         return true
     }

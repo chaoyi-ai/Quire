@@ -139,6 +139,9 @@ enum MainMenu {
         pos.addItem(.separator())
         pos.addItem(withTitle: L("（英 / 德 / 法 / 意 / 西 / 葡 / 俄 / 荷；中文暂不支持词性）"), action: nil, keyEquivalent: "")
         view.addItem(withTitle: L("词性高亮"), action: nil, keyEquivalent: "").submenu = pos
+        let sc = view.addItem(withTitle: L("文风检查"), action: #selector(DocumentWindowController.toggleStyleCheck(_:)), keyEquivalent: "D")
+        sc.keyEquivalentModifierMask = [.command, .shift, .option]
+        view.addItem(withTitle: L("编辑文风规则…"), action: #selector(Handler.openStyleRules(_:)), keyEquivalent: "").target = Handler.shared
         let immersive = view.addItem(withTitle: L("沉浸写作"), action: #selector(DocumentWindowController.toggleImmersive(_:)), keyEquivalent: "D")
         immersive.keyEquivalentModifierMask = [.command, .shift]
         view.addItem(.separator())
@@ -243,6 +246,14 @@ enum MainMenu {
             alert.runModal()
         }
         @objc func checkForUpdates(_ sender: Any?) { UpdateChecker.check(userInitiated: true) }
+    @objc func openStyleRules(_ sender: Any?) {
+        let url = StyleRulesStore.url
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? StyleRulesStore.template.write(to: url, atomically: true, encoding: .utf8)
+        }
+        NSWorkspace.shared.open(url)
+    }
     @objc func openFolder(_ sender: Any?) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
