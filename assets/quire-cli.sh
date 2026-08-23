@@ -36,7 +36,7 @@ case "$1" in
   export)
     [ $# -ge 3 ] || { echo "quire export <file> <out.pdf|out.html>" >&2; exit 2; }
     launch_url "quire://export?path=$(urlenc "$(abspath "$2")")&to=$(urlenc "$(abspath "$3")")" ;;
-  -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
 
 if [ $# -eq 0 ]; then exec open -a "$APP"; fi
