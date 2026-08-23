@@ -57,8 +57,9 @@ final class ContentSearchTests: XCTestCase {
         ContentSearch().run(query: "lazy dog", files: files) { _ in if first == nil { first = Date().timeIntervalSince(t) }; count += 1 }
         let total = Date().timeIntervalSince(t)
         XCTAssertEqual(count, 1000)
-        XCTAssertLessThan(first ?? 99, 0.3)
-        XCTAssertLessThan(total, 3.0)
+        let factor: Double = ProcessInfo.processInfo.environment["CI"] != nil ? 3 : 1   // 共享 runner 慢 2–3 倍
+        XCTAssertLessThan(first ?? 99, 0.3 * factor)
+        XCTAssertLessThan(total, 3.0 * factor)
         print("search 2×50MB total \(Int(total * 1000)) ms, first \(Int((first ?? 0) * 1000)) ms")
     }
 }
