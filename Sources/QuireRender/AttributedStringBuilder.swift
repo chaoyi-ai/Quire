@@ -516,6 +516,12 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         a[.attachment] = att
         a[.font] = style.bodyFont
         out.append(NSAttributedString(string: "\u{FFFC}", attributes: a))
+        // 可查找 / 可复制：表格文本以"不可见镜像"跟在附件后面（0.01pt、透明），⌘F 能命中并滚到表格，复制得到 TSV
+        var mirror = para.base
+        mirror[.font] = NSFont.systemFont(ofSize: 0.01)
+        mirror[.foregroundColor] = NSColor.clear
+        let tsv = ([header] + rows).map { $0.map(\.string).joined(separator: "\t") }.joined(separator: "\u{2028}")
+        out.append(NSAttributedString(string: tsv, attributes: mirror))
         appendRun("\n", into: out, ctx: InlineContext(para: para))
     }
 

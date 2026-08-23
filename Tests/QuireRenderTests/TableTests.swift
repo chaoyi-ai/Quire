@@ -79,3 +79,18 @@ final class AttachmentAccessibilityTests: XCTestCase {
         if descs.count > 2 { XCTAssertTrue(descs[2].contains("graph TD")) }
     }
 }
+
+final class TableFindMirrorTests: XCTestCase {
+    func testTableTextIsSearchableAndInvisible() {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let r = DocumentRenderer(theme: theme).render(MarkdownParser().parse("| 指标 | 值 |\n|--|--|\n| 解析 | 42 ms |\n\n后文\n"))
+        let s = r.attributed.string
+        let range = (s as NSString).range(of: "解析\t42 ms")
+        XCTAssertNotEqual(range.location, NSNotFound, "表格文本在 textStorage 里（可被 ⌘F 找到）")
+        let attrs = r.attributed.attributes(at: range.location, effectiveRange: nil)
+        XCTAssertEqual((attrs[.font] as? NSFont)?.pointSize ?? 1, 0.01, accuracy: 0.001)
+        XCTAssertEqual(attrs[.foregroundColor] as? NSColor, .clear)
+        // 镜像与附件在同一段落（同一行片段），后文仍独立
+        XCTAssertTrue(s.contains("\u{FFFC}指标\t值\u{2028}解析\t42 ms\n"))
+    }
+}
