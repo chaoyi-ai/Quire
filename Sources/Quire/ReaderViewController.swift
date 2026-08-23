@@ -180,6 +180,7 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
     private var isNavigating = false
 
     private func viewportDidScroll() {
+        textView.revalidateProgressiveLayout()
         guard !isNavigating else { return }
         if let idx = textView.topVisibleBlockIndex(), idx != lastTopBlock { lastTopBlock = idx; onTopBlockChanged?(idx) }
         if let s = textView.sectionBlockIndex(), s != lastSectionBlock { lastSectionBlock = s; onSectionChanged?(s) }

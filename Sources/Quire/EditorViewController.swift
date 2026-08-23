@@ -95,6 +95,7 @@ final class EditorViewController: NSViewController {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.ruler.needsDisplay = true
+                self.textView.revalidateProgressiveLayout()
                 self.textView.updateFormatToolbar()
                 self.textView.schedulePOSRecolor(delay: 0.12)
                 self.textView.scheduleStyleCheck(delay: 0.15)

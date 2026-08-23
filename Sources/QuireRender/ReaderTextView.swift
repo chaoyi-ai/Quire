@@ -135,6 +135,7 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
         if abs(contentWidth - lastFittedWidth) > 1 {
             lastFittedWidth = contentWidth
             fitAttachmentsToWidth()
+            startProgressiveLayout(delay: 0.5)   // 换行位置全变，排好的高度作废
         }
     }
 
@@ -707,54 +708,21 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
         return rendered.blockIndex(at: offset)
     }
 
-    // MARK: - 渐进式全文排版
+    // MARK: - 渐进式全文排版（见 ProgressiveLayout.swift）
 
-    /// TextKit 2 只排视口附近，其余高度是估算的；快速滚动时估算不断被真实高度替换，文档总高一直变，滚动条就跳来跳去。
-    /// 首帧之后在主线程空闲时按块分批把全文排完（每批几十毫秒，排完滚动条和侧栏取样都稳定）。大文件模式不做。
-    private var progressiveLayoutGeneration = 0
+    private lazy var progressiveLayout = ProgressiveLayout(textView: self)
     public var progressiveLayoutEnabled = true
     /// 超过这个字符数不做全文排版：排好的片段每 1 MB 文本约占 330 MB 内存（1 MB 文档实测 RSS 90 → 420 MB），
     /// 200 KB 以内（绝大多数笔记 / 文章）换滚动条稳定值得，再大就只排视口（滚动条会随估算修正而跳）
     public var progressiveLayoutMaxLength = 200_000
-    public private(set) var isFullyLaidOut = false
+    public var isFullyLaidOut: Bool { progressiveLayout.isComplete }
+    /// 滚动时调用：排好的结果被 TextKit 整体失效时重新排
+    public func revalidateProgressiveLayout() { progressiveLayout.revalidate() }
 
-    private func startProgressiveLayout() {
-        progressiveLayoutGeneration += 1
-        isFullyLaidOut = false
+    private func startProgressiveLayout(delay: TimeInterval = 0.3) {
         guard progressiveLayoutEnabled, !style.options.largeFile, let rendered, !rendered.blocks.isEmpty, fixedPrintingWidth == nil,
-              rendered.attributed.length <= progressiveLayoutMaxLength else { return }
-        let gen = progressiveLayoutGeneration
-        // 每批的字符数自适应：目标每批 ~12 ms（一帧的一半），不卡输入；排完一批就把 frame 高度推到真实用量
-        // （NSTextView 只在视口排版时自己长高，视口外的 ensureLayout 它不管）
-        var chunk = 16_000
-        var next = 0
-        func step() {
-            guard gen == self.progressiveLayoutGeneration, let tlm = self.textLayoutManager, let cs = self.textContentStorage else { return }
-            let totalLen = cs.offset(from: cs.documentRange.location, to: cs.documentRange.endLocation)
-            guard next < totalLen, let start = cs.location(cs.documentRange.location, offsetBy: next) else { self.finishProgressiveLayout(); return }
-            let endOffset = min(totalLen, next + chunk)
-            let end = cs.location(cs.documentRange.location, offsetBy: endOffset) ?? cs.documentRange.endLocation
-            let t0 = DispatchTime.now().uptimeNanoseconds
-            if let r = NSTextRange(location: start, end: end) { tlm.ensureLayout(for: r) }
-            let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
-            if ms > 20 { chunk = max(2_000, chunk / 2) } else if ms < 6 { chunk = min(128_000, chunk * 2) }
-            next = endOffset
-            self.syncFrameHeightToUsage()
-            if next < totalLen { DispatchQueue.main.async(execute: step) } else { self.finishProgressiveLayout() }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: step)
-    }
-
-    private func finishProgressiveLayout() {
-        isFullyLaidOut = true
-        syncFrameHeightToUsage()
-    }
-
-    /// 把 frame 高度对齐到排版用量（NSTextView 自己的算法：用量高 + 上下 inset）
-    private func syncFrameHeightToUsage() {
-        guard let tlm = textLayoutManager, fixedPrintingWidth == nil else { return }
-        let h = (tlm.usageBoundsForTextContainer.height + textContainerInset.height * 2).rounded(.up)
-        if abs(h - frame.height) > 1 { setFrameSize(NSSize(width: frame.width, height: h)) }
+              rendered.attributed.length <= progressiveLayoutMaxLength else { progressiveLayout.cancel(); return }
+        progressiveLayout.start(delay: delay)
     }
 
     /// 可见区顶部所在的顶级块下标（取样点在留白之下，保证刚滚到的目标块被算作"当前块"）。用于滚动同步 / 位置锚点。
@@ -785,6 +753,48 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
     /// 恢复位置：块 index 顶部到视口顶部的偏移为 offset（由 scrollOffset(withinBlock:) 得到）
     public func scroll(toBlock index: Int, offset: CGFloat) {
         scroll(toBlock: index, animated: false, offset: offset)
+    }
+
+    /// 滚到块内 `fraction`（0 = 块顶，1 = 块底）的位置（编辑器同步用：按行在块内的比例插值）
+    public func scroll(toBlock index: Int, fraction: CGFloat) {
+        guard fraction > 0, let h = blockHeight(index) else { scroll(toBlock: index, animated: false); return }
+        scroll(toBlock: index, animated: false, offset: (h * fraction).rounded())
+    }
+
+    /// 块的渲染高度（要先排好版；用 ensuresLayout 的片段枚举）
+    public func blockHeight(_ index: Int) -> CGFloat? {
+        guard let rendered, index < rendered.ranges.count, let tlm = textLayoutManager, let cs = textContentStorage else { return nil }
+        let r = rendered.ranges[index]
+        guard let start = cs.location(cs.documentRange.location, offsetBy: r.location) else { return nil }
+        let endOffset = r.location + r.length
+        var minY: CGFloat?, maxY: CGFloat = 0
+        tlm.enumerateTextLayoutFragments(from: start, options: [.ensuresLayout]) { frag in
+            let fragStart = cs.offset(from: cs.documentRange.location, to: frag.rangeInElement.location)
+            if fragStart >= endOffset { return false }
+            if minY == nil { minY = frag.layoutFragmentFrame.minY }
+            maxY = frag.layoutFragmentFrame.maxY
+            return true
+        }
+        guard let minY else { return nil }
+        return max(0, maxY - minY)
+    }
+
+    public var isScrolledToTop: Bool {
+        guard let sv = enclosingScrollView else { return false }
+        return sv.contentView.bounds.minY <= -topInset + 1
+    }
+    /// 已经滚不动了（以 NSClipView 自己的夹紧规则为准，别自己算 frame / inset）
+    public var isScrolledToBottom: Bool {
+        guard let sv = enclosingScrollView else { return false }
+        let clip = sv.contentView
+        let maxOrigin = clip.constrainBoundsRect(NSRect(origin: CGPoint(x: clip.bounds.minX, y: 1e9), size: clip.bounds.size)).origin
+        return clip.bounds.minY >= maxOrigin.y - 1
+    }
+    public func scrollToBottom() {
+        guard let sv = enclosingScrollView else { return }
+        let clip = sv.contentView
+        let target = clip.constrainBoundsRect(NSRect(origin: CGPoint(x: clip.bounds.minX, y: 1e9), size: clip.bounds.size)).origin
+        clip.setBoundsOrigin(target); sv.reflectScrolledClipView(clip)
     }
 }
 

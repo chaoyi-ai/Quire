@@ -240,6 +240,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         attrsCache[.footnote] = mk(style.accent)
         attrsCache[.tableDelim] = mk(e.markdownMarker.nsColor)
         rehighlightAll()
+        startProgressiveLayout()   // 字体 / 行距变了，高度要重排
         (enclosingScrollView?.verticalRulerView as? LineNumberRulerView)?.style = style
         needsDisplay = true
     }
@@ -257,6 +258,17 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         isHighlighting = false
         rebuildLineStarts()
         rehighlightAll()
+        startProgressiveLayout()
+    }
+
+    /// 与阅读视图同一套：≤ 200 KB 的文档在空闲时排完全文，滚动条不跳（见 ProgressiveLayout）
+    private lazy var progressiveLayout = ProgressiveLayout(textView: self)
+    public var progressiveLayoutMaxLength = 200_000
+    public var isFullyLaidOut: Bool { progressiveLayout.isComplete }
+    public func revalidateProgressiveLayout() { progressiveLayout.revalidate() }
+    private func startProgressiveLayout(delay: TimeInterval = 0.3) {
+        guard let ts = textStorage, ts.length > 0, ts.length <= progressiveLayoutMaxLength else { progressiveLayout.cancel(); return }
+        progressiveLayout.start(delay: delay)
     }
 
     public var source: String { textStorage?.string ?? "" }
@@ -552,10 +564,16 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         if let onEscape { onEscape() } else { super.cancelOperation(sender) }
     }
 
+    private var lastLaidOutWidth: CGFloat = 0
     public override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         updateContentInset()
         updateTypewriterInset()
+        // 宽度变了（窗格展开 / 窗口拉伸）：换行位置全变，排好的高度作废，空闲时重排（拖拽中连续触发，start 会取消上一轮）
+        if abs(newSize.width - lastLaidOutWidth) > 1 {
+            lastLaidOutWidth = newSize.width
+            if (textStorage?.length ?? 0) > 0 { startProgressiveLayout(delay: 0.5) }
+        }
     }
 
     /// 沉浸 / 行宽限制：把超出 maxContentWidth 的宽度分到左右 inset
@@ -605,6 +623,24 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     public var lineCount: Int { lineStarts.count }
 
     /// 视口顶部所在行（1-based）
+    public var isScrolledToTop: Bool {
+        guard let sv = enclosingScrollView else { return false }
+        return sv.contentView.bounds.minY + sv.contentInsets.top <= 1
+    }
+    /// 已经滚不动了（以 NSClipView 自己的夹紧规则为准，别自己算 frame / inset）
+    public var isScrolledToBottom: Bool {
+        guard let sv = enclosingScrollView else { return false }
+        let clip = sv.contentView
+        let maxOrigin = clip.constrainBoundsRect(NSRect(origin: CGPoint(x: clip.bounds.minX, y: 1e9), size: clip.bounds.size)).origin
+        return clip.bounds.minY >= maxOrigin.y - 1
+    }
+    public func scrollToBottom() {
+        guard let sv = enclosingScrollView else { return }
+        let clip = sv.contentView
+        let target = clip.constrainBoundsRect(NSRect(origin: CGPoint(x: clip.bounds.minX, y: 1e9), size: clip.bounds.size)).origin
+        clip.setBoundsOrigin(target); sv.reflectScrolledClipView(clip)
+    }
+
     public func topVisibleLine() -> Int {
         guard let tlm = textLayoutManager, let cs = textContentStorage, let sv = enclosingScrollView else { return 1 }
         // 可见区顶部 = bounds.minY + 被工具栏盖住的 contentInsets.top

@@ -457,12 +457,23 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
 
     // MARK: - 滚动同步
 
+    /// 编辑器滚动 → 阅读视图跟随。按"顶部可见行所在的块 + 行在块内的比例"定位（渲染后的块比源码行高得多，
+    /// 只对齐块顶会让阅读视图在文末怎么都到不了底）；编辑器滚到顶 / 底时阅读视图也贴顶 / 底
     private func syncReaderToEditor(line: Int) {
         guard mode == .split, !isSyncingScroll else { return }
-        guard let rendered = readerViewController.textView.rendered, let idx = rendered.blockIndex(forLine: line) else { return }
+        let reader = readerViewController.textView!
+        guard let rendered = reader.rendered, let idx = rendered.blockIndex(forLine: line) else { return }
         isSyncingScroll = true
-        readerViewController.textView.scroll(toBlock: idx, animated: false)
-        DispatchQueue.main.async { self.isSyncingScroll = false }
+        defer { DispatchQueue.main.async { self.isSyncingScroll = false } }
+        let editor = editorViewController.textView!
+        if editor.isScrolledToBottom { reader.scrollToBottom(); return }
+        if editor.isScrolledToTop { reader.scroll(toBlock: 0, animated: false); return }
+        var fraction: CGFloat = 0
+        if let range = rendered.blocks[idx].block.sourceRange {
+            let lines = max(1, range.end.line - range.start.line + 1)
+            fraction = min(1, max(0, CGFloat(line - range.start.line) / CGFloat(lines)))
+        }
+        reader.scroll(toBlock: idx, fraction: fraction)
     }
 
     private func syncEditorToReader(blockIndex: Int) {
@@ -472,8 +483,9 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         // 只有阅读视图是第一响应者（用户在滚它）时才反向同步，避免编辑输入引起的抖动
         guard window?.firstResponder === readerViewController.textView else { return }
         isSyncingScroll = true
+        defer { DispatchQueue.main.async { self.isSyncingScroll = false } }
+        if readerViewController.textView.isScrolledToBottom { editorViewController.textView.scrollToBottom(); return }
         editorViewController.scroll(toLine: line)
-        DispatchQueue.main.async { self.isSyncingScroll = false }
     }
 
     // MARK: - 动作
@@ -613,12 +625,6 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         sidebarViewController.revealCurrent()
     }
 
-    @objc func showThemeMenu(_ sender: Any?) {
-        guard let button = sender as? NSView else { return }
-        let menu = MainMenu.buildThemeMenu()
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
-    }
-
     // MARK: - NSToolbarDelegate
 
     private enum Item {
@@ -663,10 +669,14 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             modeControl = control
             return item
         case Item.theme:
-            let item = NSToolbarItem(itemIdentifier: id)
+            // 下拉菜单式工具栏项：点一下弹主题列表（菜单内容每次打开时由 Handler.menuNeedsUpdate 重建）
+            let item = NSMenuToolbarItem(itemIdentifier: id)
             item.label = L("主题"); item.toolTip = L("选择主题")
             item.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: L("主题"))
-            item.target = self; item.action = #selector(showThemeMenu(_:))
+            item.showsIndicator = true
+            let menu = MainMenu.buildThemeMenu()
+            menu.delegate = MainMenu.Handler.shared
+            item.menu = menu
             return item
         case Item.appearance:
             let item = NSToolbarItem(itemIdentifier: id)
