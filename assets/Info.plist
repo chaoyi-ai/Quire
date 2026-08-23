@@ -6,6 +6,19 @@
 	<string>zh-Hans</string>
 	<key>CFBundleDisplayName</key>
 	<string>Quire</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.korako.quire.url</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>quire</string>
+			</array>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+		</dict>
+	</array>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>

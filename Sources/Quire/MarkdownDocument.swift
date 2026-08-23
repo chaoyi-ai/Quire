@@ -125,6 +125,15 @@ final class MarkdownDocument: NSDocument {
         source = text
     }
 
+    /// 程序化整体替换内容（URL scheme / Shortcuts）：同步编辑器与渲染，标脏
+    @MainActor
+    func replaceContents(_ text: String) {
+        source = text
+        session.sourceDidChange(text, reason: .externalChange)
+        (windowControllers.first as? DocumentWindowController)?.documentDidReload(text)
+        updateChangeCount(.changeDone)
+    }
+
     /// 外部修改后重新读取（保留编码）；自己刚保存的写入会被忽略（内容相同）。
     /// 有未保存改动时不静默覆盖：弹 sheet 让用户选择"重新载入（丢弃改动）/ 保留我的改动"；同一份磁盘内容只问一次。
     func reloadFromDisk() {

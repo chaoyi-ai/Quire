@@ -196,7 +196,7 @@
 
 ### 7.4 导出与集成
 - [x] PDF 排版参数（#81，0.5.5）：导出 PDF 的存盘面板带附加视图——纸张（跟随系统 / A4 / Letter）、四边距、页眉 / 页脚模板（`{page} {pages} {title} {file} {date}`，`|` 分左中右）、标题编号、标题不孤行；记在 `pdf.layout`（JSON），⌘P 打印也用同一套。页眉页脚走 AppKit 自带的 `pageHeader / pageFooter`（自己改 frame 画会触发 TextKit 重排、分页失效）；标题不孤行在 `computePageRects` 里把页尾标题带到下一页；打印 / PDF 永远用浅色主题
-- [ ] `quire://open?path=…&line=…` URL scheme（**来自外部 App 的打开先弹确认，路径限制在已打开的根目录或用户明确选择过的位置**）；Apple Shortcuts 动作（打开、新建、追加文本、导出 PDF）（#82）
+- [x] `quire://` URL scheme（#82，0.5.6）：`open?path&line` / `new?text&path` / `append?path&text` / `export?path&to&format`；路径必须绝对（可 `~`）；来自外部的请求，目标不在已打开的侧栏根目录 / 文档目录内时先弹确认（`/tmp` 与 `/private/tmp` 按父目录解析符号链接后比较）。`quire` 命令行加 `open / new / append / export` 子命令（走同一套 URL）。Apple Shortcuts：4 个 App Intents（打开 / 新建 / 追加 / 导出 PDF 返回文件）——纯 SwiftPM 没有 Xcode 的元数据步骤，`scripts/appintents_metadata.sh` 用 `swiftc -typecheck -emit-const-values-path` + `appintentsmetadataprocessor` 手动生成 `Metadata.appintents` 放进 bundle
 
 **测试**：词性 / 文风标注不改变 textStorage 字符串（字节级断言）；著作归属区间在插入 / 删除 / 外部重载后的对齐测试；wikilink / 内容块路径解析的越界用例；导出产物不含归属注释块。
 

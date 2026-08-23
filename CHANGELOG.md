@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.6 — 2026-08-23
+
+- 新增：`quire://` URL scheme（#82）——`open`（可跳行）、`new`、`append`、`export`（PDF / HTML）。来自其他 App 的请求，目标不在已打开目录里时会先弹确认。
+- 新增：`quire` 命令行子命令 `open / new / append / export`（`quire --help`）。
+- 新增：Apple Shortcuts 动作：Open in Quire、New Document in Quire、Append Text to Markdown File、Export Markdown as PDF。
+
 ## 0.5.5 — 2026-08-23
 
 - 新增：导出 PDF 的排版参数（#81）。存盘面板里可选纸张（A4 / Letter / 跟随系统）、四边距、页眉 / 页脚（占位符 `{page} {pages} {title} {file} {date}`，用 `|` 分左中右）、标题自动编号、标题不孤行；设置会记住，⌘P 打印也用同一套。

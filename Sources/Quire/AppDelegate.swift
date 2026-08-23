@@ -71,6 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func application(_ application: NSApplication, open urls: [URL]) {
         LaunchClock.mark("application(open:)")
         for url in urls {
+            if URLScheme.isSchemeURL(url) { URLScheme.handle(url); continue }
             QuireDocumentController.shared.openDocument(withContentsOf: url, display: true) { _, _, error in
                 if let error { NSApp.presentError(error) }
             }

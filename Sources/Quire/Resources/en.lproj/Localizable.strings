@@ -221,3 +221,17 @@
 "纸张" = "Paper";
 "标题自动编号" = "Number headings";
 "页眉" = "Header";
+"文件已存在：%@" = "File already exists: %@";
+"quire:// 请求无法处理" = "Cannot handle quire:// request";
+"外部应用请求打开：%@" = "An external app wants to open: %@";
+"来自外部的 quire:// 请求" = "External quire:// request";
+"取消" = "Cancel";
+"外部应用请求新建文件：%@" = "An external app wants to create: %@";
+"追加" = "Append";
+"缺少 text 参数" = "Missing text parameter";
+"外部应用请求导出：%@ → %@" = "An external app wants to export: %@ → %@";
+"不认识的 quire:// 动作：%@" = "Unknown quire:// action: %@";
+"外部应用请求在文件末尾追加 %d 个字符：%@" = "An external app wants to append %d characters to: %@";
+"导出失败：%@" = "Export failed: %@";
+"不支持的导出格式：%@" = "Unsupported export format: %@";
+"缺少 path 参数（必须是绝对路径）" = "Missing path parameter (must be absolute)";

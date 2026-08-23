@@ -46,8 +46,12 @@ Quire 的第一功能是**快和省**，其他功能都在这个前提下做：
 - **侧栏**：目录树 → Markdown 文件 → 文件内大纲，一棵树导航整个文件夹；懒加载、FSEvents 监听、其他文件大纲快速扫描（不做完整解析）
 - **阅读器**：外部修改自动刷新（保持滚动位置）、缩放、查找、打印
 - **编辑器**：源码编辑 + Markdown 高亮、行号、列表/围栏/引用续行、⌘B/I/K/E、分栏同步滚动、块级增量预览（击键 → 预览 1.4 ms）
-- **导出**：HTML（内联主题 CSS）、PDF（按块边界分页）
-- **可视化编辑**（M5）：行内实时预览
+- **导出**：HTML（内联主题 CSS）、PDF（按块边界分页、书签、纸张 / 边距 / 页眉页脚可调）、PNG；pandoc 可选
+- **写作环境**：混合实时预览（⌘4，块级就地编辑）、专注 / 打字机 / 沉浸模式、悬挂标记、格式工具条、表格辅助、图片 / 富文本粘贴、字数统计
+- **文本智能**：词性高亮、文风检查（本地，可自定义规则）
+- **组织**：`[[维基链接]]`、`#标签` / 收藏 / 最近分组、内容块 `![[file]]`、快速打开 ⌘P、全局搜索 ⌘⇧F
+- **自动化**：`quire://` URL scheme、`quire` 命令行、Apple Shortcuts 动作（见下）
+- **本地化**：简体中文 / English
 
 ## 快速开始
 
@@ -71,6 +75,30 @@ open Package.swift             # 用 Xcode 开发
 ```
 
 要求：macOS 14+，Xcode 16+ / Swift 6。
+
+## 自动化
+
+**URL scheme**（来自其他 App 的请求，目标不在已打开目录内时会先弹确认）：
+
+```
+quire://open?path=/abs/file.md&line=12
+quire://new?text=…&path=/abs/new.md          # path 可省 = 未命名文档
+quire://append?path=/abs/file.md&text=…      # 追加到文件末尾（已打开的文档直接改并保存）
+quire://export?path=/abs/file.md&to=/abs/out.pdf   # 或 .html
+```
+
+**命令行**（设置 → 安装命令行工具，装到 `/usr/local/bin/quire`）：
+
+```bash
+quire README.md                    # 打开文件
+quire .                            # 在侧栏打开当前目录
+quire open notes.md --line 42
+quire new "# 标题" --path ~/notes/new.md
+echo "- [ ] 待办" | quire append ~/notes/todo.md -
+quire export README.md README.pdf
+```
+
+**Shortcuts**：Quire 提供 4 个动作——Open in Quire、New Document in Quire、Append Text to Markdown File、Export Markdown as PDF（返回 PDF 文件，可接后续动作）。在 Shortcuts 的动作列表里搜 "Quire"。
 
 ## 文档
 
