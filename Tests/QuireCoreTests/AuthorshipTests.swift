@@ -71,6 +71,16 @@ final class AuthorshipTests: XCTestCase {
         XCTAssertEqual(b, "plain <!-- comment -->\n"); XCTAssertNil(a); XCTAssertFalse(m)
     }
 
+    func testRealignByDiff() {
+        var a = Authorship(spans: [.init(author: "me", start: 0, length: 5), .init(author: "ai", start: 6, length: 5)])   // "hello world"
+        a.realign(from: "hello world", to: "hello big world", author: "me")          // 中间插入（索引 5 的空格本来就无归属）
+        XCTAssertEqual(a.spans, [.init(author: "me", start: 0, length: 5), .init(author: "me", start: 6, length: 4), .init(author: "ai", start: 10, length: 5)])
+        a.realign(from: "hello big world", to: "hello big worl", author: nil)        // 末尾删一个
+        XCTAssertEqual(a.spans.last, .init(author: "ai", start: 10, length: 4))
+        a.realign(from: "hello big worl", to: "hello big worl", author: nil)         // 没变
+        XCTAssertEqual(a.spans.count, 3)
+    }
+
     func testCounts() {
         let a = Authorship(spans: [.init(author: "me", start: 0, length: 4), .init(author: "ai", start: 4, length: 6), .init(author: "me", start: 20, length: 1)])
         XCTAssertEqual(a.characterCounts, ["me": 5, "ai": 6])

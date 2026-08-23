@@ -54,7 +54,7 @@ enum PandocBridge {
             if let error { presentError(error); return }
         } output: { md in
             guard let doc = try? NSDocumentController.shared.openUntitledDocumentAndDisplay(true) as? MarkdownDocument else { return }
-            doc.setSourceFromEditor(md)
+            doc.setSourceFromEditor(md, tracked: false)
             doc.session.sourceDidChange(md, reason: .externalChange)
             (doc.windowControllers.first as? DocumentWindowController)?.documentDidReload(md)
             doc.updateChangeCount(.changeDone)

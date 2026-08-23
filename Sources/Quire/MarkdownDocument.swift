@@ -140,8 +140,16 @@ final class MarkdownDocument: NSDocument {
         return d
     }
 
-    /// 编辑器每次击键调用（撤销由 NSTextView 走文档 undoManager，自动标脏）
-    func setSourceFromEditor(_ text: String) {
+    /// 编辑器每次击键调用（撤销由 NSTextView 走文档 undoManager，自动标脏）。
+    /// `tracked`：改动已经通过 `recordEdit` 逐次记录（源码编辑器）；false = 混合模式 / pandoc 等整体替换，按差异对齐归属区间
+    func setSourceFromEditor(_ text: String, tracked: Bool = true) {
+        if !tracked, let a = authorship, !a.spans.isEmpty || Preferences.shared.authorship {
+            var a = a
+            a.realign(from: source, to: text, author: Preferences.shared.authorship ? Preferences.shared.authorshipAuthor : nil)
+            authorship = a
+        } else if !tracked, authorship == nil, Preferences.shared.authorship {
+            var a = Authorship(); a.realign(from: source, to: text, author: Preferences.shared.authorshipAuthor); authorship = a
+        }
         source = text
     }
 
@@ -166,6 +174,7 @@ final class MarkdownDocument: NSDocument {
     /// 程序化整体替换内容（URL scheme / Shortcuts）：同步编辑器与渲染，标脏
     @MainActor
     func replaceContents(_ text: String) {
+        if var a = authorship, !a.spans.isEmpty { a.realign(from: source, to: text, author: nil); authorship = a }   // 程序化改动：无归属
         source = text
         session.sourceDidChange(text, reason: .externalChange)
         (windowControllers.first as? DocumentWindowController)?.documentDidReload(text)

@@ -337,7 +337,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             guard lines.lowerBound >= 1, lines.upperBound <= all.count else { return }
             all.replaceSubrange((lines.lowerBound - 1)...(lines.upperBound - 1), with: newLines)
             let joined = all.joined(separator: "\n")
-            self.markdownDocument?.setSourceFromEditor(joined)
+            self.markdownDocument?.setSourceFromEditor(joined, tracked: false)
             self.markdownDocument?.updateChangeCount(.changeDone)
             self.session.updateSourceWithoutRendering(joined)
             hybrid.source = joined

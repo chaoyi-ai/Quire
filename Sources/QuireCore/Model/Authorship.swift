@@ -68,6 +68,18 @@ public struct Authorship: Codable, Equatable, Sendable {
         normalize()
     }
 
+    /// 文本通过没有逐次编辑事件的路径整体换掉了（混合模式、URL scheme、pandoc 导入）：
+    /// 按公共前后缀把差异当成一次替换来维护区间。单点编辑精确；多处同时改会把中间整段归给 `author`
+    public mutating func realign(from old: String, to new: String, author: String?) {
+        guard old != new else { return }
+        let a = Array(old.utf16), b = Array(new.utf16)
+        var prefix = 0
+        while prefix < a.count, prefix < b.count, a[prefix] == b[prefix] { prefix += 1 }
+        var suffix = 0
+        while suffix < a.count - prefix, suffix < b.count - prefix, a[a.count - 1 - suffix] == b[b.count - 1 - suffix] { suffix += 1 }
+        apply(replacing: prefix, length: a.count - prefix - suffix, withLength: b.count - prefix - suffix, author: author)
+    }
+
     /// 把一段标成某作者（nil = 清除归属）
     public mutating func assign(start: Int, length: Int, author: String?) {
         apply(replacing: start, length: length, withLength: length, author: author)
