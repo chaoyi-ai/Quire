@@ -92,7 +92,14 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         case .heading(let level, let inlines, let id):
             appendHeading(level: level, inlines: inlines, id: id, into: out, ctx: ctx)
         case .paragraph(let inlines):
-            appendParagraph(inlines, into: out, ctx: ctx)
+            // `![](x){width=50%}` 独占一段：解析器因为后面跟了 {…} 文本没把它提升成图片块，这里按块级图片（按指定宽度）渲染，
+            // 否则会当成行内图片缩成 1.5 em 高的小图
+            if inlines.count == 2, case .image(let src, let title, let alt) = inlines[0], case .text(let t) = inlines[1],
+               let (w, rest) = Self.parseWidthAttribute(t.trimmingCharacters(in: .whitespaces)), rest.trimmingCharacters(in: .whitespaces).isEmpty {
+                appendImageBlock(source: src, title: title, alt: alt, into: out, ctx: ctx, requestedWidth: w)
+            } else {
+                appendParagraph(inlines, into: out, ctx: ctx)
+            }
         case .codeBlock(let lang, let code):
             appendCode(code, language: lang, role: .codeBlock, into: out, ctx: ctx)
         case .math(let source):
@@ -483,7 +490,8 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         att.isInline = inline
         att.requestedWidth = requestedWidth
         let h: CGFloat = inline ? style.baseSize * 1.2 : style.baseSize * 4
-        att.bounds = CGRect(x: 0, y: inline ? -style.baseSize * 0.2 : 0, width: inline ? h : min(style.maxContentWidth * 0.6, 240), height: h)
+        let placeholderW = style.maxContentWidth > 0 ? min(style.maxContentWidth * 0.6, 240) : 240   // 主题 maxContentWidth = 0 表示不限
+        att.bounds = CGRect(x: 0, y: inline ? -style.baseSize * 0.2 : 0, width: inline ? h : placeholderW, height: h)
         att.image = ImageAttachment.placeholder(size: att.bounds.size, alt: alt, style: style)
         att.image?.accessibilityDescription = alt.isEmpty ? RL("图片") : alt
         var a = ctx.para.base

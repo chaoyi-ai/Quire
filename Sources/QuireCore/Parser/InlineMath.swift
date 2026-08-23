@@ -10,8 +10,9 @@ enum InlineMath {
         var inFence: Substring? = nil     // 当前围栏的标记（``` 或 ~~~ 及其长度）
         var inMath = false
         for line in s.split(separator: "\n", omittingEmptySubsequences: false) {
-            let t = line.drop(while: { $0 == " " })
-            if line.count - t.count > 3 { out.append(line); continue }
+            let t = line.drop(while: { $0 == " " || $0 == "\t" })
+            let indent = line[line.startIndex..<t.startIndex]
+            if indent.count > 3 { out.append(line); continue }
             if let f = inFence {
                 if t.hasPrefix(f) { inFence = nil }
                 out.append(line); continue
@@ -22,7 +23,8 @@ enum InlineMath {
                 out.append(line); continue
             }
             if t.trimmingCharacters(in: .whitespaces) == "$$" {
-                out.append(inMath ? "```" : "```math"); inMath.toggle(); continue
+                // 保留缩进：列表项里的 $$ 块得留在列表项里
+                out.append(indent + (inMath ? "```" : "```math")); inMath.toggle(); continue
             }
             out.append(line)
         }

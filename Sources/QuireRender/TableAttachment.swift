@@ -45,6 +45,22 @@ public final class TableAttachment: NSTextAttachment {
         return CGRect(x: 0, y: 0, width: min(available, l.width), height: l.height)
     }
 
+    /// 单元格里的图片加载完后尺寸变了：丢掉布局缓存，下次 attachmentBounds 重新算行高列宽
+    public func invalidateLayout() {
+        lock.lock(); layoutCache.removeAll(); lock.unlock()
+    }
+
+    /// 单元格里的图片附件（表格在片段里自绘，`loadImages` 枚举不到它们，要单独找）
+    public var cellImageAttachments: [ImageAttachment] {
+        var out: [ImageAttachment] = []
+        for cell in header + rows.flatMap({ $0 }) {
+            cell.enumerateAttribute(.attachment, in: NSRange(location: 0, length: cell.length), options: [.longestEffectiveRangeNotRequired]) { v, _, _ in
+                if let a = v as? ImageAttachment { out.append(a) }
+            }
+        }
+        return out
+    }
+
     public func layout(available: CGFloat) -> TableLayout {
         let key = Int(available)
         lock.lock(); defer { lock.unlock() }

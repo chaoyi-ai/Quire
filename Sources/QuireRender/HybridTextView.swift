@@ -99,6 +99,8 @@ public final class HybridTextView: ReaderTextView, NSTextStorageDelegate {
         shiftRanges(after: activeBlock!, by: preview.length - previewLength)
         previewLength = preview.length
         setSelectedRange(sel)
+        // 新预览里的图片 / Mermaid 是全新的占位附件：要加载，否则一打字预览就变成灰框
+        loadAttachments(in: NSRange(location: old.location, length: preview.length))
     }
 
     /// 退出源码态：**立刻**把块换回 `rendered` 里的渲染串（源码没改时这就是最终形态；改了的话宿主随后按 diff 重渲染）。

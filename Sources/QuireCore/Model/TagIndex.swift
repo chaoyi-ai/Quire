@@ -54,7 +54,8 @@ public enum TagScanner {
     private static func isValid(_ t: String) -> Bool {
         guard let f = t.unicodeScalars.first else { return false }
         if t.allSatisfy({ $0.isNumber }) { return false }
-        if t.count <= 6, t.allSatisfy({ $0.isHexDigit }) { return false }
+        // 颜色值：3 / 6 / 8 位十六进制且至少含一个数字（#fff 这种纯字母的也算，但 #cafe / #bad / #beef 是词不是色）
+        if [3, 6, 8].contains(t.count), t.allSatisfy({ $0.isHexDigit }), t.contains(where: { $0.isNumber }) || t.count == 3 && t.allSatisfy({ "fF".contains($0) || $0.isNumber }) { return false }
         return f.properties.isAlphabetic || f == "_" || (0x4E00...0x9FFF).contains(f.value)
     }
 }

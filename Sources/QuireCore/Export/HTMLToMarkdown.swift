@@ -4,12 +4,13 @@ import Foundation
 /// 不经 WebKit；覆盖常见标签：标题、段落、换行、粗斜、行内代码、代码块、链接、图片、列表（嵌套）、引用、表格、分割线、删除线。
 /// 不认识的标签只保留其文本。
 public enum HTMLToMarkdown {
-    public static func convert(_ html: String) -> String {
+    public static func convert(_ original: String) -> String {
         // libxml2 的 HTML 解析器不认 HTML5 的 <mark>，会把它整个丢掉：先改成带标记的 <span>
-        let html = html.replacingOccurrences(of: "<mark\\b", with: "<span data-quire=\"mark\"", options: [.regularExpression, .caseInsensitive])
+        let html = original.replacingOccurrences(of: "<mark\\b", with: "<span data-quire=\"mark\"", options: [.regularExpression, .caseInsensitive])
             .replacingOccurrences(of: "</mark>", with: "</span>", options: [.caseInsensitive])
+        // tidy 失败时退回**原文**（不是改过 <mark> 的那份）
         guard let data = html.data(using: .utf8),
-              let doc = try? XMLDocument(data: data, options: [.documentTidyHTML]) else { return html }
+              let doc = try? XMLDocument(data: data, options: [.documentTidyHTML]) else { return original }
         var w = Writer()
         let body = doc.rootElement()?.elements(forName: "body").first ?? doc.rootElement()
         if let body { w.children(of: body) }
@@ -108,7 +109,6 @@ public enum HTMLToMarkdown {
                 quoteDepth -= 1; blockEnd()
             case "table": table(el)
             case "thead", "tbody", "tfoot", "tr", "td", "th": children(of: el)
-            case "mark": out += "=="; children(of: el); out += "=="
             case "span" where el.attribute(forName: "data-quire")?.stringValue == "mark": out += "=="; children(of: el); out += "=="
             case "sub": out += "~"; children(of: el); out += "~"
             case "sup": out += "^"; children(of: el); out += "^"

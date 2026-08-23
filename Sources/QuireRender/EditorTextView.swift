@@ -303,36 +303,23 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         lineStates = states
     }
 
-    /// 用一行内容推进围栏 / front matter 状态（只看行首几个字符 + 必要时整行）
+    /// 用一行内容推进围栏 / front matter 状态。判定原语来自 MarkdownLexer（fence / onlyFence / indent）与 FrontMatter（isOpener / isCloser），
+    /// 这里只剩"驱动"逻辑——以前这里自己写了一套，和词法器在制表符缩进 / `----` 上早就不一致
     private static func advance(_ st: inout LineState, line: UnsafeBufferPointer<unichar>, lineIndex: Int) {
         let n = line.count
-        var i = 0, spaces = 0
-        while i < n, spaces < 3, line[i] == 0x20 { i += 1; spaces += 1 }
-        guard i < n else { return }
-        let c = line[i]
-        func isDashRule() -> Bool {
-            var dashes = 0
-            for k in i..<n { let x = line[k]; if x == 0x2D { dashes += 1 } else if x != 0x20, x != 0x0D { return false } }
-            return dashes >= 3
-        }
-        if lineIndex == 0, c == 0x2D, isDashRule() { st.inFrontMatter = true; return }
+        let indent = MarkdownLexer.indent(line, 0, n)
+        if lineIndex == 0, FrontMatter.isOpener(line) { st.inFrontMatter = true; return }
         if st.inFrontMatter {
-            if (c == 0x2D && isDashRule()) || (c == 0x2E && i + 2 < n && line[i + 1] == 0x2E && line[i + 2] == 0x2E) { st.inFrontMatter = false }
+            if FrontMatter.isCloser(line) || lineIndex > FrontMatter.maxLines { st.inFrontMatter = false }
             return
         }
-        guard c == 0x60 || c == 0x7E else { return }
-        var k = i; while k < n, line[k] == c { k += 1 }
-        let len = k - i
-        guard len >= 3 else { return }
+        guard indent < 4, let (ch, len) = MarkdownLexer.fence(line, indent, n) else { return }
         if st.fenceChar != 0 {
             // 闭合行：同字符、不短于开栏、其后只有空白
-            guard UInt8(c) == st.fenceChar, len >= Int(st.fenceLen) else { return }
-            for m in k..<n where line[m] != 0x20 && line[m] != 0x09 && line[m] != 0x0D { return }
+            guard ch == st.fenceChar, len >= Int(st.fenceLen), MarkdownLexer.onlyFence(line, indent, n) else { return }
             st.fenceChar = 0; st.fenceLen = 0
         } else {
-            // 反引号围栏 info 中不能含反引号
-            if c == 0x60 { for m in k..<n where line[m] == 0x60 { return } }
-            st.fenceChar = UInt8(c); st.fenceLen = UInt16(min(len, Int(UInt16.max)))
+            st.fenceChar = ch; st.fenceLen = UInt16(min(len, Int(UInt16.max)))
         }
     }
 

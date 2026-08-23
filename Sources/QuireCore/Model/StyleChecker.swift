@@ -17,36 +17,44 @@ public struct StyleChecker: Sendable {
 
     public var rules: [Rule]
     public var exceptions: [String]
-    public var enabled: Set<Category> = [.filler, .redundancy, .cliche, .custom]
+    /// 用户规则文件里解析不了的行（行号从 1 起 + 原因）：调用方要显示出来，不能让坏正则悄悄失效
+    public var problems: [(line: Int, message: String)] = []
 
     public init(rules: [Rule] = StyleChecker.builtInRules, exceptions: [String] = []) {
         self.rules = rules; self.exceptions = exceptions
     }
 
-    /// 解析用户规则文件内容并合并到内置规则
+    /// 解析用户规则文件内容并合并到内置规则；坏正则记进 `problems`
     public static func load(userRules text: String) -> StyleChecker {
         var rules = builtInRules
         var exceptions: [String] = []
-        for raw in text.split(separator: "\n") {
+        var problems: [(Int, String)] = []
+        for (i, raw) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
             let line = raw.trimmingCharacters(in: .whitespaces)
             guard !line.isEmpty, !line.hasPrefix("#") else { continue }
             if line.hasPrefix("-") { exceptions.append(String(line.dropFirst()).trimmingCharacters(in: .whitespaces).lowercased()); continue }
             if line.hasPrefix("/"), line.hasSuffix("/"), line.count > 2 {
-                rules.append(Rule(pattern: String(line.dropFirst().dropLast()), isRegex: true, category: .custom))
+                let pattern = String(line.dropFirst().dropLast())
+                do { _ = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive]); rules.append(Rule(pattern: pattern, isRegex: true, category: .custom)) }
+                catch { problems.append((i + 1, "\(pattern): \(error.localizedDescription)")) }
             } else {
                 rules.append(Rule(pattern: line, isRegex: false, category: .custom))
             }
         }
-        return StyleChecker(rules: rules, exceptions: exceptions)
+        var c = StyleChecker(rules: rules, exceptions: exceptions)
+        c.problems = problems
+        return c
     }
 
     public func matches(in text: String) -> [Match] {
         guard !text.isEmpty else { return [] }
         let ns = text as NSString
-        let lower = text.lowercased() as NSString
+        var lower = text.lowercased() as NSString
+        // 个别字母小写后 UTF-16 长度会变（İ → i̇），范围就对不上 ns 了：那就按原文找（只损失大小写不敏感）
+        if lower.length != ns.length { lower = ns }
         let hasCJK = text.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }
         var out: [Match] = []
-        for rule in rules where enabled.contains(rule.category) {
+        for rule in rules {
             let ruleIsCJK = rule.pattern.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }
             // 内置中文词表只查含中文的段落，内置英文词表只查不含中文的段落（避免中文里误伤英文单词边界）；用户规则不分语言
             if rule.category != .custom, ruleIsCJK != hasCJK { continue }
@@ -72,11 +80,21 @@ public struct StyleChecker: Sendable {
                 out.append(Match(range: r, category: rule.category, phrase: ns.substring(with: r)))
             }
         }
-        // 例外：命中短语本身或其所在的更长例外短语
+        // 例外：命中短语本身，或**这一处**命中正好落在某个更长的例外短语里（不是"段落里别处出现过例外"就全删）
         if !exceptions.isEmpty {
+            let exceptionRanges: [NSRange] = exceptions.flatMap { ex -> [NSRange] in
+                var rs: [NSRange] = []; var start = 0
+                while start < lower.length {
+                    let r = lower.range(of: ex, options: [], range: NSRange(location: start, length: lower.length - start))
+                    guard r.location != NSNotFound else { break }
+                    rs.append(r); start = r.location + max(1, r.length)
+                }
+                return rs
+            }
             out.removeAll { m in
                 let p = m.phrase.lowercased()
-                return exceptions.contains { ex in ex == p || (lower.range(of: ex).location != NSNotFound && ex.contains(p)) }
+                if exceptions.contains(p) { return true }
+                return exceptionRanges.contains { NSIntersectionRange($0, m.range) == m.range }
             }
         }
         // 去重叠：按位置排序，长的优先

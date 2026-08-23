@@ -28,10 +28,24 @@ public final class FileWatcher: @unchecked Sendable {
 
     deinit { stop() }
 
+    private var retryCount = 0
+
     private func start() {
         lock.lock(); defer { lock.unlock() }
         fd = open(url.path, O_EVTONLY)
-        guard fd >= 0 else { return }
+        guard fd >= 0 else {
+            // 文件暂时不在（编辑器"先删再写"、或被移走后又放回来）：退避重试，别就此永远不监视了
+            guard retryCount < 10 else { return }
+            retryCount += 1
+            let delay = min(8, 0.5 * Double(1 << min(retryCount, 4)))
+            queue.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self else { return }
+                self.start()
+                if self.fd >= 0 { self.fire() }   // 回来了：内容大概率变了
+            }
+            return
+        }
+        retryCount = 0
         let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename, .delete, .extend, .attrib], queue: queue)
         src.setEventHandler { [weak self] in
             guard let self else { return }

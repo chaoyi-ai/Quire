@@ -45,6 +45,11 @@ final class ParserTests: XCTestCase {
         guard case .paragraph(let inl) = doc.blocks[0].kind else { return XCTFail() }
         let links = inl.compactMap { if case .link(let d, _, _) = $0 { d } else { nil } }
         XCTAssertEqual(links, ["https://github.com/chaoyi-ai/Quire", "http://www.example.com/x", "https://a.io/b(c)"])
+        // 链接文字本身是 URL：不能再自动链接（以前内层链接盖掉显式目标，点击去了旧地址）
+        let explicit = parser.parse("[https://old.example.com](https://new.example.com) 和 <https://a.io>")
+        guard case .paragraph(let ex) = explicit.blocks[0].kind else { return XCTFail() }
+        XCTAssertEqual(ex[0], .link(destination: "https://new.example.com", title: nil, children: [.text("https://old.example.com")]))
+        XCTAssertEqual(ex[2], .link(destination: "https://a.io", title: nil, children: [.text("https://a.io")]))
         // 不含链接的文本走快速路径
         let plain = parser.parse("普通文本 no links here")
         guard case .paragraph(let p) = plain.blocks[0].kind else { return XCTFail() }

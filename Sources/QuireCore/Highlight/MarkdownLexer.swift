@@ -68,15 +68,17 @@ public struct MarkdownLexer: Sendable {
         let indent = i - s
         let lineEmpty = i >= e
 
-        // front matter：仅文档第一行为 --- 时进入
-        if state.lineNumber == 0, isRule(u, i, e, char: 0x2D), indent == 0 {
+        // front matter：仅文档第一行恰好为 --- 时进入（与解析器 / 侧栏扫描同一条规则 FrontMatter.isOpener）
+        if state.lineNumber == 0, FrontMatter.isOpener(u[s..<e]) {
             state.inFrontMatter = true
             out.append(Token(range: base + s..<base + e, kind: .marker)); return
         }
         if state.inFrontMatter {
-            if isRule(u, i, e, char: 0x2D) || (c(i) == 0x2E && c(i + 1) == 0x2E && c(i + 2) == 0x2E) {
+            if FrontMatter.isCloser(u[s..<e]) {
                 state.inFrontMatter = false
                 out.append(Token(range: base + s..<base + e, kind: .marker))
+            } else if state.lineNumber > FrontMatter.maxLines {
+                state.inFrontMatter = false   // 没闭合：解析器不认，后面按正文
             } else {
                 out.append(Token(range: base + s..<base + e, kind: .frontMatter))
             }
@@ -279,19 +281,30 @@ public struct MarkdownLexer: Sendable {
 
     // MARK: - helpers
 
-    private func fence(_ u: [UInt16], _ i: Int, _ e: Int) -> (UInt8, Int)? {
+    private func fence(_ u: [UInt16], _ i: Int, _ e: Int) -> (UInt8, Int)? { Self.fence(u, i, e) }
+    private func onlyFence(_ u: [UInt16], _ i: Int, _ e: Int) -> Bool { Self.onlyFence(u, i, e) }
+
+    // 围栏判定的原语（编辑器的行状态表 EditorTextView.advance 也用这一套，别再各写一份）
+    /// `u[i..<e]` 从 i 起是不是围栏标记（≥3 个同样的 ` 或 ~；反引号围栏 info 里不能再有反引号）
+    public static func fence<C: RandomAccessCollection>(_ u: C, _ i: Int, _ e: Int) -> (UInt8, Int)? where C.Element == UInt16, C.Index == Int {
         guard i < e, u[i] == 0x60 || u[i] == 0x7E else { return nil }
         let ch = u[i]
         var k = i; while k < e, u[k] == ch { k += 1 }
         guard k - i >= 3 else { return nil }
-        // 反引号围栏的 info 里不能再有反引号
         if ch == 0x60 { for m in k..<e where u[m] == 0x60 { return nil } }
         return (UInt8(ch), k - i)
     }
-    private func onlyFence(_ u: [UInt16], _ i: Int, _ e: Int) -> Bool {
+    /// 围栏标记之后只有空白（闭合行的条件）
+    public static func onlyFence<C: RandomAccessCollection>(_ u: C, _ i: Int, _ e: Int) -> Bool where C.Element == UInt16, C.Index == Int {
         var k = i; while k < e, u[k] == u[i] { k += 1 }
-        while k < e { if u[k] != 0x20, u[k] != 0x09 { return false }; k += 1 }
+        while k < e { if u[k] != 0x20, u[k] != 0x09, u[k] != 0x0D { return false }; k += 1 }
         return true
+    }
+    /// 行首缩进（空格或制表符都算一列，与 tokenizeLine 一致）
+    public static func indent<C: RandomAccessCollection>(_ u: C, _ s: Int, _ e: Int) -> Int where C.Element == UInt16, C.Index == Int {
+        var i = s
+        while i < e, u[i] == 0x20 || u[i] == 0x09 { i += 1 }
+        return i - s
     }
     private func isRule(_ u: [UInt16], _ i: Int, _ e: Int, char: UInt16) -> Bool {
         var count = 0

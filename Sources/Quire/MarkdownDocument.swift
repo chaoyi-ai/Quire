@@ -112,6 +112,7 @@ final class MarkdownDocument: NSDocument {
             else if let s = String(data: data, encoding: .isoLatin1) { source = s; encoding = .isoLatin1 }
             else { throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownStringEncodingError, userInfo: [NSLocalizedDescriptionKey: L("无法识别文件编码")]) }
         }
+        normalizeLineEndings()
         splitAuthorship()
         isNewDocument = false
         let src = source
@@ -120,6 +121,14 @@ final class MarkdownDocument: NSDocument {
             session.sourceDidChange(src, reason: .opened)
             (windowControllers.first as? DocumentWindowController)?.documentDidReload(src)
         }
+    }
+
+    /// 内存里一律 LF（编辑器 / 混合模式 / 统计都按 "\n" 切行，Swift 把 "\r\n" 当一个字符）；写盘时按原样还原 CRLF
+    nonisolated(unsafe) private(set) var usesCRLF = false
+    nonisolated private func normalizeLineEndings() {
+        guard source.utf8.contains(0x0D) else { usesCRLF = false; return }
+        usesCRLF = source.contains("\r\n")
+        source = source.replacingOccurrences(of: "\r\n", with: "\n")
     }
 
     /// 把文件尾的著作归属注释块从 `source` 里拆出来
@@ -132,8 +141,11 @@ final class MarkdownDocument: NSDocument {
         authorshipMismatch = mismatch
     }
 
-    /// 写盘内容：正文 + 著作归属注释块（有区间才写）
-    nonisolated var sourceForDisk: String { authorship?.embed(into: source) ?? source }
+    /// 写盘内容：正文 + 著作归属注释块（有东西才写）；CRLF 文件还原 CRLF
+    nonisolated var sourceForDisk: String {
+        let s = authorship?.embed(into: source) ?? source
+        return usesCRLF ? s.replacingOccurrences(of: "\n", with: "\r\n") : s
+    }
 
     override func data(ofType typeName: String) throws -> Data {
         let source = sourceForDisk
@@ -194,7 +206,9 @@ final class MarkdownDocument: NSDocument {
         guard let url = fileURL, let data = try? Data(contentsOf: url) else { return }
         // 先按字节比：自己刚写的内容不算外部修改（也避免用记录的编码去解别的编码时"看起来不同"）
         if data == lastWrittenData { return }
-        guard let s = String(data: data, encoding: encoding), s != sourceForDisk, s != source else { return }
+        guard let raw = String(data: data, encoding: encoding), raw != sourceForDisk else { return }
+        let s = raw.contains("\r\n") ? raw.replacingOccurrences(of: "\r\n", with: "\n") : raw
+        guard s != source else { return }
         // 自己刚写盘的（正文相同、只是多了归属块 / 尾换行）也不算外部修改
         if authorship != nil || s.contains(Authorship.marker) {
             let diskBody = Authorship.split(s).body
@@ -212,6 +226,7 @@ final class MarkdownDocument: NSDocument {
 
     private func applyReloaded(_ s: String) {
         source = s
+        normalizeLineEndings()
         splitAuthorship()
         let s = source
         conflictPromptedContent = nil

@@ -38,11 +38,12 @@ public enum HeadingScanner {
                 while p < le, base[p] == 0x20, indent < 4 { p += 1; indent += 1 }
                 let c: UInt8 = p < le ? base[p] : 0
 
-                // front matter
-                if lineNo == 1, isRule(base, p, le, 0x2D), indent == 0 { inFrontMatter = true; prevLine = nil; continue }
+                // front matter（与解析器同一条规则：恰好 `---`，最多 FrontMatter.maxLines 行）
+                if lineNo == 1, FrontMatter.isOpener(UnsafeBufferPointer(start: base + ls, count: le - ls)) { inFrontMatter = true; prevLine = nil; continue }
                 if inFrontMatter {
-                    if isRule(base, p, le, 0x2D) || (c == 0x2E && p + 2 < le && base[p + 1] == 0x2E && base[p + 2] == 0x2E) { inFrontMatter = false }
-                    prevLine = nil; continue
+                    if FrontMatter.isCloser(UnsafeBufferPointer(start: base + ls, count: le - ls)) { inFrontMatter = false; prevLine = nil; continue }
+                    if lineNo > FrontMatter.maxLines { inFrontMatter = false }   // 没闭合：解析器会当正文，这里也不再吞
+                    else { prevLine = nil; continue }
                 }
                 // 围栏
                 if indent < 4, c == 0x60 || c == 0x7E {

@@ -66,14 +66,15 @@ enum ExtendedInline {
                     flush(i); out.append(.highlight([.text(str((i + 2)..<j))])); i = j + 2; textStart = i; continue
                 }
             }
-            // ~下标~ / ^上标^（单字符定界，内容里不能有空格）
-            if (options.subscriptText && c == 0x7E) || (options.superscriptText && c == 0x5E), i + 1 < u.count, !isSpace(u[i + 1]), u[i + 1] != c {
+            // ^上标^（单字符定界，内容里不能有空格）。`~下标~` 不在这里：GFM 的 strikethrough 扩展已经吃掉了 `~x~`，
+            // 由解析器按原文区分单 / 双波浪线（MarkdownParser.isSingleTilde）——只走一条路，免得两套规则打架
+            if options.superscriptText && c == 0x5E, i + 1 < u.count, !isSpace(u[i + 1]), u[i + 1] != c {
                 var j = i + 1
                 while j < u.count, u[j] != c, !isSpace(u[j]) { j += 1 }
                 if j < u.count, u[j] == c, j > i + 1 {
                     flush(i)
                     let inner: [Inline] = [.text(str((i + 1)..<j))]
-                    out.append(c == 0x7E ? .subscript(inner) : .superscript(inner))
+                    out.append(.superscript(inner))
                     i = j + 1; textStart = i; continue
                 }
             }

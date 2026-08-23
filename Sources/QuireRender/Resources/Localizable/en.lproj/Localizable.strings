@@ -30,3 +30,4 @@
 "文风：自定义规则" = "Style: custom rule";
 "先存储文档再粘贴图片" = "Save the document before pasting images";
 "粘贴的图片会存到文档旁边的 assets 文件夹里，所以文档需要先有位置。" = "Pasted images are stored in an assets folder next to the document, so the document needs a location first.";
+"图片加载失败：%@" = "Image failed to load: %@";

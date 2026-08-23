@@ -88,6 +88,9 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
         ts.beginEditing()
         ts.setAttributedString(doc.attributed)
         ts.endEditing()
+        // 渲染时按主题的最大列宽算的附件尺寸（独立公式 / 命中缓存的 Mermaid）要按真实列宽再收一次
+        lastFittedWidth = contentWidth
+        fitAttachmentsToWidth()
         if loadsAttachmentsAutomatically { loadImages() }
     }
 
@@ -133,23 +136,45 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
         }
     }
 
-    /// 让块级图片 / Mermaid 附件的显示宽度不超过内容列宽（保持纵横比；缩小或恢复到自然尺寸）
-    private func fitAttachmentsToWidth() {
+    /// 块级图片的显示尺寸：作者指定宽度（HTML width / {width=…}）优先，再不超过内容列宽；`apply(image:)` 与 `fitAttachmentsToWidth` 共用这一个算法
+    /// （以前两处各算一套：窗口一变宽，作者指定的宽度就被"恢复到自然尺寸"盖掉）
+    nonisolated static func displaySize(natural: CGSize, requested: ImageAttachment.RequestedWidth?, maxWidth: CGFloat, inline: Bool, baseSize: CGFloat) -> CGSize {
+        var size = natural
+        if size.width <= 0 || size.height <= 0 { size = CGSize(width: 100, height: 100) }
+        var w = size.width, h = size.height
+        if inline {
+            let inlineMaxH = baseSize * 1.5
+            if h > inlineMaxH { w *= inlineMaxH / h; h = inlineMaxH }
+        }
+        if let req = requested {
+            let target: CGFloat = switch req { case .points(let p): p; case .fraction(let f): maxWidth * f }
+            if target > 0 { h *= target / w; w = target }
+        }
+        if w > maxWidth { h *= maxWidth / w; w = maxWidth }
+        return CGSize(width: w.rounded(), height: h.rounded())
+    }
+
+    /// 让块级图片 / Mermaid / 独立公式附件的显示宽度不超过内容列宽（保持纵横比、尊重作者指定宽度）
+    func fitAttachmentsToWidth() {
         guard let ts = textStorage, ts.length > 0 else { return }
         let maxW = max(100, contentWidth)
         var changes: [(NSTextAttachment, NSRange)] = []
-        forEachLoadableAttachment { att, r in
+        forEachLoadableAttachment(includeMath: true) { att, r in
             guard let img = att.image else { return }
-            let isBlockImage = (att as? ImageAttachment).map { !$0.isInline && $0.isLoaded } ?? false
-            let isMermaid = (att as? MermaidAttachment)?.isRendered ?? false
-            guard isBlockImage || isMermaid else { return }
             let natural = img.size
             guard natural.width > 0, natural.height > 0 else { return }
-            var w = min(natural.width, maxW)
-            let h = (natural.height * w / natural.width).rounded()
-            w = w.rounded()
-            if abs(att.bounds.width - w) > 0.5 {
-                att.bounds = CGRect(x: 0, y: 0, width: w, height: h)
+            var target: CGSize
+            if let ia = att as? ImageAttachment {
+                guard !ia.isInline, ia.isLoaded else { return }
+                target = Self.displaySize(natural: natural, requested: ia.requestedWidth, maxWidth: maxW, inline: false, baseSize: style.baseSize)
+            } else if let m = att as? MermaidAttachment {
+                guard m.isRendered else { return }
+                target = Self.displaySize(natural: natural, requested: nil, maxWidth: maxW, inline: false, baseSize: style.baseSize)
+            } else if let math = att as? MathAttachment, math.isDisplay {
+                target = Self.displaySize(natural: natural, requested: nil, maxWidth: maxW, inline: false, baseSize: style.baseSize)
+            } else { return }
+            if abs(att.bounds.width - target.width) > 0.5 {
+                att.bounds = CGRect(x: 0, y: 0, width: target.width, height: target.height)
                 changes.append((att, r))
             }
         }
@@ -160,10 +185,10 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
     }
 
     /// 只在标记了 hasLoadableAttachments 的块里枚举图片 / Mermaid 附件（避免全文属性枚举，1 MB 文档 ~100 ms/次）
-    private func forEachLoadableAttachment(blocks blockRange: Range<Int>? = nil, _ body: (NSTextAttachment, NSRange) -> Void) {
+    private func forEachLoadableAttachment(blocks blockRange: Range<Int>? = nil, includeMath: Bool = false, _ body: (NSTextAttachment, NSRange) -> Void) {
         guard let ts = textStorage, let rendered else { return }
         let indices = blockRange.map { $0.clamped(to: 0..<rendered.blocks.count) } ?? 0..<rendered.blocks.count
-        for i in indices where rendered.blocks[i].hasLoadableAttachments {
+        for i in indices where rendered.blocks[i].hasLoadableAttachments || (includeMath && { if case .math = rendered.blocks[i].block.kind { true } else { false } }()) {
             let r = rendered.ranges[i]
             guard r.location + r.length <= ts.length else { continue }
             ts.enumerateAttribute(.attachment, in: r, options: [.longestEffectiveRangeNotRequired]) { value, range, _ in
@@ -374,22 +399,61 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
     /// 增量替换时只看被替换的块），不对整份文档做属性枚举。
     public func loadImages(blocks blockRange: Range<Int>? = nil) {
         guard let ts = textStorage, ts.length > 0, let rendered else { return }
-        let scale = window?.backingScaleFactor ?? 2
-        let maxW = max(200, contentWidth)
         // 收集后按"离视口的距离"排序：Mermaid 渲染是串行的，先渲染看得见的
         var pending: [(NSTextAttachment, NSRange)] = []
         forEachLoadableAttachment(blocks: blockRange) { value, range in
             if let m = value as? MermaidAttachment, !m.isRendered, !m.failed { pending.append((m, range)) }
             else if let a = value as? ImageAttachment, !a.isLoaded, !a.loadFailed, a.source != nil { pending.append((a, range)) }
+            else if let t = value as? TableAttachment, t.cellImageAttachments.contains(where: { !$0.isLoaded && !$0.loadFailed && $0.source != nil }) { pending.append((t, range)) }
         }
         guard !pending.isEmpty else { return }
         let visibleTop = topVisibleBlockIndex().flatMap { rendered.ranges[$0].location } ?? 0
         pending.sort { abs($0.1.location - visibleTop) < abs($1.1.location - visibleTop) }
+        load(pending)
+    }
+
+    /// 表格单元格里的图片：逐个加载，每张到了就让表格重排
+    private func loadTableCellImages(_ table: TableAttachment, at range: NSRange) {
+        let scale = window?.backingScaleFactor ?? 2
+        let maxW = style.baseSize * 12
+        for att in table.cellImageAttachments where !att.isLoaded && !att.loadFailed {
+            guard let src = att.source, let url = ImageLoader.resolve(src, relativeTo: baseURL) else { att.loadFailed = true; continue }
+            ImageLoader.shared.load(url, maxPixelWidth: maxW * scale) { [weak self, weak table] image in
+                guard let self, let table else { return }
+                if let image {
+                    att.isLoaded = true
+                    image.accessibilityDescription = att.altText.isEmpty ? RL("图片") : att.altText
+                    let size = Self.displaySize(natural: image.size, requested: att.requestedWidth, maxWidth: maxW, inline: true, baseSize: self.style.baseSize)
+                    att.image = image
+                    att.bounds = CGRect(x: 0, y: -(size.height * 0.25), width: size.width, height: size.height)
+                } else { att.loadFailed = true }
+                table.invalidateLayout()
+                self.relayoutAttachment(table, hint: range)
+            }
+        }
+    }
+
+    /// 加载任意字符范围里的附件（混合模式的实时预览：预览串是临时拼进 textStorage 的，不在 rendered 的块表里）
+    public func loadAttachments(in range: NSRange) {
+        guard let ts = textStorage, range.location + range.length <= ts.length, range.length > 0 else { return }
+        var pending: [(NSTextAttachment, NSRange)] = []
+        ts.enumerateAttribute(.attachment, in: range, options: [.longestEffectiveRangeNotRequired]) { value, r, _ in
+            if let m = value as? MermaidAttachment, !m.isRendered, !m.failed { pending.append((m, r)) }
+            else if let a = value as? ImageAttachment, !a.isLoaded, !a.loadFailed, a.source != nil { pending.append((a, r)) }
+        }
+        load(pending)
+    }
+
+    private func load(_ pending: [(NSTextAttachment, NSRange)]) {
+        guard !pending.isEmpty else { return }
+        let scale = window?.backingScaleFactor ?? 2
+        let maxW = max(200, contentWidth)
         for (value, range) in pending {
             if let m = value as? MermaidAttachment {
                 renderMermaid(m, at: range, maxWidth: maxW)
                 continue
             }
+            if let t = value as? TableAttachment { loadTableCellImages(t, at: range); continue }
             guard let att = value as? ImageAttachment, let src = att.source else { continue }
             guard let url = ImageLoader.resolve(src, relativeTo: baseURL) else { att.loadFailed = true; continue }
             let inline = att.isInline
@@ -431,12 +495,20 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
         guard let rendered, !rendered.blocks.isEmpty else { return }
         let maxW = max(200, contentWidth)
         let scale: CGFloat = 2
-        var images: [(ImageAttachment, NSRange, URL)] = []
+        var images: [(ImageAttachment, NSRange, URL, Bool)] = []   // (附件, 所在范围, URL, 在表格单元格里)
         var diagrams: [(MermaidAttachment, NSRange)] = []
+        var tables: [(TableAttachment, NSRange)] = []
         forEachLoadableAttachment { value, range in
             if let m = value as? MermaidAttachment, !m.isRendered, !m.failed { diagrams.append((m, range)) }
             else if let a = value as? ImageAttachment, !a.isLoaded, !a.loadFailed, let src = a.source {
-                if let url = ImageLoader.resolve(src, relativeTo: baseURL) { images.append((a, range, url)) } else { a.loadFailed = true }
+                if let url = ImageLoader.resolve(src, relativeTo: baseURL) { images.append((a, range, url, false)) } else { a.loadFailed = true }
+            } else if let t = value as? TableAttachment {
+                var any = false
+                for a in t.cellImageAttachments where !a.isLoaded && !a.loadFailed {
+                    guard let src = a.source, let url = ImageLoader.resolve(src, relativeTo: baseURL) else { a.loadFailed = true; continue }
+                    images.append((a, range, url, true)); any = true
+                }
+                if any { tables.append((t, range)) }
             }
         }
         guard !images.isEmpty || !diagrams.isEmpty else { return }
@@ -446,8 +518,8 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
                 final class Gate { var remaining: Int; var finished = false; init(_ n: Int) { remaining = n } }
                 let gate = Gate(images.count)
                 let finish: @MainActor () -> Void = { guard !gate.finished else { return }; gate.finished = true; done.resume() }
-                for (att, range, url) in images {
-                    let inline = att.isInline
+                for (att, range, url, inCell) in images {
+                    let inline = att.isInline || inCell
                     let target = inline ? style.baseSize * 12 : maxW
                     ImageLoader.shared.load(url, maxPixelWidth: target * scale) { [weak self] img in
                         self?.apply(image: img, to: att, at: range, maxWidth: target, inline: inline)
@@ -457,6 +529,7 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { finish() }
             }
+            for (t, range) in tables { t.invalidateLayout(); relayoutAttachment(t, hint: range) }
         }
         // Mermaid：渲染器本身串行，逐个 await
         let deadline = Date().addingTimeInterval(timeout)
@@ -523,24 +596,21 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
     }
 
     private func apply(image: NSImage?, to att: ImageAttachment, at range: NSRange, maxWidth: CGFloat, inline: Bool) {
-        guard let image else { att.loadFailed = true; return }
+        guard let image else {
+            // 加载失败和"还在加载"要分得开：换成错误框（带路径），而不是永远停在灰色占位
+            att.loadFailed = true
+            let msg = String(format: RL("图片加载失败：%@"), att.source ?? "")
+            let img = Self.errorImage(message: msg, source: att.altText, width: inline ? style.baseSize * 12 : maxWidth, style: style)
+            att.image = img
+            att.bounds = CGRect(origin: .zero, size: inline ? CGSize(width: min(img.size.width, style.baseSize * 12), height: style.baseSize * 1.5) : img.size)
+            relayoutAttachment(att, hint: range)
+            return
+        }
         att.isLoaded = true
         image.accessibilityDescription = att.altText.isEmpty ? RL("图片") : att.altText
-        var size = image.size
-        if size.width <= 0 || size.height <= 0 { size = CGSize(width: 100, height: 100) }
-        let inlineMaxH = style.baseSize * 1.5
-        var w = size.width, h = size.height
-        if inline {
-            if h > inlineMaxH { w *= inlineMaxH / h; h = inlineMaxH }
-        }
-        // 作者指定宽度（HTML width / {width=…}）优先，仍不超过内容列宽
-        if let req = att.requestedWidth {
-            let target: CGFloat = switch req { case .points(let p): p; case .fraction(let f): maxWidth * f }
-            if target > 0 { h *= target / w; w = target }
-        }
-        if w > maxWidth { h *= maxWidth / w; w = maxWidth }
+        let size = Self.displaySize(natural: image.size, requested: att.requestedWidth, maxWidth: maxWidth, inline: inline, baseSize: style.baseSize)
         att.image = image
-        att.bounds = CGRect(x: 0, y: inline ? -(h * 0.25) : 0, width: w.rounded(), height: h.rounded())
+        att.bounds = CGRect(x: 0, y: inline ? -(size.height * 0.25) : 0, width: size.width, height: size.height)
         relayoutAttachment(att, hint: range)
     }
 

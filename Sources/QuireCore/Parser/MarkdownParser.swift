@@ -40,8 +40,17 @@ public struct MarkdownParser: Sendable {
         return true
     }()
 
+    /// `\$` 的占位符：cmark 会把 `\$` 解成字面 `$` 并合并文本节点，等到我们切行内数学时转义已经没了；
+    /// 先换成私用区字符喂给 cmark，转换节点时再换回来（文本里是 `$`，代码 / 数学里保留 `\$`）。
+    static let escapedDollar = "\u{E000}"
+
     public func parse(_ source: String) -> Document {
         _ = Self.extensionsRegistered
+        // 行结尾统一成 LF：cmark 自己能处理 CRLF，但我们按行取原文（数学块 / 单波浪线 / 扩展语法）是按 "\n" 切的，
+        // Swift 把 "\r\n" 当一个字符，CRLF 文件会整篇只剩"一行"——独立公式、下标全部静默失效
+        var source = source
+        if source.utf8.contains(0x0D) { source = source.replacingOccurrences(of: "\r\n", with: "\n") }
+        if options.math, source.contains("\\$") { source = source.replacingOccurrences(of: "\\$", with: Self.escapedDollar) }
         var lineOffset = 0
         var blocks: [Block] = []
         var body = Substring(source)
@@ -107,8 +116,12 @@ public struct MarkdownParser: Sendable {
     static func expandTOC(_ blocks: inout [Block], outline: Outline) {
         let markers: Set<String> = ["[toc]", "[[toc]]", "{{toc}}"]
         for (i, b) in blocks.enumerated() {
-            guard case .paragraph(let inl) = b.kind, inl.count == 1, case .text(let t) = inl[0],
-                  markers.contains(t.trimmingCharacters(in: .whitespaces).lowercased()) else { continue }
+            guard case .paragraph(let inl) = b.kind, inl.count == 1 else { continue }
+            var isMarker = false
+            if case .text(let t) = inl[0] { isMarker = markers.contains(t.trimmingCharacters(in: .whitespaces).lowercased()) }
+            // wikilinks 开着时 `[[TOC]]` 已经被切成了 wikilink
+            if case .link(let d, _, _) = inl[0], let d, WikiLink.isWikiLink(d), WikiLink.target(d).lowercased() == "toc" { isMarker = true }
+            guard isMarker else { continue }
             let entries = outline.entries.filter { $0.blockIndex != i }
             guard !entries.isEmpty else { blocks[i] = Block(kind: .paragraph([]), sourceRange: b.sourceRange); continue }
             blocks[i] = Block(kind: tocList(entries[...], minLevel: entries.map(\.level).min() ?? 1), sourceRange: b.sourceRange)
@@ -142,6 +155,8 @@ public struct MarkdownParser: Sendable {
         let lineOffset: Int
         var ids = HeadingIDGenerator()
         var footnoteOrdinal = 0
+        /// 正在转换链接 / 图片的子节点：里面的 URL 文字不能再自动链接（否则内层链接盖掉外层显式目标）
+        var inLink = 0
 
         func range(_ n: UnsafeMutablePointer<cmark_node>) -> SourceRange? {
             let sl = Int(cmark_node_get_start_line(n))
@@ -150,8 +165,11 @@ public struct MarkdownParser: Sendable {
                                end: .init(line: Int(cmark_node_get_end_line(n)) + lineOffset, column: Int(cmark_node_get_end_column(n))))
         }
 
-        @inline(__always) func literal(_ n: UnsafeMutablePointer<cmark_node>) -> String {
-            cmark_node_get_literal(n).map { String(cString: $0) } ?? ""
+        /// 节点字面量；`\$` 占位符在代码 / HTML / 数学里还原成 `\$`，在普通文本里由 appendText 还原成 `$`
+        @inline(__always) func literal(_ n: UnsafeMutablePointer<cmark_node>, keepEscape: Bool = true) -> String {
+            let s = cmark_node_get_literal(n).map { String(cString: $0) } ?? ""
+            guard options.math, s.contains(MarkdownParser.escapedDollar) else { return s }
+            return s.replacingOccurrences(of: MarkdownParser.escapedDollar, with: keepEscape ? "\\$" : "$")
         }
         @inline(__always) func typeString(_ n: UnsafeMutablePointer<cmark_node>) -> String {
             String(cString: cmark_node_get_type_string(n))
@@ -302,17 +320,23 @@ public struct MarkdownParser: Sendable {
 
         /// 文本节点：行内数学切分 + 自动链接
         mutating func appendText(_ s: String, into out: inout [Inline]) {
+            let autolink = options.autolink && inLink == 0
+            func plain(_ t: String) -> String { options.math && t.contains(MarkdownParser.escapedDollar) ? t.replacingOccurrences(of: MarkdownParser.escapedDollar, with: "$") : t }
             if options.math, s.utf8.contains(0x24) {   // 有 $ 才切行内数学（1 MB 文档十万个文本节点，不能每个都走 String.contains）
                 for piece in InlineMath.split(s) {
-                    if case .text(let t) = piece, options.autolink { Autolink.scan(t, into: &out) } else { out.append(piece) }
+                    switch piece {
+                    case .text(let t): if autolink { Autolink.scan(plain(t), into: &out) } else { out.append(.text(plain(t))) }
+                    case .inlineMath(let m): out.append(.inlineMath(m.replacingOccurrences(of: MarkdownParser.escapedDollar, with: "\\$")))
+                    default: out.append(piece)
+                    }
                 }
-            } else if options.autolink { Autolink.scan(s, into: &out) } else { out.append(.text(s)) }
+            } else if autolink { Autolink.scan(plain(s), into: &out) } else { out.append(.text(plain(s))) }
         }
 
         mutating func convertInline(_ n: UnsafeMutablePointer<cmark_node>, into out: inout [Inline]) {
             switch cmark_node_get_type(n) {
             case CMARK_NODE_TEXT:
-                let s = literal(n)
+                let s = cmark_node_get_literal(n).map { String(cString: $0) } ?? ""   // 占位符留给 appendText 处理
                 if options.wikilinks, s.utf8.contains(0x5B), s.contains("[[") {
                     for piece in WikiLink.split(s) {
                         if case .text(let t) = piece { appendText(t, into: &out) } else { out.append(piece) }
@@ -324,11 +348,12 @@ public struct MarkdownParser: Sendable {
             case CMARK_NODE_LINK:
                 let url = cmark_node_get_url(n).map { String(cString: $0) }
                 let title = cmark_node_get_title(n).map { String(cString: $0) }
-                out.append(.link(destination: url, title: (title?.isEmpty ?? true) ? nil : title, children: convertInlines(n)))
+                inLink += 1; let children = convertInlines(n); inLink -= 1
+                out.append(.link(destination: url, title: (title?.isEmpty ?? true) ? nil : title, children: children))
             case CMARK_NODE_IMAGE:
                 let url = cmark_node_get_url(n).map { String(cString: $0) }
                 let title = cmark_node_get_title(n).map { String(cString: $0) }
-                let alt = convertInlines(n).plainText
+                inLink += 1; let alt = convertInlines(n).plainText; inLink -= 1
                 out.append(.image(source: url, title: (title?.isEmpty ?? true) ? nil : title, alt: alt))
             case CMARK_NODE_SOFTBREAK: out.append(.softBreak)
             case CMARK_NODE_LINEBREAK: out.append(.lineBreak)
@@ -349,8 +374,32 @@ public struct MarkdownParser: Sendable {
 
 // MARK: - Front matter
 
-enum FrontMatter {
+public enum FrontMatter {
     struct Split { let yaml: String; let body: Substring; let lineCount: Int }
+
+    /// front matter 最多扫多少行（解析器、侧栏大纲扫描、编辑器词法器共用同一上限）
+    public static let maxLines = 200
+
+    /// 这一行（不含换行；允许尾部 `\r`）是不是 front matter 的开头 `---`——必须**恰好**三个横线，
+    /// `----` / `- - -` 是分割线不是 front matter。解析器、HeadingScanner、MarkdownLexer 都用这一个判断，以前三处各写一套、
+    /// 文件以 `----` 开头时阅读视图当分割线、侧栏和编辑器却当 front matter 把整篇吞掉
+    @inline(__always) public static func isOpener<C: Collection>(_ line: C) -> Bool where C.Element: BinaryInteger {
+        isExactly(line, 0x2D)
+    }
+    /// 结束行：`---` 或 `...`
+    @inline(__always) public static func isCloser<C: Collection>(_ line: C) -> Bool where C.Element: BinaryInteger {
+        isExactly(line, 0x2D) || isExactly(line, 0x2E)
+    }
+    @inline(__always) private static func isExactly<C: Collection>(_ line: C, _ ch: C.Element) -> Bool where C.Element: BinaryInteger {
+        var it = line.makeIterator()
+        var n = 0
+        while let u = it.next() {
+            if u == ch { n += 1; continue }
+            if u == 0x0D { return it.next() == nil && n == 3 }
+            return false
+        }
+        return n == 3
+    }
 
     /// 文件必须以 `---\n` 开头，第二个仅含 `---`（或 `...`）的行结束。只扫描开头，不触碰正文。
     static func split(_ source: String) -> Split? {
@@ -365,12 +414,12 @@ enum FrontMatter {
             var content = utf8[idx..<lineEnd]
             if content.last == 0x0D { content = content.dropLast() }
             lineNo += 1
-            if content.elementsEqual("---".utf8) || content.elementsEqual("...".utf8) {
+            if isCloser(content) {
                 let yaml = String(source[yamlStart..<idx]).trimmingCharacters(in: .newlines)
                 let bodyStart = lineEnd < utf8.endIndex ? utf8.index(after: lineEnd) : utf8.endIndex
                 return Split(yaml: yaml, body: source[bodyStart...], lineCount: lineNo)
             }
-            if lineNo > 200 { return nil } // 防御：front matter 不该这么长
+            if lineNo > maxLines { return nil } // 防御：front matter 不该这么长
             idx = lineEnd < utf8.endIndex ? utf8.index(after: lineEnd) : utf8.endIndex
         }
         return nil

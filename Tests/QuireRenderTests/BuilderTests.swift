@@ -140,6 +140,15 @@ final class ImageWidthTests: XCTestCase {
         XCTAssertEqual(widths[0], .fraction(0.5)); XCTAssertEqual(widths[1], .points(120))
         XCTAssertFalse(r.attributed.string.contains("{width"), "属性不显示")
         XCTAssertTrue(r.attributed.string.contains(" 后面"))
+        // 独占一段的 `![](x){width=50%}` 是块级图片（不是 1.5 em 的行内小图）
+        let standalone = DocumentRenderer(theme: theme).render(MarkdownParser().parse("![c](c.png){width=50%}\n"))
+        var att: ImageAttachment?
+        standalone.attributed.enumerateAttribute(.attachment, in: NSRange(location: 0, length: standalone.attributed.length)) { v, _, _ in if let a = v as? ImageAttachment { att = a } }
+        XCTAssertEqual(att?.isInline, false)
+        XCTAssertEqual(att?.requestedWidth, .fraction(0.5))
+        // 窗口变宽后重算尺寸时仍尊重指定宽度
+        let size = ReaderTextView.displaySize(natural: CGSize(width: 1000, height: 500), requested: .fraction(0.5), maxWidth: 600, inline: false, baseSize: 16)
+        XCTAssertEqual(size, CGSize(width: 300, height: 150))
     }
 }
 
