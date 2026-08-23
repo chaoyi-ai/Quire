@@ -7,6 +7,9 @@ public final class ImageAttachment: NSTextAttachment {
     public var source: String?
     public var altText: String = ""
     public var isInline = false
+    /// 作者指定的显示宽度：`<img width="300">` → .points(300)；`{width=50%}` / `width="50%"` → .fraction(0.5)
+    public enum RequestedWidth: Sendable, Equatable { case points(CGFloat), fraction(CGFloat) }
+    public var requestedWidth: RequestedWidth?
     public var isLoaded = false
     public var loadFailed = false
 

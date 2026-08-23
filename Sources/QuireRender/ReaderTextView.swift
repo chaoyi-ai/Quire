@@ -445,6 +445,11 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
         if inline {
             if h > inlineMaxH { w *= inlineMaxH / h; h = inlineMaxH }
         }
+        // 作者指定宽度（HTML width / {width=…}）优先，仍不超过内容列宽
+        if let req = att.requestedWidth {
+            let target: CGFloat = switch req { case .points(let p): p; case .fraction(let f): maxWidth * f }
+            if target > 0 { h *= target / w; w = target }
+        }
         if w > maxWidth { h *= maxWidth / w; w = maxWidth }
         att.image = image
         att.bounds = CGRect(x: 0, y: inline ? -(h * 0.25) : 0, width: w.rounded(), height: h.rounded())

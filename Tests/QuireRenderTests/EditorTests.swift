@@ -283,3 +283,37 @@ final class ClipboardTests: XCTestCase {
         XCTAssertTrue(EditorTextView.looksLikeRichHTML("<p>hello <a href=\"x\">y</a></p>"))
     }
 }
+
+@MainActor
+final class ImagePasteTests: XCTestCase {
+    func testPasteImageSavesFileAndInsertsReference() throws {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let editor = EditorTextView(style: RenderStyle(theme: theme))
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("quire-paste-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let doc = dir.appendingPathComponent("笔记.md")
+        try "x".write(to: doc, atomically: true, encoding: .utf8)
+        editor.documentURL = doc
+        editor.setSource("前\n")
+        editor.setSelectedRange(NSRange(location: 1, length: 0))
+        // 造一张 2×2 PNG 放剪贴板
+        let img = NSImage(size: NSSize(width: 2, height: 2), flipped: false) { r in NSColor.red.setFill(); r.fill(); return true }
+        let tiff = img.tiffRepresentation!
+        let png = NSBitmapImageRep(data: tiff)!.representation(using: .png, properties: [:])!
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setData(png, forType: .png)
+        editor.paste(nil)
+        pb.clearContents()
+        let src = editor.source
+        XCTAssertTrue(src.hasPrefix("前![](assets/%E7%AC%94%E8%AE%B0/pasted-") || src.hasPrefix("前![](assets/笔记/pasted-"), src)
+        XCTAssertTrue(src.contains(".png)\n"))
+        // 文件真的写了
+        let assets = dir.appendingPathComponent("assets/笔记")
+        let files = try FileManager.default.contentsOfDirectory(atPath: assets.path)
+        XCTAssertEqual(files.count, 1)
+        XCTAssertTrue(files[0].hasPrefix("pasted-") && files[0].hasSuffix(".png"))
+        // 光标在 [] 里
+        XCTAssertEqual(editor.selectedRange().location, 3)
+    }
+}

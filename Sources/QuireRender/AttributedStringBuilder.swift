@@ -92,7 +92,12 @@ public final class AttributedStringBuilder: @unchecked Sendable {
             if MermaidRenderer.isAvailable, !style.options.largeFile { appendMermaid(source, into: out, ctx: ctx) }
             else { appendCode(source, language: "mermaid", role: .codeBlock, into: out, ctx: ctx) }
         case .html(let html):
-            appendCode(html, language: "html", role: .htmlBlock, into: out, ctx: ctx)
+            // 独占的 <img …>（可带 <p>/<div>/<figure> 包装）按图片渲染，其余 HTML 块原样显示
+            if let img = Self.parseImgTag(html) {
+                appendImageBlock(source: img.src, title: nil, alt: img.alt, into: out, ctx: ctx, requestedWidth: img.width)
+            } else {
+                appendCode(html, language: "html", role: .htmlBlock, into: out, ctx: ctx)
+            }
         case .frontMatter(let yaml):
             appendCode(yaml, language: "yaml", role: .frontMatter, into: out, ctx: ctx)
         case .blockQuote(let blocks):
@@ -325,7 +330,7 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         appendRun("\u{00A0}\n", into: out, ctx: InlineContext(para: para))
     }
 
-    private func appendImageBlock(source: String?, title: String?, alt: String, into out: NSMutableAttributedString, ctx: BlockContext) {
+    private func appendImageBlock(source: String?, title: String?, alt: String, into out: NSMutableAttributedString, ctx: BlockContext, requestedWidth: ImageAttachment.RequestedWidth? = nil) {
         let psKey = "img-\(ctx.indent)-\(title == nil)"
         let ps = paragraphStyle(key: psKey) { p in
             p.alignment = .center
@@ -335,7 +340,7 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         }
         let para = paragraphContext(role: .image, psKey: psKey, ps: ps, ctx: ctx)
         let ic = InlineContext(para: para)
-        appendImageAttachment(source: source, alt: alt, inline: false, into: out, ctx: ic)
+        appendImageAttachment(source: source, alt: alt, inline: false, into: out, ctx: ic, requestedWidth: requestedWidth)
         appendRun("\n", into: out, ctx: ic)
         if let title, !title.isEmpty {
             let cKey = "imgcap-\(ctx.indent)"
@@ -460,12 +465,13 @@ public final class AttributedStringBuilder: @unchecked Sendable {
     }
 
     /// 图片附件：占位尺寸，实际图片由 ImageLoader 异步填充
-    private func appendImageAttachment(source: String?, alt: String, inline: Bool, into out: NSMutableAttributedString, ctx: InlineContext) {
+    private func appendImageAttachment(source: String?, alt: String, inline: Bool, into out: NSMutableAttributedString, ctx: InlineContext, requestedWidth: ImageAttachment.RequestedWidth? = nil) {
         let att = ImageAttachment()
         appendedLoadableAttachment = true
         att.source = source
         att.altText = alt
         att.isInline = inline
+        att.requestedWidth = requestedWidth
         let h: CGFloat = inline ? style.baseSize * 1.2 : style.baseSize * 4
         att.bounds = CGRect(x: 0, y: inline ? -style.baseSize * 0.2 : 0, width: inline ? h : min(style.maxContentWidth * 0.6, 240), height: h)
         att.image = ImageAttachment.placeholder(size: att.bounds.size, alt: alt, style: style)
@@ -508,7 +514,57 @@ public final class AttributedStringBuilder: @unchecked Sendable {
     // MARK: - 行内
 
     func appendInlines(_ inlines: [Inline], into out: NSMutableAttributedString, ctx: InlineContext) {
-        for i in inlines { appendInline(i, into: out, ctx: ctx) }
+        var k = 0
+        while k < inlines.count {
+            // Pandoc 风格 `![alt](src){width=50%}`：图片后紧跟的 {…} 属性不显示，只取 width
+            if case .image(let src, _, let alt) = inlines[k], k + 1 < inlines.count, case .text(let t) = inlines[k + 1],
+               let (w, rest) = Self.parseWidthAttribute(t) {
+                appendImageAttachment(source: src, alt: alt, inline: true, into: out, ctx: ctx, requestedWidth: w)
+                if !rest.isEmpty { appendRun(rest, into: out, ctx: ctx) }
+                k += 2; continue
+            }
+            appendInline(inlines[k], into: out, ctx: ctx)
+            k += 1
+        }
+    }
+
+    /// `{width=50%}` / `{width=300}` / `{width=300px}` 开头 → (宽度, 其后的文本)
+    static func parseWidthAttribute(_ t: String) -> (ImageAttachment.RequestedWidth, String)? {
+        guard t.hasPrefix("{"), let close = t.firstIndex(of: "}") else { return nil }
+        let inner = t[t.index(after: t.startIndex)..<close]
+        guard let eq = inner.range(of: "width=") else { return nil }
+        let val = inner[eq.upperBound...].prefix { $0 != " " && $0 != "}" }
+        guard let w = parseWidthValue(String(val)) else { return nil }
+        return (w, String(t[t.index(after: close)...]))
+    }
+
+    static func parseWidthValue(_ raw: String) -> ImageAttachment.RequestedWidth? {
+        var v = raw.trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+        if v.hasSuffix("%") { v.removeLast(); return Double(v).map { .fraction(CGFloat($0) / 100) } }
+        if v.hasSuffix("px") { v.removeLast(2) }
+        return Double(v).map { .points(CGFloat($0)) }
+    }
+
+    /// `<img src="…" alt="…" width="…">`（允许外层 <p>/<div>/<figure>/<center>/<a> 包装）；不是单个 img → nil
+    static func parseImgTag(_ html: String) -> (src: String, alt: String, width: ImageAttachment.RequestedWidth?)? {
+        let ns = html as NSString
+        guard let re = try? NSRegularExpression(pattern: "<img\\b[^>]*>", options: [.caseInsensitive]) else { return nil }
+        let matches = re.matches(in: html, range: NSRange(location: 0, length: ns.length))
+        guard matches.count == 1 else { return nil }
+        // 去掉 img 标签与允许的包装后不能剩下别的内容
+        let stripped = ns.replacingCharacters(in: matches[0].range, with: "")
+            .replacingOccurrences(of: "</?(p|div|figure|center|a|br)\\b[^>]*>", with: "", options: [.regularExpression, .caseInsensitive])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard stripped.isEmpty else { return nil }
+        let tag = ns.substring(with: matches[0].range)
+        func attr(_ name: String) -> String? {
+            guard let r = try? NSRegularExpression(pattern: "\\b\(name)\\s*=\\s*(\"([^\"]*)\"|'([^']*)'|([^\\s>]+))", options: [.caseInsensitive]),
+                  let m = r.firstMatch(in: tag, range: NSRange(location: 0, length: (tag as NSString).length)) else { return nil }
+            for g in 2...4 where m.range(at: g).location != NSNotFound { return (tag as NSString).substring(with: m.range(at: g)) }
+            return nil
+        }
+        guard let src = attr("src"), !src.isEmpty else { return nil }
+        return (src, attr("alt") ?? "", attr("width").flatMap(parseWidthValue))
     }
 
     private func font(for ctx: InlineContext) -> NSFont {

@@ -396,14 +396,46 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         if focusDimActive { dimOverlay?.setNeedsDisplay(dirtyRect) }
     }
 
+    /// 粘贴剪贴板图片时存到哪（相对文档目录）；nil = 文档未保存，回退为提示
+    public var pastedImagesDirectoryName = "assets"
+
     public override func paste(_ sender: Any?) {
         let pb = NSPasteboard.general
+        // 剪贴板是图片（截图 / 从浏览器复制图片）且没有文本：存成文件、插入 ![](相对路径)
+        if pb.string(forType: .string) == nil, pb.string(forType: .html) == nil, pb.canReadItem(withDataConformingToTypes: [NSPasteboard.PasteboardType.png.rawValue, NSPasteboard.PasteboardType.tiff.rawValue]) {
+            if pasteImageFromPasteboard(pb) { return }
+        }
         // 有文件 / 图片等非文本内容时走默认；纯文本来源（代码编辑器）也走默认
         if convertsHTMLOnPaste, let html = pb.string(forType: .html), !html.isEmpty, Self.looksLikeRichHTML(html) {
             let md = HTMLToMarkdown.convert(html)
             if !md.isEmpty { insertText(md, replacementRange: selectedRange()); return }
         }
         pasteAsPlainText(sender)
+    }
+
+    /// 剪贴板图片 → `<文档目录>/assets/<文档名>/粘贴-时间戳.png`，插入 `![](相对路径)`。文档未保存时无处可放：返回 false 走默认
+    func pasteImageFromPasteboard(_ pb: NSPasteboard) -> Bool {
+        guard let documentURL else { NSSound.beep(); return false }
+        guard let data = pb.data(forType: .png) ?? (pb.data(forType: .tiff).flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) }) else { return false }
+        let docDir = documentURL.deletingLastPathComponent()
+        let folder = docDir.appendingPathComponent(pastedImagesDirectoryName).appendingPathComponent(documentURL.deletingPathExtension().lastPathComponent)
+        let f = DateFormatter(); f.dateFormat = "yyyyMMdd-HHmmss"
+        var url = folder.appendingPathComponent("pasted-\(f.string(from: Date())).png")
+        var n = 2
+        while FileManager.default.fileExists(atPath: url.path) { url = folder.appendingPathComponent("pasted-\(f.string(from: Date()))-\(n).png"); n += 1 }
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        } catch { NSSound.beep(); return false }
+        let rel = DropSupport.relativePath(of: url, to: documentURL)
+        let text = "![](\(rel))"
+        let r = selectedRange()
+        guard shouldChangeText(in: r, replacementString: text) else { return false }
+        insertText(text, replacementRange: r)
+        // 光标放到 [] 里，方便直接写 alt
+        setSelectedRange(NSRange(location: r.location + 2, length: 0))
+        didChangeText()
+        return true
     }
 
     /// ⇧⌘V：只粘纯文本

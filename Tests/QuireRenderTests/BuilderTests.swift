@@ -122,3 +122,23 @@ final class FontOverrideTests: XCTestCase {
         XCTAssertEqual(RenderStyle(theme: theme, options: bad).bodyFont.familyName, base.bodyFont.familyName)
     }
 }
+
+final class ImageWidthTests: XCTestCase {
+    func testParseImgTag() {
+        let r = AttributedStringBuilder.parseImgTag("<p align=\"center\">\n<img src=\"docs/a.png\" width=\"300\" alt=\"图\">\n</p>")
+        XCTAssertEqual(r?.src, "docs/a.png"); XCTAssertEqual(r?.alt, "图"); XCTAssertEqual(r?.width, .points(300))
+        XCTAssertEqual(AttributedStringBuilder.parseImgTag("<img src=x.png width=50%>")?.width, .fraction(0.5))
+        XCTAssertNil(AttributedStringBuilder.parseImgTag("<div>text <img src=\"a.png\"></div>"), "有别的内容不算")
+        XCTAssertNil(AttributedStringBuilder.parseImgTag("<img src=\"a.png\"><img src=\"b.png\">"))
+    }
+    func testWidthAttributeAfterImage() {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let r = DocumentRenderer(theme: theme).render(MarkdownParser().parse("看图 ![alt](a.png){width=50%} 后面\n\n<img src=\"b.png\" width=\"120px\">\n"))
+        var widths: [ImageAttachment.RequestedWidth?] = []
+        r.attributed.enumerateAttribute(.attachment, in: NSRange(location: 0, length: r.attributed.length)) { v, _, _ in if let a = v as? ImageAttachment { widths.append(a.requestedWidth) } }
+        XCTAssertEqual(widths.count, 2)
+        XCTAssertEqual(widths[0], .fraction(0.5)); XCTAssertEqual(widths[1], .points(120))
+        XCTAssertFalse(r.attributed.string.contains("{width"), "属性不显示")
+        XCTAssertTrue(r.attributed.string.contains(" 后面"))
+    }
+}
