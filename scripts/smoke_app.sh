@@ -32,8 +32,14 @@ cat > "$WORK/deny.sb" <<SB
 SB
 OUT="$WORK/out.pdf"
 set +e
-QUIRE_EXPORT_PDF="$OUT" timeout 40 sandbox-exec -f "$WORK/deny.sb" "$WORK/Quire.app/Contents/MacOS/Quire" "$WORK/doc.md" -ApplePersistenceIgnoreState YES > "$WORK/log.txt" 2>&1
+# 不依赖 coreutils 的 timeout（CI 的 runner 没有）：后台跑 + 看门狗
+QUIRE_EXPORT_PDF="$OUT" sandbox-exec -f "$WORK/deny.sb" "$WORK/Quire.app/Contents/MacOS/Quire" "$WORK/doc.md" -ApplePersistenceIgnoreState YES > "$WORK/log.txt" 2>&1 &
+PID=$!
+( sleep 60; kill "$PID" 2>/dev/null ) &
+WATCHDOG=$!
+wait "$PID"
 STATUS=$?
+kill "$WATCHDOG" 2>/dev/null
 set -e
 if ! grep -q "QUIRE_EXPORT_PDF=ok" "$WORK/log.txt"; then
   echo "✗ 冒烟失败（exit $STATUS）："; tail -20 "$WORK/log.txt"; exit 1
