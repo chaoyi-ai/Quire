@@ -128,3 +128,15 @@
 "搜索文件内容…" = "搜索文件内容…";
 "全局搜索…" = "全局搜索…";
 "没有找到" = "没有找到";
+"字体" = "字体";
+"跟随主题（代码字体）" = "跟随主题（代码字体）";
+"字号" = "字号";
+"跟随主题" = "跟随主题";
+"行距" = "行距";
+"行宽" = "行宽";
+"不限" = "不限";
+"%d 字符" = "%d 字符";
+"下载 iA Writer 字体…" = "下载 iA Writer 字体…";
+"已安装到 ~/Library/Fonts，可在上面选择 iA Writer Mono / Duo / Quattro" = "已安装到 ~/Library/Fonts，可在上面选择 iA Writer Mono / Duo / Quattro";
+"下载失败，请检查网络" = "下载失败，请检查网络";
+"iA Writer Mono / Duo / Quattro 已安装" = "iA Writer Mono / Duo / Quattro 已安装";

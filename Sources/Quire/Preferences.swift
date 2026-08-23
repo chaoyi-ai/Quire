@@ -19,6 +19,10 @@ final class Preferences: ObservableObject {
         static let wordCount = "reader.wordCount"
         static let hangingMarkers = "editor.hangingMarkers"
         static let htmlPaste = "editor.convertHTMLOnPaste"
+        static let editorFont = "editor.fontFamily"
+        static let editorFontSize = "editor.fontSize"
+        static let editorLineHeight = "editor.lineHeight"
+        static let editorColumn = "editor.columnChars"
     }
 
     @Published var codeLineNumbers: Bool { didSet { d.set(codeLineNumbers, forKey: Key.codeLineNumbers); ThemeManager.shared.refresh() } }
@@ -30,11 +34,19 @@ final class Preferences: ObservableObject {
     @Published var showWordCount: Bool { didSet { d.set(showWordCount, forKey: Key.wordCount); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var editorHangingMarkers: Bool { didSet { d.set(editorHangingMarkers, forKey: Key.hangingMarkers); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var convertHTMLOnPaste: Bool { didSet { d.set(convertHTMLOnPaste, forKey: Key.htmlPaste); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    @Published var editorFontFamily: String { didSet { d.set(editorFontFamily, forKey: Key.editorFont); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    @Published var editorFontSize: Int { didSet { d.set(editorFontSize, forKey: Key.editorFontSize); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    @Published var editorLineHeight: Double { didSet { d.set(editorLineHeight, forKey: Key.editorLineHeight); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    @Published var editorColumnChars: Int { didSet { d.set(editorColumnChars, forKey: Key.editorColumn); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+
+    var editorTypography: EditorTypography {
+        EditorTypography(fontFamily: editorFontFamily.isEmpty ? nil : editorFontFamily, fontSize: CGFloat(editorFontSize), lineHeight: CGFloat(editorLineHeight), columnChars: editorColumnChars)
+    }
 
     static let didChange = Notification.Name("com.korako.quire.preferencesDidChange")
 
     private init() {
-        d.register(defaults: [Key.codeCopyButton: true, Key.autoReload: true, Key.editorLineNumbers: true, Key.largeFileMB: 8, Key.wordCount: true, Key.hangingMarkers: true, Key.htmlPaste: true])
+        d.register(defaults: [Key.codeCopyButton: true, Key.autoReload: true, Key.editorLineNumbers: true, Key.largeFileMB: 8, Key.wordCount: true, Key.hangingMarkers: true, Key.htmlPaste: true, Key.editorLineHeight: 1.35])
         codeLineNumbers = d.bool(forKey: Key.codeLineNumbers)
         codeCopyButton = d.bool(forKey: Key.codeCopyButton)
         linkUnderline = d.bool(forKey: Key.linkUnderline)
@@ -44,6 +56,10 @@ final class Preferences: ObservableObject {
         showWordCount = d.bool(forKey: Key.wordCount)
         editorHangingMarkers = d.bool(forKey: Key.hangingMarkers)
         convertHTMLOnPaste = d.bool(forKey: Key.htmlPaste)
+        editorFontFamily = d.string(forKey: Key.editorFont) ?? ""
+        editorFontSize = d.integer(forKey: Key.editorFontSize)
+        editorLineHeight = d.double(forKey: Key.editorLineHeight)
+        editorColumnChars = d.integer(forKey: Key.editorColumn)
     }
 
     var renderOptions: RenderOptions {
@@ -62,8 +78,10 @@ final class PreferencesWindowController: NSWindowController {
         let host = NSHostingController(rootView: PreferencesView())
         let window = NSWindow(contentViewController: host)
         window.title = L("Quire 设置")
-        window.styleMask = [.titled, .closable]
-        window.setContentSize(NSSize(width: 460, height: 560))
+        window.styleMask = [.titled, .closable, .resizable]
+        let maxH = (NSScreen.main?.visibleFrame.height ?? 900) - 80
+        window.setContentSize(NSSize(width: 460, height: min(800, maxH)))
+        window.minSize = NSSize(width: 460, height: 400)
         window.isReleasedWhenClosed = false
         window.center()
         super.init(window: window)
@@ -83,6 +101,17 @@ struct PreferencesView: View {
     @State private var mode = ThemeManager.shared.mode
     @State private var language = AppLanguage.current
     @State private var languageChanged = false
+    @State private var fontMessage = ""
+    private var fontFamilies: [String] {
+        // 等宽 + 已装的 iA Writer 三款（Duo / Quattro 不是严格等宽）
+        let fm = NSFontManager.shared
+        var out = fm.availableFontFamilies.filter { fam in
+            fam.hasPrefix("iA Writer") || (fm.font(withFamily: fam, traits: [], weight: 5, size: 12)?.isFixedPitch ?? false)
+        }
+        out.sort()
+        if !prefs.editorFontFamily.isEmpty, !out.contains(prefs.editorFontFamily) { out.insert(prefs.editorFontFamily, at: 0) }
+        return out
+    }
 
     var body: some View {
         Form {
@@ -137,6 +166,26 @@ struct PreferencesView: View {
                     .help(L("超过阈值的文件关闭代码高亮与 Mermaid 渲染"))
             }
             Section(L("编辑")) {
+                Picker(L("字体"), selection: $prefs.editorFontFamily) {
+                    Text(L("跟随主题（代码字体）")).tag("")
+                    ForEach(fontFamilies, id: \.self) { Text($0).tag($0) }
+                }
+                Picker(L("字号"), selection: $prefs.editorFontSize) {
+                    Text(L("跟随主题")).tag(0)
+                    ForEach([11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24], id: \.self) { Text("\($0) pt").tag($0) }
+                }
+                Picker(L("行距"), selection: $prefs.editorLineHeight) {
+                    ForEach([1.2, 1.35, 1.5, 1.7, 2.0], id: \.self) { Text(String(format: "%.2f", $0)).tag($0) }
+                }
+                Picker(L("行宽"), selection: $prefs.editorColumnChars) {
+                    Text(L("不限")).tag(0)
+                    ForEach([60, 72, 80, 100], id: \.self) { Text(String(format: L("%d 字符"), $0)).tag($0) }
+                }
+                HStack {
+                    Button(L("下载 iA Writer 字体…")) { IAFonts.download { installed in fontMessage = installed ? L("已安装到 ~/Library/Fonts，可在上面选择 iA Writer Mono / Duo / Quattro") : L("下载失败，请检查网络") } }
+                        .disabled(IAFonts.isInstalled)
+                    Text(IAFonts.isInstalled ? L("iA Writer Mono / Duo / Quattro 已安装") : fontMessage).font(.caption).foregroundStyle(.secondary)
+                }
                 Toggle(L("显示行号"), isOn: $prefs.editorLineNumbers)
                 Toggle(L("标记出挑（# - > 1. 悬挂到左边距，正文左缘对齐）"), isOn: $prefs.editorHangingMarkers)
                 Toggle(L("粘贴网页 / 富文本时自动转成 Markdown（⇧⌘V 粘纯文本）"), isOn: $prefs.convertHTMLOnPaste)

@@ -24,8 +24,16 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     var dimOverlay: FocusDimOverlay?
     /// 最近一次选区变化是否来自键盘（打字机模式只在这种情况下居中，避免点击时屏幕跳）
     private var selectionFromKeyboard = false
-    /// 内容列最大宽度（0 = 不限制，贴左）：沉浸模式下居中成一列
+    /// 内容列最大宽度（0 = 不限制，贴左）：沉浸模式 / 行宽设置下居中成一列
     public var maxContentWidth: CGFloat = 0 { didSet { if maxContentWidth != oldValue { updateContentInset(); needsLayout = true } } }
+    /// 排版参数（字体 / 字号 / 行距 / 行宽），覆盖主题的代码字体；变化时重设样式
+    public var typography = EditorTypography() {
+        didSet { if typography != oldValue { applyStyle(style); maxContentWidth = typography.columnChars > 0 ? CGFloat(typography.columnChars) * charWidth : immersiveWidth } }
+    }
+    /// 沉浸模式要求的列宽（0 = 无）；与行宽设置取其一
+    public var immersiveWidth: CGFloat = 0 {
+        didSet { maxContentWidth = typography.columnChars > 0 ? CGFloat(typography.columnChars) * charWidth : immersiveWidth }
+    }
     /// Esc（沉浸模式退出用）
     public var onEscape: (() -> Void)?
     /// 粘贴时若剪贴板有 HTML（来自浏览器 / 富文本 App）自动转成 Markdown
@@ -95,8 +103,12 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
 
     public func applyStyle(_ style: RenderStyle) {
         self.style = style
-        let size = (style.baseSize * 0.9).rounded()
-        editorFont = NSFont(descriptor: style.codeFont.fontDescriptor, size: size) ?? style.codeFont
+        let size = typography.fontSize > 0 ? typography.fontSize : (style.baseSize * 0.9).rounded()
+        if let family = typography.fontFamily, !family.isEmpty, let f = NSFont(name: family, size: size) ?? NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: size) {
+            editorFont = f
+        } else {
+            editorFont = NSFont(descriptor: style.codeFont.fontDescriptor, size: size) ?? style.codeFont
+        }
         boldFont = RenderStyle.variant(editorFont, traits: .boldFontMask)
         italicFont = RenderStyle.variant(editorFont, traits: .italicFontMask)
         boldItalicFont = RenderStyle.variant(boldFont, traits: .italicFontMask)
@@ -106,9 +118,10 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         font = editorFont
         textColor = style.foreground
         let ps = NSMutableParagraphStyle()
-        ps.lineHeightMultiple = 1.35
+        ps.lineHeightMultiple = typography.lineHeight
         ps.lineBreakMode = .byWordWrapping
         charWidth = ("0" as NSString).size(withAttributes: [.font: editorFont!]).width
+        if typography.columnChars > 0 { maxContentWidth = CGFloat(typography.columnChars) * charWidth }
         hangingStyles = [:]
         if hangingMarkers {
             let col = (Self.hangingColumnChars * charWidth).rounded()

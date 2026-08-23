@@ -208,7 +208,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         if tabBarVisible { window.toggleTabBar(nil) }
         editorViewController.scrollView.rulersVisible = false
         wordCount.isHidden = true
-        editorViewController.textView.maxContentWidth = session.style.maxContentWidth
+        editorViewController.textView.immersiveWidth = session.style.maxContentWidth
         editorViewController.textView.onEscape = { [weak self] in self?.exitImmersive(restoreFullScreen: true) }
         if !wasFull { window.toggleFullScreen(nil) }
         window.makeFirstResponder(editorViewController.textView)
@@ -218,7 +218,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         guard let saved = immersiveSaved, let window else { return }
         immersiveSaved = nil
         editorViewController.textView.onEscape = nil
-        editorViewController.textView.maxContentWidth = 0
+        editorViewController.textView.immersiveWidth = 0
         editorViewController.scrollView.rulersVisible = saved.rulers
         wordCount.isHidden = saved.wordCountHidden
         window.toolbar?.isVisible = saved.toolbarVisible
