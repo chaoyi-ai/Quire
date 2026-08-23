@@ -121,7 +121,7 @@ final class MarkdownDocument: NSDocument {
     }
 
     /// 把文件尾的著作归属注释块从 `source` 里拆出来
-    private func splitAuthorship() {
+    nonisolated private func splitAuthorship() {
         guard source.utf8.count < 64 * 1024 * 1024, source.contains(Authorship.marker) else { return }
         let (body, a, mismatch) = Authorship.split(source)
         source = body
