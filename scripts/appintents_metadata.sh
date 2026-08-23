@@ -15,9 +15,16 @@ rm -rf "$WORK"; mkdir -p "$WORK"
 # 工具链以 xcode-select 选中的为准（CI 上 /Applications/Xcode.app 可能是另一个版本）
 TOOLCHAIN="$(cd "$(dirname "$(xcrun --find swiftc)")/../.." && pwd)"
 PROTOS_SRC="$TOOLCHAIN/usr/share/swift/SwiftConstantValues/AppIntents.json"
-[ -f "$PROTOS_SRC" ] || { echo "appintents: 找不到 $PROTOS_SRC（工具链 $TOOLCHAIN）"; exit 1 }
-# 编译器要的是纯数组格式
-python3 -c "import json,sys; json.dump(json.load(open(sys.argv[1]))['constValueProtocols'], open(sys.argv[2],'w'))" "$PROTOS_SRC" "$WORK/protocols.json"
+if [ -f "$PROTOS_SRC" ]; then
+  # 编译器要的是纯数组格式
+  python3 -c "import json,sys; json.dump(json.load(open(sys.argv[1]))['constValueProtocols'], open(sys.argv[2],'w'))" "$PROTOS_SRC" "$WORK/protocols.json"
+else
+  # Xcode 16.x 没有这个文件（26 才有）；协议名单很稳定，内置一份兜底，并把这件事说出来
+  echo "appintents: 工具链里没有 $PROTOS_SRC，用脚本内置的协议名单"
+  cat > "$WORK/protocols.json" <<'JSON'
+["AnyResolverProviding","AppEntity","AppEnum","AppIntent","AppIntentsPackage","AppShortcutProviding","AppShortcutsProvider","AppUnionValue","AppUnionValueCasesProviding","DynamicOptionsProvider","EntityQuery","IntentValueQuery","Resolver","TransientEntity","_AssistantIntentsProvider","_GenerativeFunctionExtractable","_IntentValueRepresentable"]
+JSON
+fi
 
 args=()
 for m in $(find "$B" .build/checkouts -name module.modulemap 2>/dev/null | grep -v "Tests\|QuickLook\|qtmp"); do args+=(-Xcc -fmodule-map-file=$m); done
