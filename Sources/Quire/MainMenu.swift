@@ -130,6 +130,15 @@ enum MainMenu {
         let focusItem = view.addItem(withTitle: L("专注"), action: nil, keyEquivalent: "")
         focusItem.submenu = focus
         view.addItem(withTitle: L("切换专注模式"), action: #selector(DocumentWindowController.cycleFocusMode(_:)), keyEquivalent: "d")
+        // 词性高亮：关闭 / 全部 / 名词 / 动词 / 形容词 / 副词 / 连词
+        let pos = NSMenu(title: L("词性高亮"))
+        for (title, mode) in [(L("关闭"), POSMode.off), (L("全部词性"), .all), (L("只看名词"), .nouns), (L("只看动词"), .verbs), (L("只看形容词"), .adjectives), (L("只看副词"), .adverbs), (L("只看连词 / 介词"), .conjunctions)] {
+            let it = pos.addItem(withTitle: title, action: #selector(DocumentWindowController.setPOSMode(_:)), keyEquivalent: "")
+            it.tag = mode.rawValue
+        }
+        pos.addItem(.separator())
+        pos.addItem(withTitle: L("（英 / 德 / 法 / 意 / 西 / 葡 / 俄 / 荷；中文暂不支持词性）"), action: nil, keyEquivalent: "")
+        view.addItem(withTitle: L("词性高亮"), action: nil, keyEquivalent: "").submenu = pos
         let immersive = view.addItem(withTitle: L("沉浸写作"), action: #selector(DocumentWindowController.toggleImmersive(_:)), keyEquivalent: "D")
         immersive.keyEquivalentModifierMask = [.command, .shift]
         view.addItem(.separator())

@@ -189,3 +189,11 @@
 "文档太长，只导出了前 %d 像素高度。" = "The document is too long; only the first %d pixels were exported.";
 "格式化表格" = "Format Table";
 "选中文字时显示浮动格式工具条" = "Show floating format bar when text is selected";
+"词性高亮" = "Syntax Highlight (Parts of Speech)";
+"全部词性" = "All parts of speech";
+"只看名词" = "Nouns only";
+"只看动词" = "Verbs only";
+"只看形容词" = "Adjectives only";
+"只看副词" = "Adverbs only";
+"只看连词 / 介词" = "Conjunctions / prepositions only";
+"（英 / 德 / 法 / 意 / 西 / 葡 / 俄 / 荷；中文暂不支持词性）" = "(en / de / fr / it / es / pt / ru / nl; Chinese parts of speech not available)";

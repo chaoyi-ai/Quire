@@ -378,3 +378,32 @@ final class FormatActionTests: XCTestCase {
         XCTAssertEqual(e.source, "- ~~标题行~~\n- 第二行\n")
     }
 }
+
+@MainActor
+final class POSTests: XCTestCase {
+    func testEnglishWordsGetColoredAndChineseLeftAlone() {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let e = EditorTextView(style: RenderStyle(theme: theme))
+        let sv = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 400)); sv.documentView = e
+        e.setSource("The quick brown fox jumps over the lazy dog.\n\n我们今天在公园里跑步。\n\n```\nlet code = 1\n```\n")
+        e.posMode = .all
+        let exp = expectation(description: "pos")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { exp.fulfill() }
+        wait(for: [exp], timeout: 3)
+        let ns = e.textStorage!.string as NSString
+        func color(_ w: String) -> NSColor? { e.textStorage!.attribute(.foregroundColor, at: ns.range(of: w).location, effectiveRange: nil) as? NSColor }
+        XCTAssertEqual(color("fox"), .systemBlue)
+        XCTAssertEqual(color("jumps"), .systemRed)
+        XCTAssertEqual(color("quick"), .systemGreen)
+        XCTAssertEqual(color("跑步"), e.style.foreground, "中文不着色")
+        XCTAssertEqual(color("code"), e.style.theme.colors.editor.markdownCode.nsColor, "代码块不动")
+        e.posMode = .verbs
+        let exp2 = expectation(description: "verbs")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { exp2.fulfill() }
+        wait(for: [exp2], timeout: 3)
+        XCTAssertEqual(color("jumps"), .systemRed)
+        XCTAssertEqual(color("fox"), e.style.foreground)
+        e.posMode = .off
+        XCTAssertEqual(color("jumps"), e.style.foreground)
+    }
+}

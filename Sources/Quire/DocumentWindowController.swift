@@ -161,6 +161,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         // 编辑器可能晚于文档打开创建：同步当前源码
         if let doc = markdownDocument { editorViewController.replaceSource(doc.source) }
         editorViewController.textView.focusMode = focusMode
+        editorViewController.textView.posMode = posMode
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -174,6 +175,17 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             UserDefaults.standard.set(focusMode.rawValue, forKey: "editor.focus")
             if editorItem != nil || focusMode != .off { editorViewController.textView.focusMode = focusMode }
         }
+    }
+
+    private(set) var posMode: POSMode = POSMode(rawValue: UserDefaults.standard.integer(forKey: "editor.pos")) ?? .off {
+        didSet {
+            UserDefaults.standard.set(posMode.rawValue, forKey: "editor.pos")
+            if editorItem != nil || posMode != .off { editorViewController.textView.posMode = posMode }
+        }
+    }
+    @objc func setPOSMode(_ sender: NSMenuItem) {
+        if mode == .reader { mode = .editor }
+        posMode = POSMode(rawValue: sender.tag) ?? .off
     }
 
     @objc func setFocusMode(_ sender: NSMenuItem) {
@@ -235,6 +247,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(setFocusMode(_:)) { item.state = item.tag == focusMode.rawValue ? .on : .off }
+        if item.action == #selector(setPOSMode(_:)) { item.state = item.tag == posMode.rawValue ? .on : .off }
         if item.action == #selector(toggleImmersive(_:)) { item.title = isImmersive ? L("退出沉浸写作") : L("沉浸写作") }
         return true
     }

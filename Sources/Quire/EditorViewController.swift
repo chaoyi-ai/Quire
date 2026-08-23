@@ -80,6 +80,7 @@ final class EditorViewController: NSViewController {
                 guard let self else { return }
                 self.ruler.needsDisplay = true
                 self.textView.updateFormatToolbar()
+                self.textView.schedulePOSRecolor(delay: 0.12)
                 self.onScroll?(self.textView.topVisibleLine())
             }
         }

@@ -9,6 +9,18 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     private let lexer = MarkdownLexer()
     private var attrsCache: [MarkdownLexer.Kind: AnyObject] = [:]
     private var baseAttrs: AnyObject!
+    /// 词性高亮模式；切换时清掉旧色、重新着色可见区
+    public var posMode: POSMode = .off {
+        didSet {
+            guard posMode != oldValue else { return }
+            posGeneration += 1
+            clearPOSColors()
+            schedulePOSRecolor(delay: 0)
+        }
+    }
+    var posGeneration = 0
+    var posWork: DispatchWorkItem?
+
     /// 专注模式；变化时重算淡化 / 留白
     public var focusMode: EditorFocusMode = .off {
         didSet {
@@ -368,6 +380,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         super.didChangeText()
         onTextChange?()
         updateFormatToolbar()
+        schedulePOSRecolor()
         if focusMode != .off {
             applyFocusDim()
             if focusMode == .typewriter { centerCaretLine() }
