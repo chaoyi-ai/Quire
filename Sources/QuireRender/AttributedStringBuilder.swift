@@ -48,6 +48,8 @@ public final class AttributedStringBuilder: @unchecked Sendable {
     struct InlineContext {
         var para: ParagraphContext
         var bold = false, italic = false, strike = false
+        var highlight = false, underline = false
+        var script: Int = 0   // 0 正常，-1 下标，+1 上标
         var link: String? = nil
         var tooltip: String? = nil
     }
@@ -593,7 +595,8 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         var flags: UInt8 = 0
         if ctx.bold { flags |= 1 }; if ctx.italic { flags |= 2 }; if ctx.strike { flags |= 4 }
         if inlineCode { flags |= 8 }; if muted { flags |= 16 }; if ctx.link != nil { flags |= 32 }; if codePad { flags |= 64 }
-        let key = RunKey(para: ctx.para.key + (ctx.para.baseFont.map { "|\($0.fontName)\($0.pointSize)" } ?? "") + (ctx.para.color.map { "|\($0.description)" } ?? ""), flags: flags)
+        if ctx.highlight { flags |= 128 }
+        let key = RunKey(para: ctx.para.key + (ctx.underline ? "|u" : "") + (ctx.script != 0 ? "|s\(ctx.script)" : "") + (ctx.para.baseFont.map { "|\($0.fontName)\($0.pointSize)" } ?? "") + (ctx.para.color.map { "|\($0.description)" } ?? ""), flags: flags)
         cacheLock.lock()
         if let a = attrsCache[key] { cacheLock.unlock(); return a }
         cacheLock.unlock()
@@ -618,6 +621,13 @@ public final class AttributedStringBuilder: @unchecked Sendable {
             a[.foregroundColor] = color
         }
         if ctx.strike { a[.strikethroughStyle] = NSUnderlineStyle.single.rawValue; a[.strikethroughColor] = a[.foregroundColor] }
+        if ctx.highlight { a[.backgroundColor] = style.highlightBackground }
+        if ctx.underline { a[.underlineStyle] = NSUnderlineStyle.single.rawValue }
+        if ctx.script != 0, let f = a[.font] as? NSFont {
+            let small = NSFont(descriptor: f.fontDescriptor, size: (f.pointSize * 0.72).rounded()) ?? f
+            a[.font] = small
+            a[.baselineOffset] = ctx.script > 0 ? f.pointSize * 0.35 : -f.pointSize * 0.15
+        }
         if ctx.link != nil {
             a[.cursor] = NSCursor.pointingHand
             if style.options.linkUnderline { a[.underlineStyle] = NSUnderlineStyle.single.rawValue }
@@ -671,6 +681,14 @@ public final class AttributedStringBuilder: @unchecked Sendable {
             else { appendRun(raw, into: out, ctx: ctx, muted: true) }
         case .inlineMath(let src):
             appendInlineMath(src, into: out, ctx: ctx)
+        case .highlight(let c):
+            var x = ctx; x.highlight = true; appendInlines(c, into: out, ctx: x)
+        case .underline(let c):
+            var x = ctx; x.underline = true; appendInlines(c, into: out, ctx: x)
+        case .subscript(let c):
+            var x = ctx; x.script = -1; appendInlines(c, into: out, ctx: x)
+        case .superscript(let c):
+            var x = ctx; x.script = 1; appendInlines(c, into: out, ctx: x)
         case .footnoteReference(let label):
             // 用 baselineOffset + 小字号，而不是 legacy 的 .superscript（后者会干扰同一行的删除线绘制）
             var a = ctx.para.base

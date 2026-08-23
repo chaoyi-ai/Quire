@@ -5,6 +5,9 @@ import Foundation
 /// 不认识的标签只保留其文本。
 public enum HTMLToMarkdown {
     public static func convert(_ html: String) -> String {
+        // libxml2 的 HTML 解析器不认 HTML5 的 <mark>，会把它整个丢掉：先改成带标记的 <span>
+        let html = html.replacingOccurrences(of: "<mark\\b", with: "<span data-quire=\"mark\"", options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: "</mark>", with: "</span>", options: [.caseInsensitive])
         guard let data = html.data(using: .utf8),
               let doc = try? XMLDocument(data: data, options: [.documentTidyHTML]) else { return html }
         var w = Writer()
@@ -105,7 +108,12 @@ public enum HTMLToMarkdown {
                 quoteDepth -= 1; blockEnd()
             case "table": table(el)
             case "thead", "tbody", "tfoot", "tr", "td", "th": children(of: el)
-            case "span", "font", "u", "mark", "sup", "sub", "small", "body", "html", "header", "footer", "main", "nav", "figure", "figcaption", "center", "label":
+            case "mark": out += "=="; children(of: el); out += "=="
+            case "span" where el.attribute(forName: "data-quire")?.stringValue == "mark": out += "=="; children(of: el); out += "=="
+            case "sub": out += "~"; children(of: el); out += "~"
+            case "sup": out += "^"; children(of: el); out += "^"
+            case "u": out += "<u>"; children(of: el); out += "</u>"
+            case "span", "font", "small", "body", "html", "header", "footer", "main", "nav", "figure", "figcaption", "center", "label":
                 children(of: el)
             case "script", "style", "head", "meta", "link", "title", "noscript", "svg", "button", "select", "textarea", "form":
                 break

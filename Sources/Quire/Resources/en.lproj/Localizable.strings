@@ -179,3 +179,4 @@
 "打开文件夹…" = "Open Folder…";
 "打开" = "Open";
 "选择一个文件夹：打开其中的 README / 第一篇 Markdown，并在侧栏显示整个目录" = "Choose a folder: opens its README / first Markdown file and shows the whole folder in the sidebar";
+"扩展语法（非标准，默认关）" = "Extended syntax (non-standard, off by default)";

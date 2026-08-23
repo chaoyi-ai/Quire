@@ -30,6 +30,7 @@ final class Preferences: ObservableObject {
         static let toc = "parser.toc"
         static let smart = "parser.smartPunctuation"
         static let headingNumbers = "render.headingNumbers"
+        static let extHighlight = "parser.ext.highlight", extSub = "parser.ext.subscript", extSup = "parser.ext.superscript", extUnderline = "parser.ext.underline", extEmoji = "parser.ext.emoji"
         static let updates = "update.check"
         static let sidebarHidden = "sidebar.showHidden"
         static let sidebarOthers = "sidebar.showOtherFiles"
@@ -67,7 +68,17 @@ final class Preferences: ObservableObject {
     /// 侧栏过滤规则快照（给后台目录扫描用）
     struct SidebarRules: Sendable, Equatable { var showHidden: Bool; var showOthers: Bool; var extraExtensions: Set<String> }
     var sidebarRules: SidebarRules { SidebarRules(showHidden: sidebarShowHidden, showOthers: sidebarShowOtherFiles, extraExtensions: extraExtensionSet) }
-    var parserOptions: MarkdownParser.Options { var o = MarkdownParser.Options(); o.math = mathEnabled; o.toc = tocEnabled; o.smartPunctuation = smartPunctuation; return o }
+    @Published var extHighlight: Bool { didSet { d.set(extHighlight, forKey: Key.extHighlight); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    @Published var extSubscript: Bool { didSet { d.set(extSubscript, forKey: Key.extSub); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    @Published var extSuperscript: Bool { didSet { d.set(extSuperscript, forKey: Key.extSup); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    @Published var extUnderline: Bool { didSet { d.set(extUnderline, forKey: Key.extUnderline); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    @Published var extEmoji: Bool { didSet { d.set(extEmoji, forKey: Key.extEmoji); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    var parserOptions: MarkdownParser.Options {
+        var o = MarkdownParser.Options(); o.math = mathEnabled; o.toc = tocEnabled; o.smartPunctuation = smartPunctuation
+        o.extendedInline.highlight = extHighlight; o.extendedInline.subscriptText = extSubscript; o.extendedInline.superscriptText = extSuperscript
+        o.extendedInline.underline = extUnderline; o.extendedInline.emoji = extEmoji
+        return o
+    }
 
     var editorTypography: EditorTypography {
         EditorTypography(fontFamily: editorFontFamily.isEmpty ? nil : editorFontFamily, fontSize: CGFloat(editorFontSize), lineHeight: CGFloat(editorLineHeight), columnChars: editorColumnChars)
@@ -97,6 +108,8 @@ final class Preferences: ObservableObject {
         tocEnabled = d.bool(forKey: Key.toc)
         smartPunctuation = d.bool(forKey: Key.smart)
         headingNumbers = d.bool(forKey: Key.headingNumbers)
+        extHighlight = d.bool(forKey: Key.extHighlight); extSubscript = d.bool(forKey: Key.extSub); extSuperscript = d.bool(forKey: Key.extSup)
+        extUnderline = d.bool(forKey: Key.extUnderline); extEmoji = d.bool(forKey: Key.extEmoji)
         checkForUpdates = d.bool(forKey: Key.updates)
         sidebarShowHidden = d.bool(forKey: Key.sidebarHidden)
         sidebarShowOtherFiles = d.bool(forKey: Key.sidebarOthers)
@@ -234,6 +247,13 @@ struct PreferencesView: View {
                 Toggle(L("[TOC] 展开为目录"), isOn: $prefs.tocEnabled)
                 Toggle(L("标题自动编号（1 / 1.1 / 1.1.1）"), isOn: $prefs.headingNumbers)
                 Toggle(L("智能标点（弯引号、破折号、省略号）"), isOn: $prefs.smartPunctuation)
+            }
+            Section(L("扩展语法（非标准，默认关）")) {
+                Toggle("==高亮==", isOn: $prefs.extHighlight)
+                Toggle("~下标~  H~2~O", isOn: $prefs.extSubscript)
+                Toggle("^上标^  x^2^", isOn: $prefs.extSuperscript)
+                Toggle("<u>下划线</u>", isOn: $prefs.extUnderline)
+                Toggle(":emoji:  :tada: → 🎉", isOn: $prefs.extEmoji)
                 Toggle(L("代码块显示行号"), isOn: $prefs.codeLineNumbers)
                 Toggle(L("代码块显示复制按钮"), isOn: $prefs.codeCopyButton)
                 Toggle(L("链接显示下划线"), isOn: $prefs.linkUnderline)

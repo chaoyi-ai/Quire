@@ -34,6 +34,11 @@ public indirect enum Inline: Hashable, Sendable {
     case footnoteReference(label: String)
     /// `$…$` 行内数学（Pandoc 规则，后处理产生）
     case inlineMath(String)
+    /// 扩展语法（可选）：`==x==` / `~x~` / `^x^` / `<u>x</u>`
+    case highlight([Inline])
+    case `subscript`([Inline])
+    case superscript([Inline])
+    case underline([Inline])
 
     /// 纯文本（用于标题 id、大纲、辅助功能）
     public var plainText: String {
@@ -46,6 +51,7 @@ public indirect enum Inline: Hashable, Sendable {
         case .html: return ""
         case .footnoteReference(let l): return "[\(l)]"
         case .inlineMath(let s): return s
+        case .highlight(let c), .subscript(let c), .superscript(let c), .underline(let c): return c.plainText
         }
     }
 }

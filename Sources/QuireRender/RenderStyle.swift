@@ -58,6 +58,8 @@ public final class RenderStyle: @unchecked Sendable {
     public let heading: NSColor
     public let border: NSColor
     public let selection: NSColor
+    /// `==高亮==` 的底色（主题 accent 调淡；浅色主题偏黄）
+    public let highlightBackground: NSColor
     public let quoteForeground: NSColor, quoteBorder: NSColor, quoteBackground: NSColor
     public let codeBackground: NSColor, codeForeground: NSColor, inlineCodeBackground: NSColor, inlineCodeForeground: NSColor, codeBorder: NSColor, lineNumber: NSColor
     public let tableHeaderBackground: NSColor, tableStripe: NSColor, tableBorder: NSColor, tableHover: NSColor
@@ -113,6 +115,7 @@ public final class RenderStyle: @unchecked Sendable {
         let c = theme.colors
         background = c.background.nsColor; foreground = c.foreground.nsColor; muted = c.muted.nsColor
         accent = c.accent.nsColor; heading = c.heading.nsColor; border = c.border.nsColor; selection = c.selection.nsColor
+        highlightBackground = (theme.appearance == .dark ? NSColor.systemYellow.withAlphaComponent(0.35) : NSColor.systemYellow.withAlphaComponent(0.45))
         quoteForeground = c.blockquote.foreground.nsColor; quoteBorder = c.blockquote.border.nsColor; quoteBackground = c.blockquote.background.nsColor
         codeBackground = c.code.background.nsColor; codeForeground = c.code.foreground.nsColor
         inlineCodeBackground = c.code.inlineBackground.nsColor; inlineCodeForeground = c.code.inlineForeground.nsColor

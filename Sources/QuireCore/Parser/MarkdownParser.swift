@@ -20,6 +20,8 @@ public struct MarkdownParser: Sendable {
         public var toc = true
         /// 智能标点（cmark `CMARK_OPT_SMART`）：直引号 → 弯引号、`--` → 短破折、`---` → 长破折、`...` → 省略号
         public var smartPunctuation = false
+        /// 扩展行内语法（默认全关）
+        public var extendedInline = ExtendedInlineOptions()
         /// 自动识别裸 URL（http/https/www.）为链接。自研扫描器：遇到 CJK 标点即停止（比 GFM autolink 更适合中文文本）
         public var autolink = true
         /// 脚注 `[^1]`
@@ -58,6 +60,7 @@ public struct MarkdownParser: Sendable {
             if let ext = cmark_find_syntax_extension(name) { cmark_parser_attach_syntax_extension(parser, ext) }
         }
         var ctx = Context(options: options, lineOffset: lineOffset)
+        ctx.fullSource = source
         // 只有源码里出现 `$$` 才做数学块相关的额外工作（按行切分 1 MB 要 ~40 ms，绝大多数文档用不上）
         let hasDisplayMath = options.math && source.utf8.withContiguousStorageIfAvailable { buf -> Bool in
             guard buf.count >= 2 else { return false }
@@ -257,6 +260,22 @@ public struct MarkdownParser: Sendable {
         }
 
         var sourceLines: [Substring] = []
+        var fullSource: String = ""
+        var lazyLines: [Substring]?
+        /// 按需切行（只在需要看原文的扩展语法路径上用）
+        mutating func line(_ n: Int) -> Substring? {
+            if lazyLines == nil { lazyLines = sourceLines.isEmpty ? fullSource.split(separator: "\n", omittingEmptySubsequences: false) : sourceLines }
+            guard let ls = lazyLines, n >= 1, n <= ls.count else { return nil }
+            return ls[n - 1]
+        }
+        /// `~x~`（单波浪线）在 GFM 里也是删除线；下标选项开着时按原文区分：开头是 `~~` 才算删除线
+        mutating func isSingleTilde(_ n: UnsafeMutablePointer<cmark_node>) -> Bool {
+            guard let r = range(n), let l = line(r.start.line) else { return false }
+            let u = Array(l.utf8)
+            let col = r.start.column - 1
+            guard col >= 0, col < u.count, u[col] == 0x7E else { return false }
+            return !(col + 1 < u.count && u[col + 1] == 0x7E)
+        }
 
         /// 段落原文（按行范围取，不经 cmark 的转义 / 强调解析）是否是 `$$ … $$`
         func mathBlock(lines: ClosedRange<Int>) -> String? {
@@ -272,7 +291,7 @@ public struct MarkdownParser: Sendable {
             var out: [Inline] = []
             var child = cmark_node_first_child(n)
             while let c = child { convertInline(c, into: &out); child = cmark_node_next(c) }
-            return out
+            return options.extendedInline.any ? ExtendedInline.apply(out, options: options.extendedInline) : out
         }
 
         mutating func convertInline(_ n: UnsafeMutablePointer<cmark_node>, into out: inout [Inline]) {
@@ -303,7 +322,10 @@ public struct MarkdownParser: Sendable {
             case CMARK_NODE_CUSTOM_INLINE:
                 out.append(contentsOf: convertInlines(n))
             default:
-                if typeString(n) == "strikethrough" { out.append(.strikethrough(convertInlines(n))) }
+                if typeString(n) == "strikethrough" {
+                    if options.extendedInline.subscriptText, isSingleTilde(n) { out.append(.subscript(convertInlines(n))) }
+                    else { out.append(.strikethrough(convertInlines(n))) }
+                }
                 else { out.append(contentsOf: convertInlines(n)) }
             }
         }

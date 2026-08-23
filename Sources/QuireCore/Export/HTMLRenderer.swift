@@ -124,7 +124,7 @@ public struct HTMLRenderer: Sendable {
             xs.contains { i in
                 switch i {
                 case .inlineMath: return true
-                case .emphasis(let c), .strong(let c), .strikethrough(let c), .link(_, _, let c): return inl(c)
+                case .emphasis(let c), .strong(let c), .strikethrough(let c), .link(_, _, let c), .highlight(let c), .subscript(let c), .superscript(let c), .underline(let c): return inl(c)
                 default: return false
                 }
             }
@@ -249,6 +249,10 @@ public struct HTMLRenderer: Sendable {
         case .html(let raw): return raw
         case .footnoteReference(let label): return "<sup class=\"fn\"><a href=\"#fn-\(esc(label))\">\(esc(label))</a></sup>"
         case .inlineMath(let src): return "<span class=\"math\">\\(\(esc(src))\\)</span>"
+        case .highlight(let c): return "<mark>\(inlines(c))</mark>"
+        case .subscript(let c): return "<sub>\(inlines(c))</sub>"
+        case .superscript(let c): return "<sup>\(inlines(c))</sup>"
+        case .underline(let c): return "<u>\(inlines(c))</u>"
         }
     }
 
