@@ -14,6 +14,8 @@ public struct MarkdownParser: Sendable {
         public var promoteStandaloneImages = true
         /// 把 ```mermaid 围栏识别为 `.mermaid`
         public var mermaid = true
+        /// `$$…$$` 段落 → `.math`；`$…$`（Pandoc 规则：开头 `$` 后无空白、结尾 `$` 前无空白且后面不是数字）→ `.inlineMath`
+        public var math = true
         /// 自动识别裸 URL（http/https/www.）为链接。自研扫描器：遇到 CJK 标点即停止（比 GFM autolink 更适合中文文本）
         public var autolink = true
         /// 脚注 `[^1]`
@@ -51,8 +53,18 @@ public struct MarkdownParser: Sendable {
             if let ext = cmark_find_syntax_extension(name) { cmark_parser_attach_syntax_extension(parser, ext) }
         }
         var ctx = Context(options: options, lineOffset: lineOffset)
-        body.withCString { cstr in
-            cmark_parser_feed(parser, cstr, strlen(cstr))
+        // 只有源码里出现 `$$` 才做数学块相关的额外工作（按行切分 1 MB 要 ~40 ms，绝大多数文档用不上）
+        let hasDisplayMath = options.math && source.utf8.withContiguousStorageIfAvailable { buf -> Bool in
+            guard buf.count >= 2 else { return false }
+            for i in 0..<(buf.count - 1) where buf[i] == 0x24 && buf[i + 1] == 0x24 { return true }
+            return false
+        } ?? source.contains("$$")
+        if hasDisplayMath { ctx.sourceLines = source.split(separator: "\n", omittingEmptySubsequences: false) }
+        // `$$` 独占行的数学块先改写成 ```math 围栏再喂 cmark：否则块内的 `=` / `-` 行会被当 setext 标题、`\` 会被转义。行数不变，源码位置照旧。
+        if hasDisplayMath {
+            InlineMath.rewriteDisplayBlocks(String(body)).withCString { cstr in cmark_parser_feed(parser, cstr, strlen(cstr)) }
+        } else {
+            body.withCString { cstr in cmark_parser_feed(parser, cstr, strlen(cstr)) }
         }
         if let root = cmark_parser_finish(parser) {
             var child = cmark_node_first_child(root)
@@ -113,6 +125,9 @@ public struct MarkdownParser: Sendable {
                 return [Block(kind: .heading(level: Int(cmark_node_get_heading_level(n)), inlines: inlines, id: id), sourceRange: r)]
 
             case CMARK_NODE_PARAGRAPH:
+                if options.math, !sourceLines.isEmpty, let r, let math = mathBlock(lines: r.start.line...r.end.line) {
+                    return [Block(kind: .math(math), sourceRange: r)]
+                }
                 let inlines = convertInlines(n)
                 if options.promoteStandaloneImages, inlines.count == 1,
                    case .image(let src, let title, let alt) = inlines[0] {
@@ -126,6 +141,10 @@ public struct MarkdownParser: Sendable {
                 if code.hasSuffix("\n") { code.removeLast() }
                 if options.mermaid, info?.lowercased() == "mermaid" {
                     return [Block(kind: .mermaid(source: code), sourceRange: r)]
+                }
+                if options.math, info?.lowercased() == "math" {   // 自己改写的 `$$` 块，或 GitLab 风格的 ```math
+                    let src = code.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return src.isEmpty ? [] : [Block(kind: .math(src), sourceRange: r)]
                 }
                 return [Block(kind: .codeBlock(language: (info?.isEmpty ?? true) ? nil : info, code: code), sourceRange: r)]
 
@@ -198,6 +217,18 @@ public struct MarkdownParser: Sendable {
             return TableModel(alignments: aligns, header: header, rows: rows)
         }
 
+        var sourceLines: [Substring] = []
+
+        /// 段落原文（按行范围取，不经 cmark 的转义 / 强调解析）是否是 `$$ … $$`
+        func mathBlock(lines: ClosedRange<Int>) -> String? {
+            guard lines.lowerBound >= 1, lines.upperBound <= sourceLines.count else { return nil }
+            let raw = sourceLines[(lines.lowerBound - 1)...(lines.upperBound - 1)].joined(separator: "\n")
+            let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard t.hasPrefix("$$"), t.hasSuffix("$$"), t.count >= 4 else { return nil }
+            let inner = t.dropFirst(2).dropLast(2).trimmingCharacters(in: .whitespacesAndNewlines)
+            return inner.isEmpty ? nil : inner
+        }
+
         mutating func convertInlines(_ n: UnsafeMutablePointer<cmark_node>) -> [Inline] {
             var out: [Inline] = []
             var child = cmark_node_first_child(n)
@@ -209,7 +240,11 @@ public struct MarkdownParser: Sendable {
             switch cmark_node_get_type(n) {
             case CMARK_NODE_TEXT:
                 let s = literal(n)
-                if options.autolink { Autolink.scan(s, into: &out) } else { out.append(.text(s)) }
+                if options.math, s.utf8.contains(0x24) {   // 有 $ 才切行内数学（1 MB 文档十万个文本节点，不能每个都走 String.contains）
+                    for piece in InlineMath.split(s) {
+                        if case .text(let t) = piece, options.autolink { Autolink.scan(t, into: &out) } else { out.append(piece) }
+                    }
+                } else if options.autolink { Autolink.scan(s, into: &out) } else { out.append(.text(s)) }
             case CMARK_NODE_EMPH: out.append(.emphasis(convertInlines(n)))
             case CMARK_NODE_STRONG: out.append(.strong(convertInlines(n)))
             case CMARK_NODE_CODE: out.append(.code(literal(n)))

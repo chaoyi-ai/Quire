@@ -32,6 +32,8 @@ public indirect enum Inline: Hashable, Sendable {
     case html(String)
     /// `[^label]` 脚注引用（后处理产生）
     case footnoteReference(label: String)
+    /// `$…$` 行内数学（Pandoc 规则，后处理产生）
+    case inlineMath(String)
 
     /// 纯文本（用于标题 id、大纲、辅助功能）
     public var plainText: String {
@@ -43,6 +45,7 @@ public indirect enum Inline: Hashable, Sendable {
         case .softBreak, .lineBreak: return " "
         case .html: return ""
         case .footnoteReference(let l): return "[\(l)]"
+        case .inlineMath(let s): return s
         }
     }
 }
@@ -85,6 +88,8 @@ public indirect enum BlockKind: Hashable, Sendable {
     case image(source: String?, title: String?, alt: String)
     case frontMatter(String)
     case footnoteDefinition(label: String, blocks: [Block])
+    /// `$$ … $$` 数学块（LaTeX）
+    case math(String)
 }
 
 /// 块 = 类型 + 源码范围。**相等性与哈希只看内容**，不看位置，以便增量 diff 识别"未变化但移动了"的块。

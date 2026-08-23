@@ -15,7 +15,7 @@ final class ParserTests: XCTestCase {
             switch b.kind {
             case .frontMatter: "frontMatter"; case .heading(let l, _, _): "h\(l)"; case .paragraph: "p"
             case .codeBlock: "code"; case .mermaid: "mermaid"; case .blockQuote: "quote"; case .list(let o, _, _): o ? "ol" : "ul"
-            case .table: "table"; case .thematicBreak: "hr"; case .html: "html"; case .image: "img"; case .footnoteDefinition: "fn"
+            case .table: "table"; case .thematicBreak: "hr"; case .html: "html"; case .image: "img"; case .footnoteDefinition: "fn"; case .math: "math"
             }
         }
         XCTAssertEqual(kinds, ["frontMatter", "h1", "p", "h2", "ul", "ol", "h2", "quote", "h2", "code", "mermaid", "h2", "table", "hr", "img", "html", "h2", "h2"])

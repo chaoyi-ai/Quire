@@ -45,6 +45,7 @@ public struct HTMLRenderer: Sendable {
         \(body)
         </article>
         \(options.includeMermaidScript && doc.blocks.contains(where: { if case .mermaid = $0.kind { true } else { false } }) ? mermaidScript : "")
+        \(options.includeMermaidScript && Self.containsMath(doc) ? mathJaxScript : "")
         </body>
         </html>
         """
@@ -111,6 +112,38 @@ public struct HTMLRenderer: Sendable {
     }
     public static let mermaidVersion = "11.16.1"
 
+    /// 导出的 HTML 里数学交给 MathJax（CDN），与 Mermaid 同一开关
+    private var mathJaxScript: String {
+        """
+        <script>window.MathJax = { tex: { inlineMath: [["\\\\(", "\\\\)"]], displayMath: [["\\\\[", "\\\\]"]] } };</script>
+        <script async src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-svg.js"></script>
+        """
+    }
+    static func containsMath(_ doc: Document) -> Bool {
+        func inl(_ xs: [Inline]) -> Bool {
+            xs.contains { i in
+                switch i {
+                case .inlineMath: return true
+                case .emphasis(let c), .strong(let c), .strikethrough(let c), .link(_, _, let c): return inl(c)
+                default: return false
+                }
+            }
+        }
+        func blk(_ bs: [Block]) -> Bool {
+            bs.contains { b in
+                switch b.kind {
+                case .math: return true
+                case .paragraph(let i), .heading(_, let i, _): return inl(i)
+                case .blockQuote(let c), .footnoteDefinition(_, let c): return blk(c)
+                case .list(_, _, let items): return items.contains { blk($0.blocks) }
+                case .table(let t): return ([t.header] + t.rows).contains { $0.contains(where: inl) }
+                default: return false
+                }
+            }
+        }
+        return blk(doc.blocks)
+    }
+
     // MARK: - Blocks
 
     func block(_ b: Block) -> String {
@@ -124,6 +157,8 @@ public struct HTMLRenderer: Sendable {
             return "<pre><code\(cls)>\(highlighted(code, language: lang))</code></pre>\n"
         case .mermaid(let src):
             return "<pre class=\"mermaid\">\(esc(src))</pre>\n"
+        case .math(let src):
+            return "<div class=\"math\">\\[\(esc(src))\\]</div>\n"
         case .html(let raw):
             return raw + "\n"
         case .frontMatter(let yaml):
@@ -213,6 +248,7 @@ public struct HTMLRenderer: Sendable {
         case .lineBreak: return "<br>\n"
         case .html(let raw): return raw
         case .footnoteReference(let label): return "<sup class=\"fn\"><a href=\"#fn-\(esc(label))\">\(esc(label))</a></sup>"
+        case .inlineMath(let src): return "<span class=\"math\">\\(\(esc(src))\\)</span>"
         }
     }
 

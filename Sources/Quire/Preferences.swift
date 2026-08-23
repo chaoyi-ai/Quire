@@ -26,6 +26,7 @@ final class Preferences: ObservableObject {
         static let readerBodyFont = "reader.bodyFontFamily"
         static let readerCodeFont = "reader.codeFontFamily"
         static let readerFontSize = "reader.baseFontSize"
+        static let math = "parser.math"
     }
 
     @Published var codeLineNumbers: Bool { didSet { d.set(codeLineNumbers, forKey: Key.codeLineNumbers); ThemeManager.shared.refresh() } }
@@ -46,6 +47,9 @@ final class Preferences: ObservableObject {
     @Published var readerCodeFontFamily: String { didSet { d.set(readerCodeFontFamily, forKey: Key.readerCodeFont); ThemeManager.shared.refresh() } }
     @Published var readerBaseFontSize: Int { didSet { d.set(readerBaseFontSize, forKey: Key.readerFontSize); ThemeManager.shared.refresh() } }
 
+    @Published var mathEnabled: Bool { didSet { d.set(mathEnabled, forKey: Key.math); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    var parserOptions: MarkdownParser.Options { var o = MarkdownParser.Options(); o.math = mathEnabled; return o }
+
     var editorTypography: EditorTypography {
         EditorTypography(fontFamily: editorFontFamily.isEmpty ? nil : editorFontFamily, fontSize: CGFloat(editorFontSize), lineHeight: CGFloat(editorLineHeight), columnChars: editorColumnChars)
     }
@@ -53,7 +57,7 @@ final class Preferences: ObservableObject {
     static let didChange = Notification.Name("com.korako.quire.preferencesDidChange")
 
     private init() {
-        d.register(defaults: [Key.codeCopyButton: true, Key.autoReload: true, Key.editorLineNumbers: true, Key.largeFileMB: 8, Key.wordCount: true, Key.hangingMarkers: true, Key.htmlPaste: true, Key.editorLineHeight: 1.35])
+        d.register(defaults: [Key.codeCopyButton: true, Key.autoReload: true, Key.editorLineNumbers: true, Key.largeFileMB: 8, Key.wordCount: true, Key.hangingMarkers: true, Key.htmlPaste: true, Key.editorLineHeight: 1.35, Key.math: true])
         codeLineNumbers = d.bool(forKey: Key.codeLineNumbers)
         codeCopyButton = d.bool(forKey: Key.codeCopyButton)
         linkUnderline = d.bool(forKey: Key.linkUnderline)
@@ -70,6 +74,7 @@ final class Preferences: ObservableObject {
         readerBodyFontFamily = d.string(forKey: Key.readerBodyFont) ?? ""
         readerCodeFontFamily = d.string(forKey: Key.readerCodeFont) ?? ""
         readerBaseFontSize = d.integer(forKey: Key.readerFontSize)
+        mathEnabled = d.bool(forKey: Key.math)
     }
 
     var renderOptions: RenderOptions {
@@ -185,6 +190,7 @@ struct PreferencesView: View {
                     Text(L("跟随主题")).tag(0)
                     ForEach([13, 14, 15, 16, 17, 18, 19, 20, 22, 24], id: \.self) { Text("\($0) pt").tag($0) }
                 }
+                Toggle(L("数学公式（$$…$$ 块与 $…$ 行内，LaTeX）"), isOn: $prefs.mathEnabled)
                 Toggle(L("代码块显示行号"), isOn: $prefs.codeLineNumbers)
                 Toggle(L("代码块显示复制按钮"), isOn: $prefs.codeCopyButton)
                 Toggle(L("链接显示下划线"), isOn: $prefs.linkUnderline)

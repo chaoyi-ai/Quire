@@ -14,6 +14,8 @@ let package = Package(
     dependencies: [
         // cmark-gfm（GitHub 生产级 C 实现，Apple 维护的 fork）。直接走 C API，见 ADR-2 / ADR-12。
         // gfm 分支无 semver tag，按 revision 锁定（与 swift-markdown swift-6.3.3-RELEASE 所用一致）
+        // SwiftMath（iosMath 的 Swift 移植，MIT）：LaTeX 数学 → CoreText/CoreGraphics 原生绘制，不用 WebView。见 ADR-15。
+        .package(url: "https://github.com/mgriebling/SwiftMath.git", exact: "1.7.3"),
         .package(
             url: "https://github.com/swiftlang/swift-cmark.git",
             revision: "7898f1b3e4befeecee56cb4a3bc8eebd2cb63219"
@@ -37,7 +39,7 @@ let package = Package(
         // AppKit 渲染层：Block → NSAttributedString · TextKit 2 视图 · 附件 · Mermaid · 图片
         .target(
             name: "QuireRender",
-            dependencies: ["QuireCore", "CQuireAttr"],
+            dependencies: ["QuireCore", "CQuireAttr", .product(name: "SwiftMath", package: "SwiftMath")],
             resources: [.copy("Resources/Mermaid"), .process("Resources/Localizable")]
         ),
         // App 壳

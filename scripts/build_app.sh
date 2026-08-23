@@ -30,9 +30,14 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Quire"
 # SwiftPM 资源 bundle（主题、Mermaid 壳）
-for b in "$BUILD_DIR"/Quire_*.bundle; do
+for b in "$BUILD_DIR"/Quire_*.bundle "$BUILD_DIR"/SwiftMath_SwiftMath.bundle; do
   [ -d "$b" ] && cp -R "$b" "$APP/Contents/Resources/"
 done
+# SwiftMath 带 11 套数学字体（7 MB）；只留默认的 Latin Modern（0.7 MB），体积预算 < 10 MB
+MATHFONTS="$APP/Contents/Resources/SwiftMath_SwiftMath.bundle/mathFonts.bundle"
+if [ -d "$MATHFONTS" ]; then
+  find "$MATHFONTS" -type f ! -name 'latinmodern-math.*' ! -name 'Info.plist' -delete
+fi
 cp assets/Info.plist "$APP/Contents/Info.plist"
 # 主 bundle 的语言目录：AppKit 按这里决定系统面板 / 标准菜单项的语言（字符串本身在 Quire_*.bundle 里）
 for loc in zh-Hans en; do

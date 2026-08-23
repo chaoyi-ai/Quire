@@ -143,3 +143,4 @@
 "正文字体" = "Body font";
 "代码字体" = "Code font";
 "基础字号" = "Base size";
+"数学公式（$$…$$ 块与 $…$ 行内，LaTeX）" = "Math ($$…$$ blocks and $…$ inline, LaTeX)";

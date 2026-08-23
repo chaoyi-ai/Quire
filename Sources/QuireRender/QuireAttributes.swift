@@ -28,6 +28,7 @@ public enum BlockRole: Int, Sendable {
     case table
     case mermaid
     case listItem
+    case math
 }
 
 /// 代码块内换行使用 U+2028（行分隔符），使整个代码块保持为一个段落 → 一个布局片段 → 一块背景。

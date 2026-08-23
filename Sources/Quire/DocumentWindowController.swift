@@ -379,7 +379,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         func block(_ b: Block) -> String {
             switch b.kind {
             case .heading(_, let i, _), .paragraph(let i): return i.plainText
-            case .codeBlock(_, let code), .mermaid(let code), .html(let code), .frontMatter(let code): return code
+            case .codeBlock(_, let code), .mermaid(let code), .html(let code), .frontMatter(let code), .math(let code): return code
             case .blockQuote(let bs), .footnoteDefinition(_, let bs): return blocks(bs)
             case .list(let ordered, let start, let items):
                 return items.enumerated().map { (k, it) in (ordered ? "\(start + k). " : "• ") + blocks(it.blocks) }.joined(separator: "\n")

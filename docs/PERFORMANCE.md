@@ -19,6 +19,7 @@
 | 编辑器单次击键（1 MB：行索引重建 + 段落增量高亮） | < 8 ms | `quire-bench views`（`view/editor-keystroke-1mb`） |
 | 字数统计（1 MB，后台，与解析同一趟） | < 5 ms | `quire-bench render`（`stats/large-1mb`） |
 | 全局搜索（1000 个文件 / 50 MB，子串） | 首批结果 < 300 ms，全扫 < 1 s | `ContentSearchTests.testThroughput50MB` |
+| 数学（200 个公式，解析 + 渲染，缓存命中） | < 120 ms（冷 ≈ 60 ms，热 ≈ 2 ms） | `quire-bench render`（`render/math-200`） |
 | 快速打开索引（10k 文件整树扫描，后台） | < 200 ms | 手测（`FileIndex.scan`） |
 | 代码高亮吞吐 | > 20 MB/s | `quire-bench highlight` |
 | 滚动 | 60 fps，无掉帧 | Instruments Animation Hitches |
@@ -36,7 +37,7 @@
 3. **零空闲开销。** 不用 `Timer` 轮询；文件监控用 `DispatchSource`；主题目录监听同理；Mermaid WebView 用完销毁。
 4. **内存有上限。** 图片缓存 `NSCache` 64 MB；Mermaid 磁盘缓存 200 MB LRU；渲染块缓存只保留当前文档。
 5. **进程数 = 1。** 除 Mermaid 渲染期间的 WebKit 辅助进程外，不启动任何子进程 / XPC。
-6. **依赖最小化。** 运行时依赖只有 cmark-gfm。每加一个依赖需要在 DESIGN.md ADR 中说明。
+6. **依赖最小化。** 运行时依赖只有 cmark-gfm 与 SwiftMath（ADR-15）。每加一个依赖需要在 DESIGN.md ADR 中说明。
 7. **测量而非猜测。** 每个性能相关 PR 附 `quire-bench` 前后对比。
 
 ## 3. 禁止事项

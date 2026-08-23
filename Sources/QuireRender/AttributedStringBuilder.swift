@@ -86,6 +86,8 @@ public final class AttributedStringBuilder: @unchecked Sendable {
             appendParagraph(inlines, into: out, ctx: ctx)
         case .codeBlock(let lang, let code):
             appendCode(code, language: lang, role: .codeBlock, into: out, ctx: ctx)
+        case .math(let source):
+            appendMathBlock(source, into: out, ctx: ctx)
         case .mermaid(let source):
             if MermaidRenderer.isAvailable, !style.options.largeFile { appendMermaid(source, into: out, ctx: ctx) }
             else { appendCode(source, language: "mermaid", role: .codeBlock, into: out, ctx: ctx) }
@@ -407,6 +409,56 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         appendRun("\n", into: out, ctx: InlineContext(para: para))
     }
 
+    /// 数学块：SwiftMath 同步渲染成图，居中一行；大文件模式或渲染失败 → 源码（等宽）+ 错误
+    private func appendMathBlock(_ source: String, into out: NSMutableAttributedString, ctx: BlockContext) {
+        let psKey = "math-\(ctx.indent)"
+        let ps = paragraphStyle(key: psKey) { p in
+            p.alignment = .center
+            p.paragraphSpacing = style.paragraphSpacing
+            p.paragraphSpacingBefore = 4
+            p.headIndent = ctx.indent; p.firstLineHeadIndent = ctx.indent
+        }
+        let para = paragraphContext(role: .math, psKey: psKey, ps: ps, ctx: ctx)
+        var err: String?
+        if !style.options.largeFile, let r = MathRenderer.render(source, fontSize: style.baseSize * 1.15, color: style.foreground, display: true, error: &err) {
+            let att = MathAttachment(latex: source, isDisplay: true)
+            let img = r.image.value
+            img.accessibilityDescription = RL("数学公式") + " " + source
+            att.image = img
+            let maxW = max(200, style.maxContentWidth > 0 ? style.maxContentWidth : 760) - ctx.indent
+            var size = img.size
+            if size.width > maxW { size.height *= maxW / size.width; size.width = maxW }
+            att.bounds = CGRect(x: 0, y: 0, width: size.width.rounded(), height: size.height.rounded())
+            var a = para.base
+            a[.font] = style.bodyFont
+            a[.attachment] = att
+            out.append(NSAttributedString(string: "\u{FFFC}", attributes: a))
+            appendRun("\n", into: out, ctx: InlineContext(para: para))
+        } else {
+            // 退路：源码按代码块显示，失败时尾部带错误
+            appendCode(err.map { "\(source)\n% " + String(format: RL("公式错误：%@"), $0) } ?? source, language: "latex", role: .codeBlock, into: out, ctx: ctx)
+        }
+    }
+
+    /// 行内数学：按基线对齐的小图；失败显示 `$…$` 原文
+    private func appendInlineMath(_ source: String, into out: NSMutableAttributedString, ctx: InlineContext) {
+        var err: String?
+        let font = font(for: ctx)
+        guard !style.options.largeFile, let r = MathRenderer.render(source, fontSize: font.pointSize, color: ctx.para.color ?? style.foreground, display: false, error: &err) else {
+            appendRun("$\(source)$", into: out, ctx: ctx, inlineCode: true)
+            return
+        }
+        let att = MathAttachment(latex: source, isDisplay: false)
+        let img = r.image.value
+        img.accessibilityDescription = source
+        att.image = img
+        att.bounds = CGRect(x: 0, y: -r.descent, width: img.size.width.rounded(), height: img.size.height.rounded())
+        var a = ctx.para.base
+        a[.font] = font
+        a[.attachment] = att
+        out.append(NSAttributedString(string: "\u{FFFC}", attributes: a))
+    }
+
     /// 图片附件：占位尺寸，实际图片由 ImageLoader 异步填充
     private func appendImageAttachment(source: String?, alt: String, inline: Bool, into out: NSMutableAttributedString, ctx: InlineContext) {
         let att = ImageAttachment()
@@ -555,6 +607,8 @@ public final class AttributedStringBuilder: @unchecked Sendable {
             // 行内 HTML：常见 <br> 换行，其他原样弱化显示
             if raw.lowercased().hasPrefix("<br") { appendRun("\u{2028}", into: out, ctx: ctx) }
             else { appendRun(raw, into: out, ctx: ctx, muted: true) }
+        case .inlineMath(let src):
+            appendInlineMath(src, into: out, ctx: ctx)
         case .footnoteReference(let label):
             // 用 baselineOffset + 小字号，而不是 legacy 的 .superscript（后者会干扰同一行的删除线绘制）
             var a = ctx.para.base

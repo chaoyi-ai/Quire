@@ -85,6 +85,10 @@ func runRender() {
     measure("stats/large-1mb", bytes: large.utf8.count) { _ = TextStats.compute(large) }
     let renderer = DocumentRenderer(theme: light)
     measure("render/large-1mb", bytes: large.utf8.count) { _ = renderer.render(doc) }
+    // 数学：200 个公式（一半块级一半行内）的解析 + 渲染，SwiftMath 缓存每轮清不掉 → 用不同字号绕开缓存不现实，这里测的是缓存命中后的装配成本 + 首轮真实渲染
+    let mathDoc = (0..<100).map { i in "段落 \(i) 行内 $x_{\(i)}^2 + \\frac{a}{b}$ 公式\n\n$$\n\\int_0^{\(i)} e^{-t}\\,dt = 1 - e^{-\(i)}\n$$\n" }.joined(separator: "\n")
+    let mathParsed = parser.parse(mathDoc)
+    measure("render/math-200", bytes: mathDoc.utf8.count) { _ = renderer.render(mathParsed) }
     measure("full/large-1mb (parse+render)", bytes: large.utf8.count) { _ = renderer.render(parser.parse(large)) }
     let docMedium = parser.parse(medium)
     measure("full/medium-200k", bytes: medium.utf8.count) { _ = renderer.render(parser.parse(medium)) }

@@ -15,3 +15,5 @@
 "链接文字" = "link text";
 "表格，%d 行 %d 列" = "Table, %d rows by %d columns";
 "Mermaid 图" = "Mermaid diagram";
+"数学公式" = "Math formula";
+"公式错误：%@" = "Formula error: %@";

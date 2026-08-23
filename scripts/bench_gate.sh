@@ -19,9 +19,11 @@ budgets_ms = {  # 与 docs/PERFORMANCE.md §1 保持一致
     "view/editor-keystroke-1mb": 8,
     "view/editor-keystroke-focus-1mb": 8,
     "stats/large-1mb": 5,
+    "render/math-200": 120,
 }
 budgets_mbps = {"highlight/swift": 20, "highlight/javascript": 20, "highlight/python": 20}
-data = json.load(open(path))
+txt = open(path).read()
+data = json.loads(txt[txt.index("{\n"):])   # SwiftMath 注册字体时会往 stdout 打一行日志，跳过 JSON 之前的杂项
 results = {r["name"]: r for r in data["results"]}
 fail = False
 for name, budget in budgets_ms.items():

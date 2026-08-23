@@ -28,7 +28,8 @@ final class DocumentSession {
     var onStats: ((TextStats) -> Void)?
     private(set) var stats = TextStats()
 
-    private let parser = MarkdownParser()
+    private var parser = MarkdownParser(options: Preferences.shared.parserOptions)
+    nonisolated(unsafe) private var prefsObserver: NSObjectProtocol?
 
     init(document: MarkdownDocument) {
         self.document = document
@@ -36,10 +37,21 @@ final class DocumentSession {
         themeObserver = NotificationCenter.default.addObserver(forName: ThemeManager.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.themeDidChange() }
         }
+        prefsObserver = NotificationCenter.default.addObserver(forName: Preferences.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let o = Preferences.shared.parserOptions
+                if o.math != self.parser.options.math {   // 解析选项变了：重解析
+                    self.parser = MarkdownParser(options: o)
+                    self.sourceDidChange(self.source, reason: .externalChange)
+                }
+            }
+        }
     }
 
     deinit {
         if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
+        if let prefsObserver { NotificationCenter.default.removeObserver(prefsObserver) }
     }
 
     // MARK: - 输入
