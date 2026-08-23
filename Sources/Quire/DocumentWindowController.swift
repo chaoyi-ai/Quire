@@ -402,6 +402,13 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         QuickOpenPanel.present(for: root, over: window) { url in FileOpener.open([url]) }
     }
 
+    /// 全局搜索 ⌘⇧F：侧栏顶部搜索框，根目录内全文搜索
+    @objc func showGlobalSearch(_ sender: Any?) {
+        if isImmersive { exitImmersive(restoreFullScreen: false) }
+        if splitViewController.splitViewItems.first?.isCollapsed == true { toggleSidebar(nil) }
+        sidebarViewController.showSearch()
+    }
+
     @objc func revealInSidebar(_ sender: Any?) {
         if splitViewController.splitViewItems.first?.isCollapsed == true { toggleSidebar(nil) }
         sidebarViewController.revealCurrent()

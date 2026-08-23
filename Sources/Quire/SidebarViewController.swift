@@ -5,13 +5,14 @@ import QuireRender
 /// 侧栏节点：文件夹 / 文件 / 标题。子节点懒加载。
 @MainActor
 final class SidebarNode {
-    enum Kind { case folder, file, heading }
+    enum Kind { case folder, file, heading, hit }   // hit = 全局搜索命中行
     let kind: Kind
     let url: URL?                 // folder / file
     var name: String
     var level = 0                 // heading
     var line: Int?                // heading（其他文件用行号跳转；当前文件用 blockIndex）
     var blockIndex: Int?
+    var hitRange: NSRange?        // hit：命中在 name 里的范围
     var children: [SidebarNode]?  // nil = 未加载
     var isLoading = false
     var onLoaded: [@MainActor @Sendable () -> Void] = []   // 加载完成后的回调（可能在加载中被多次请求）
@@ -42,6 +43,14 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     private var scrollView: NSScrollView!
     private var pathControl: NSPathControl!
     private var emptyLabel: NSTextField!
+    // 全局搜索
+    private var searchField: NSSearchField!
+    private var searchFieldHeight: NSLayoutConstraint!
+    private var searchRoot: SidebarNode?
+    private var searchWork: DispatchWorkItem?
+    private var activeSearch: ContentSearch?
+    private let searchQueue = DispatchQueue(label: "com.korako.quire.search", qos: .userInitiated)
+    private var isSearching: Bool { searchRoot != nil }
     private var watcher: FolderWatcher?
     private var suppressSelection = false
     private var headingCache: [URL: (mtime: Date, headings: [HeadingScanner.Heading])] = [:]
@@ -94,6 +103,18 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         pathControl.translatesAutoresizingMaskIntoConstraints = false
         pathControl.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
+        searchField = NSSearchField()
+        searchField.placeholderString = L("搜索文件内容…")
+        searchField.controlSize = .small
+        searchField.font = .systemFont(ofSize: 12)
+        searchField.target = self
+        searchField.action = #selector(searchChanged(_:))
+        searchField.sendsSearchStringImmediately = false
+        searchField.sendsWholeSearchString = false
+        searchField.delegate = self
+        searchField.translatesAutoresizingMaskIntoConstraints = false
+        searchField.isHidden = true
+
         emptyLabel = NSTextField(wrappingLabelWithString: L("存储文档后显示所在文件夹的文件树"))
         emptyLabel.textColor = .tertiaryLabelColor
         emptyLabel.font = .systemFont(ofSize: 12)
@@ -105,16 +126,22 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         container.blendingMode = .behindWindow
         container.state = .followsWindowActiveState
         container.addSubview(pathControl)
+        container.addSubview(searchField)
         container.addSubview(scrollView)
         container.addSubview(emptyLabel)
+        searchFieldHeight = searchField.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
             pathControl.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
             pathControl.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
             pathControl.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor, constant: 8),
             pathControl.heightAnchor.constraint(equalToConstant: 22),
+            searchField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
+            searchField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
+            searchField.topAnchor.constraint(equalTo: pathControl.bottomAnchor, constant: 6),
+            searchFieldHeight,
             scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: pathControl.bottomAnchor, constant: 6),
+            scrollView.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 6),
             scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             emptyLabel.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             emptyLabel.centerYAnchor.constraint(equalTo: container.centerYAnchor),
@@ -283,7 +310,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
                     self.fireLoaded(node)
                 }
             }
-        case .heading:
+        case .heading, .hit:
             node.isLoading = false
             node.children = []
             fireLoaded(node)
@@ -396,6 +423,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         if let last = lastActivation, last.0 == ObjectIdentifier(node), now - last.1 < 0.1 { return }
         lastActivation = (ObjectIdentifier(node), now)
         switch node.kind {
+        case .hit:
+            if let url = node.parent?.url { onOpenFile?(url, node.line) }
         case .heading:
             if let file = fileNode(of: node), file === currentFileNode, let bi = node.blockIndex {
                 onSelectHeading?(Outline.Entry(id: "", level: node.level, title: node.name, blockIndex: bi, line: node.line))
@@ -431,14 +460,16 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
 
     // MARK: - DataSource
 
+    private var displayRoot: SidebarNode? { searchRoot ?? rootNode }
+
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
-        let node = (item as? SidebarNode) ?? rootNode
+        let node = (item as? SidebarNode) ?? displayRoot
         guard let node else { return 0 }
         if node.children == nil { loadChildren(of: node); return 0 }
         return node.children!.count
     }
     func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
-        let node = (item as? SidebarNode) ?? rootNode!
+        let node = (item as? SidebarNode) ?? displayRoot!
         return node.children![index]
     }
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
@@ -447,6 +478,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         case .folder: return true
         case .file: return n.isMarkdown && (n.children?.isEmpty == false || n.children == nil)
         case .heading: return !(n.children?.isEmpty ?? true)
+        case .hit: return false
         }
     }
 
@@ -480,6 +512,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
             ])
         }
         cell.textField?.stringValue = node.name
+        cell.textField?.usesSingleLineMode = false
+        cell.textField?.lineBreakMode = .byTruncatingTail
         cell.toolTip = node.kind == .heading ? node.name : node.url?.path
         switch node.kind {
         case .folder:
@@ -499,6 +533,23 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
             cell.imageView?.isHidden = true
             cell.textField?.font = node.level <= 1 ? .systemFont(ofSize: 12, weight: .medium) : .systemFont(ofSize: 12)
             cell.textField?.textColor = node.level >= 4 ? .secondaryLabelColor : .labelColor
+        case .hit:
+            cell.imageView?.image = nil
+            cell.imageView?.isHidden = true
+            cell.textField?.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .regular)
+            cell.textField?.textColor = .secondaryLabelColor
+            cell.textField?.usesSingleLineMode = true
+            cell.textField?.cell?.wraps = false
+            cell.textField?.cell?.truncatesLastVisibleLine = true
+            cell.textField?.lineBreakMode = .byTruncatingTail
+            let prefix = "\(node.line ?? 0)  "
+            let s = NSMutableAttributedString(string: prefix, attributes: [.foregroundColor: NSColor.tertiaryLabelColor, .font: NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .regular)])
+            s.append(NSAttributedString(string: node.name, attributes: [.foregroundColor: NSColor.secondaryLabelColor, .font: NSFont.systemFont(ofSize: 11.5)]))
+            if let r = node.hitRange, r.location + r.length <= (node.name as NSString).length {
+                s.addAttributes([.foregroundColor: NSColor.labelColor, .font: NSFont.systemFont(ofSize: 11.5, weight: .semibold), .backgroundColor: NSColor.findHighlightColor.withAlphaComponent(0.35)], range: NSRange(location: r.location + (prefix as NSString).length, length: r.length))
+            }
+            cell.textField?.attributedStringValue = s
+            cell.toolTip = node.name
         }
         return cell
     }
@@ -513,7 +564,124 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     func outlineViewSelectionDidChange(_ notification: Notification) {
         guard !suppressSelection else { return }
         let row = outlineView.selectedRow
-        guard row >= 0, let node = outlineView.item(atRow: row) as? SidebarNode, node.kind == .heading else { return }
-        activate(node)   // 键盘导航标题也跳转
+        guard row >= 0, let node = outlineView.item(atRow: row) as? SidebarNode, node.kind == .heading || node.kind == .hit else { return }
+        activate(node)   // 键盘导航标题 / 命中行也跳转
+    }
+
+    // MARK: - 全局搜索（⌘⇧F）
+
+    /// 显示搜索框并聚焦；空查询时树照旧
+    func showSearch() {
+        guard rootURL != nil else { NSSound.beep(); return }
+        searchField.isHidden = false
+        searchFieldHeight.constant = 24
+        view.window?.makeFirstResponder(searchField)
+        if !searchField.stringValue.isEmpty { searchField.selectText(nil) }
+    }
+
+    func hideSearch() {
+        searchField.stringValue = ""
+        searchField.isHidden = true
+        searchFieldHeight.constant = 0
+        clearSearch()
+        view.window?.makeFirstResponder(outlineView)
+    }
+
+    @objc private func searchChanged(_ sender: Any?) {
+        searchWork?.cancel()
+        let q = searchField.stringValue
+        guard !q.isEmpty else { clearSearch(); return }
+        let w = DispatchWorkItem { [weak self] in self?.runSearch(q) }
+        searchWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: w)
+    }
+
+    private func clearSearch() {
+        activeSearch?.cancel(); activeSearch = nil
+        guard searchRoot != nil else { return }
+        searchRoot = nil
+        outlineView.reloadData()
+        revealCurrentFile()
+    }
+
+    private func runSearch(_ query: String) {
+        guard let root = rootURL else { return }
+        activeSearch?.cancel()
+        let index = FileIndex.index(for: root)
+        let files = index.relativePaths.map { index.url(for: $0) }
+        let results = SidebarNode(kind: .folder, url: root, name: "", parent: nil)
+        results.children = []
+        searchRoot = results
+        outlineView.reloadData()
+        let search = ContentSearch()
+        activeSearch = search
+        let opts = ContentSearch.Options()
+        let maxFiles = 500
+        searchQueue.async { [weak self] in
+            var batch: [ContentSearch.FileResult] = []
+            var lastFlush = ProcessInfo.processInfo.systemUptime
+            var total = 0
+            func flush() {
+                guard !batch.isEmpty else { return }
+                let b = batch; batch = []
+                DispatchQueue.main.async { [weak self] in self?.appendSearchResults(b, for: search) }
+            }
+            search.run(query: query, files: files, options: opts) { r in
+                batch.append(r); total += 1
+                if total >= maxFiles { search.cancel() }
+                let now = ProcessInfo.processInfo.systemUptime
+                if batch.count >= 20 || now - lastFlush > 0.05 { flush(); lastFlush = now }
+            }
+            flush()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.activeSearch === search else { return }
+                if self.searchRoot?.children?.isEmpty ?? true { self.searchRoot?.children = [SidebarNode(kind: .hit, url: nil, name: L("没有找到"), parent: self.searchRoot)]; self.outlineView.reloadData() }
+            }
+        }
+    }
+
+    private func appendSearchResults(_ batch: [ContentSearch.FileResult], for search: ContentSearch) {
+        guard activeSearch === search, let root = searchRoot, let rootURL else { return }
+        let prefix = rootURL.standardizedFileURL.path + "/"
+        for r in batch {
+            let path = r.url.standardizedFileURL.path
+            let file = SidebarNode(kind: .file, url: r.url, name: path.hasPrefix(prefix) ? String(path.dropFirst(prefix.count)) : r.url.lastPathComponent, parent: root)
+            file.children = r.hits.prefix(50).map { h in
+                // 片段：命中前最多 12 个字符，前面截断加 …（侧栏窄，命中要看得见）
+                let ns = h.text as NSString
+                var start = max(0, h.range.lowerBound - 12)
+                var text = ns.substring(from: start)
+                var shift = start
+                if start > 0 { text = "…" + text; shift = start - 1 }
+                text = text.trimmingCharacters(in: .newlines)
+                let n = SidebarNode(kind: .hit, url: r.url, name: text, parent: file)
+                n.line = h.line
+                n.hitRange = NSRange(location: h.range.lowerBound - shift, length: h.range.count)
+                start = 0
+                return n
+            }
+            root.children?.append(file)
+        }
+        outlineView.reloadData()
+        for f in root.children ?? [] { outlineView.expandItem(f) }
+    }
+}
+
+extension SidebarViewController: NSSearchFieldDelegate {
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
+        if sel == #selector(NSResponder.cancelOperation(_:)) {
+            if searchField.stringValue.isEmpty { hideSearch() } else { searchField.stringValue = ""; clearSearch() }
+            return true
+        }
+        if sel == #selector(NSResponder.moveDown(_:)) || sel == #selector(NSResponder.insertNewline(_:)) {
+            // 进结果列表：选中第一个命中
+            guard isSearching, outlineView.numberOfRows > 0 else { return false }
+            view.window?.makeFirstResponder(outlineView)
+            var row = 0
+            while row < outlineView.numberOfRows, (outlineView.item(atRow: row) as? SidebarNode)?.kind != .hit { row += 1 }
+            if row < outlineView.numberOfRows { outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
+            return true
+        }
+        return false
     }
 }

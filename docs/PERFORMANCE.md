@@ -18,6 +18,8 @@
 | 阅读视图整体换内容（主题切换 / 外部重载 / 缩放，1 MB，含首屏布局与附件扫描） | < 60 ms | `quire-bench views`（`view/reader-setRendered-1mb`） |
 | 编辑器单次击键（1 MB：行索引重建 + 段落增量高亮） | < 8 ms | `quire-bench views`（`view/editor-keystroke-1mb`） |
 | 字数统计（1 MB，后台，与解析同一趟） | < 5 ms | `quire-bench render`（`stats/large-1mb`） |
+| 全局搜索（1000 个文件 / 50 MB，子串） | 首批结果 < 300 ms，全扫 < 1 s | `ContentSearchTests.testThroughput50MB` |
+| 快速打开索引（10k 文件整树扫描，后台） | < 200 ms | 手测（`FileIndex.scan`） |
 | 代码高亮吞吐 | > 20 MB/s | `quire-bench highlight` |
 | 滚动 | 60 fps，无掉帧 | Instruments Animation Hitches |
 | 常驻内存（典型 50 KB 文档，打开 1 窗口） | **< 40 MB** | `footprint` / Activity Monitor "内存" |

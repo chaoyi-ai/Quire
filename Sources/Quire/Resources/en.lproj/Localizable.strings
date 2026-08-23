@@ -125,3 +125,6 @@
 "复制为 HTML" = "Copy as HTML";
 "复制为纯文本" = "Copy as Plain Text";
 "粘贴网页 / 富文本时自动转成 Markdown（⇧⌘V 粘纯文本）" = "Convert HTML / rich text to Markdown when pasting (⇧⌘V pastes plain text)";
+"搜索文件内容…" = "Search file contents…";
+"全局搜索…" = "Search in Folder…";
+"没有找到" = "No results";

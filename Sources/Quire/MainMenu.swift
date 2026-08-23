@@ -94,6 +94,8 @@ enum MainMenu {
         sidebar.keyEquivalentModifierMask = [.command, .option]
         let reveal = view.addItem(withTitle: L("在侧栏中显示当前文件"), action: #selector(DocumentWindowController.revealInSidebar(_:)), keyEquivalent: "j")
         reveal.keyEquivalentModifierMask = [.command, .shift]
+        let gsearch = view.addItem(withTitle: L("全局搜索…"), action: #selector(DocumentWindowController.showGlobalSearch(_:)), keyEquivalent: "F")
+        gsearch.keyEquivalentModifierMask = [.command, .shift]
         view.addItem(.separator())
         view.addItem(withTitle: L("阅读"), action: #selector(DocumentWindowController.setModeReader(_:)), keyEquivalent: "1")
         view.addItem(withTitle: L("编辑"), action: #selector(DocumentWindowController.setModeEditor(_:)), keyEquivalent: "2")
