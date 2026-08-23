@@ -140,7 +140,7 @@
 - [ ] **公证（Developer ID + notarytool）**：需要 Apple Developer 账号的 Developer ID 证书与 App 专用密码（只有仓库所有者能做）；`scripts/release.sh` 预留接入点（#54，**待所有者提供证书**）
 - [x] 更新检查：Quire 菜单「检查更新…」+ 每天一次启动后 8 s 后台比对 GitHub Releases（只读，不上传；可跳过某版本；设置可关）（#54，0.4.1）
 - [x] Homebrew cask 文件 `Casks/quire.rb`（`release.sh` 自动更新版本与 sha256）；放到 tap 仓库 `chaoyi-ai/homebrew-quire` 后即可 `brew install --cask quire`——未公证前 caveats 提示去 quarantine（#54，0.4.1）
-- [ ] Quick Look 预览扩展（复用 QuireRender；需签名）（#55）
+- [ ] Quick Look 预览扩展（复用 QuireRender）（#55）。**2026-08-23 spike 未通过**：纯 SwiftPM 手工组装 .appex（`-e _NSExtensionMain` + `-application_extension`、XPC! 包、沙盒 entitlements、ad-hoc 签名、资源 bundle 复制进 appex）能编译链接，但 `pluginkit -a` 不登记、`qlmanage -p` 在 `EXConcreteExtension makeExtensionContextAndXPCConnectionForRequest` 处 abort。怀疑 ad-hoc 签名 / 缺 Team ID 或入口方式；下一步：用 Xcode 生成一次标准 appex 对照 Mach-O 与 plist，或等 Developer ID 签名后再试。另注意 appex 会让 App +4 MB（静态链接一份 QuireCore/QuireRender/SwiftMath）
 - [ ] 发布 1.0
 
 **测试**：本地化字符串完整性测试（两套 .strings key 集合相等）；全局搜索 / 快速打开的基准进 `quire-bench`；Focus / 沉浸模式的几何测试（视口位移、隐藏后正文列宽）；VoiceOver 属性单元测试（附件 `accessibilityLabel`）。
