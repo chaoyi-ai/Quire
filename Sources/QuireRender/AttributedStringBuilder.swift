@@ -56,7 +56,7 @@ public final class AttributedStringBuilder: @unchecked Sendable {
 
     struct RunKey: Hashable {
         var para: String
-        var flags: UInt8      // bold | italic<<1 | strike<<2 | inlineCode<<3 | muted<<4 | link<<5
+        var flags: UInt16     // bold | italic<<1 | strike<<2 | inlineCode<<3 | muted<<4 | link<<5 | codePad<<6 | highlight<<7 | underline<<8 | sub<<9 | sup<<10
     }
 
     // MARK: - 入口
@@ -68,6 +68,8 @@ public final class AttributedStringBuilder: @unchecked Sendable {
 
     /// 同上，并报告该块是否含需要异步加载的附件（图片 / Mermaid），供 loadImages 跳过无关块，
     /// 避免对整份 1 MB 文档做属性枚举（实测 ~100 ms/次）。
+    nonisolated(unsafe) private static let mirrorFont = NSFont.systemFont(ofSize: 0.01)
+
     /// 标题编号表（块下标 → "1.2"），由 DocumentRenderer 在开启编号时整篇算好后设置
     public var headingNumbers: [Int: String] = [:]
     private var currentBlockIndex = 0
@@ -518,7 +520,7 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         out.append(NSAttributedString(string: "\u{FFFC}", attributes: a))
         // 可查找 / 可复制：表格文本以"不可见镜像"跟在附件后面（0.01pt、透明），⌘F 能命中并滚到表格，复制得到 TSV
         var mirror = para.base
-        mirror[.font] = NSFont.systemFont(ofSize: 0.01)
+        mirror[.font] = Self.mirrorFont
         mirror[.foregroundColor] = NSColor.clear
         let tsv = ([header] + rows).map { $0.map(\.string).joined(separator: "\t") }.joined(separator: "\u{2028}")
         out.append(NSAttributedString(string: tsv, attributes: mirror))
@@ -598,11 +600,12 @@ public final class AttributedStringBuilder: @unchecked Sendable {
 
     /// 取（或建）当前上下文的 uniqued 属性字典
     private func runAttributes(_ ctx: InlineContext, inlineCode: Bool = false, muted: Bool = false, codePad: Bool = false) -> Attrs {
-        var flags: UInt8 = 0
+        var flags: UInt16 = 0
         if ctx.bold { flags |= 1 }; if ctx.italic { flags |= 2 }; if ctx.strike { flags |= 4 }
         if inlineCode { flags |= 8 }; if muted { flags |= 16 }; if ctx.link != nil { flags |= 32 }; if codePad { flags |= 64 }
-        if ctx.highlight { flags |= 128 }
-        let key = RunKey(para: ctx.para.key + (ctx.underline ? "|u" : "") + (ctx.script != 0 ? "|s\(ctx.script)" : "") + (ctx.para.baseFont.map { "|\($0.fontName)\($0.pointSize)" } ?? "") + (ctx.para.color.map { "|\($0.description)" } ?? ""), flags: flags)
+        if ctx.highlight { flags |= 128 }; if ctx.underline { flags |= 256 }
+        if ctx.script < 0 { flags |= 512 } else if ctx.script > 0 { flags |= 1024 }
+        let key = RunKey(para: ctx.para.key + (ctx.para.baseFont.map { "|\($0.fontName)\($0.pointSize)" } ?? "") + (ctx.para.color.map { "|\($0.description)" } ?? ""), flags: flags)
         cacheLock.lock()
         if let a = attrsCache[key] { cacheLock.unlock(); return a }
         cacheLock.unlock()

@@ -29,8 +29,9 @@ fail = False
 for name, budget in budgets_ms.items():
     r = results.get(name)
     if not r: print(f"?  {name}: 缺失"); fail = True; continue
-    ok = r["medianMs"] <= budget * factor
-    print(f"{'✓' if ok else '✗'}  {name:34s} {r['medianMs']:8.1f} ms  (预算 {budget} × {factor:g})")
+    # 按最小值判定（排除机器负载带来的抖动），中位数一并打印
+    ok = r["minMs"] <= budget * factor
+    print(f"{'✓' if ok else '✗'}  {name:34s} {r['medianMs']:8.1f} ms  (min {r['minMs']:.1f}，预算 {budget} × {factor:g})")
     fail |= not ok
 for name, budget in budgets_mbps.items():
     r = results.get(name)

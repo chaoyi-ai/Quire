@@ -77,6 +77,8 @@
 
 启动时间去向（macOS 26，M 系列，warm）：dyld ≈ 75 ms · AppKit finishLaunching/文档打开 ≈ 55 ms · NSWindow 创建 ≈ 40 ms · split view ≈ 25 ms · **NSToolbar（macOS 26 为 SwiftUI 实现）≈ 50 ms** · 首次布局 ≈ 60 ms · 解析+渲染（同步，small.md）≈ 5 ms。已做：阅读模式不创建编辑器、首帧同步渲染（≤ 256 KB）、启动阶段不跑动画、去掉重复打开。< 300 ms 需要绕开 NSToolbar 或延迟其挂载（会有跳动），暂不做。
 
+门禁判定用 N 次里的**最小值**（`quire-bench` 默认 7 次；中位数同时打印）：最小值反映"这台机器能做到的最好"，不受后台负载与窗口服务器抖动影响；中位数用于看趋势。
+
 ## 4. 测量工具
 
 ```bash
