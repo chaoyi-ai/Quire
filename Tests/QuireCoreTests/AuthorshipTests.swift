@@ -65,6 +65,19 @@ final class AuthorshipTests: XCTestCase {
         XCTAssertEqual(p!.embed(into: b), file)
     }
 
+    func testCustomAuthorsPersistWithoutSpans_andTrailingWhitespaceTolerated() {
+        var a = Authorship()
+        a.addAuthor(named: "Editor")
+        let file = a.embed(into: "x\n")
+        XCTAssertTrue(file.contains(Authorship.marker), "加过作者就该存")
+        let (b, p, m) = Authorship.split(file + "\n\n")
+        XCTAssertEqual(b, "x\n"); XCTAssertFalse(m); XCTAssertEqual(p?.authors.last?.name, "Editor")
+        // 块在但坏了：按对不上处理，不吞块也不保留坏数据
+        let broken = "x\n\n<!-- quire-authorship v1 hash=abc\n{not json\n-->\n"
+        let (b2, p2, m2) = Authorship.split(broken)
+        XCTAssertEqual(b2, "x\n"); XCTAssertTrue(m2); XCTAssertEqual(p2?.spans.count, 0)
+    }
+
     func testNoSpansNoTrailer_andPlainFilesUntouched() {
         XCTAssertEqual(Authorship().embed(into: "x\n"), "x\n")
         let (b, a, m) = Authorship.split("plain <!-- comment -->\n")

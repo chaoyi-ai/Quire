@@ -107,17 +107,27 @@ public final class DocumentRenderer: @unchecked Sendable {
     /// 增量：复用 `previous` 中未变化的块，只重建 diff 范围内的块
     public func render(_ document: Document, reusing previous: RenderedDocument) -> (RenderedDocument, BlockDiff) {
         let diff = BlockDiff.compute(old: previous.blocks.map(\.block), new: document.blocks)
-        if diff.isEmpty, previous.theme.id == style.theme.id { return (previous, diff) }
+        // 块相等性只看内容不看位置：复用的块必须换成新解析的 Block（行号变了），否则混合模式 / 复制为 Markdown / 滚动同步
+        // 都会拿着旧行号去切源码。diff 为空时也一样——上面插入一行，下面所有块的行号都变了
+        func rebased(_ rb: RenderedBlock, _ newBlock: Block) -> RenderedBlock {
+            RenderedBlock(block: newBlock, attributed: rb.attributed, hasLoadableAttachments: rb.hasLoadableAttachments)
+        }
+        if diff.isEmpty, previous.theme.id == style.theme.id {
+            if previous.blocks.count == document.blocks.count, zip(previous.blocks, document.blocks).allSatisfy({ $0.block.sourceRange == $1.sourceRange }) { return (previous, diff) }
+            let blocks = zip(previous.blocks, document.blocks).map { rebased($0, $1) }
+            return (RenderedDocument(theme: previous.theme, blocks: blocks, attributed: previous.attributed, ranges: previous.ranges), diff)
+        }
         // 标题编号跨块联动：有改动就整篇重建（编号是可选项，1 MB 全量 130 ms 可接受）
         if style.options.headingNumbers { return (render(document), BlockDiff(oldChanged: 0..<previous.blocks.count, newChanged: 0..<document.blocks.count)) }
         var blocks: [RenderedBlock] = []
         blocks.reserveCapacity(document.blocks.count)
-        blocks.append(contentsOf: previous.blocks[0..<diff.oldChanged.lowerBound])
+        for i in 0..<diff.oldChanged.lowerBound { blocks.append(rebased(previous.blocks[i], document.blocks[i])) }
         for (k, b) in document.blocks[diff.newChanged].enumerated() {
             let r: (attributed: NSAttributedString, hasLoadableAttachments: Bool) = builder.build(b, index: diff.newChanged.lowerBound + k)
             blocks.append(RenderedBlock(block: b, attributed: r.attributed, hasLoadableAttachments: r.hasLoadableAttachments))
         }
-        blocks.append(contentsOf: previous.blocks[diff.oldChanged.upperBound...])
+        let tail = previous.blocks.count - diff.oldChanged.upperBound
+        for j in 0..<tail { blocks.append(rebased(previous.blocks[diff.oldChanged.upperBound + j], document.blocks[diff.newChanged.upperBound + j])) }
         return (assemble(blocks), diff)
     }
 

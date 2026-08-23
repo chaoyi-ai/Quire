@@ -88,8 +88,11 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
         ts.beginEditing()
         ts.setAttributedString(doc.attributed)
         ts.endEditing()
-        loadImages()
+        if loadsAttachmentsAutomatically { loadImages() }
     }
+
+    /// 打印 / 导出视图设为 false：不要在 setRendered 里异步起加载，而是 `loadAllAttachmentsForExport()` 等全部就绪
+    public var loadsAttachmentsAutomatically = true
 
     /// 仅更新块表（内容未变，如 diff 为空）
     public func updateRendered(_ doc: RenderedDocument) { self.rendered = doc }
@@ -399,24 +402,66 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
     }
 
     private func renderMermaid(_ att: MermaidAttachment, at range: NSRange, maxWidth: CGFloat) {
-        Task { @MainActor [weak self] in
-            do {
-                let bg = self?.style.theme.colors.background.hexString ?? "transparent"
-                let img = try await MermaidRenderer.shared.render(source: att.source, theme: att.mermaidTheme, background: bg)
-                att.isRendered = true
-                var w = img.size.width, h = img.size.height
-                if w > maxWidth { h *= maxWidth / w; w = maxWidth }
-                img.accessibilityDescription = RL("Mermaid 图") + "\n" + att.source
-                att.image = img
-                att.bounds = CGRect(x: 0, y: 0, width: w.rounded(), height: h.rounded())
-            } catch {
-                att.failed = true
-                let msg = String(format: RL("Mermaid 渲染失败：%@"), String(describing: error))
-                let img = Self.errorImage(message: msg, source: att.source, width: maxWidth, style: self?.style)
-                att.image = img
-                att.bounds = CGRect(origin: .zero, size: img.size)
+        Task { @MainActor [weak self] in await self?.renderMermaidNow(att, at: range, maxWidth: maxWidth) }
+    }
+
+    private func renderMermaidNow(_ att: MermaidAttachment, at range: NSRange, maxWidth: CGFloat) async {
+        do {
+            let bg = style.theme.colors.background.hexString
+            let img = try await MermaidRenderer.shared.render(source: att.source, theme: att.mermaidTheme, background: bg)
+            att.isRendered = true
+            var w = img.size.width, h = img.size.height
+            if w > maxWidth { h *= maxWidth / w; w = maxWidth }
+            img.accessibilityDescription = RL("Mermaid 图") + "\n" + att.source
+            att.image = img
+            att.bounds = CGRect(x: 0, y: 0, width: w.rounded(), height: h.rounded())
+        } catch {
+            att.failed = true
+            let msg = String(format: RL("Mermaid 渲染失败：%@"), String(describing: error))
+            let img = Self.errorImage(message: msg, source: att.source, width: maxWidth, style: style)
+            att.image = img
+            att.bounds = CGRect(origin: .zero, size: img.size)
+        }
+        relayoutAttachment(att, hint: range)
+    }
+
+    /// 导出 / 打印：把全部图片与 Mermaid 加载完再返回（并发；整体超时后带着已完成的部分返回）。
+    /// `setRendered` 里的异步加载对打印没用——`NSPrintOperation.run()` 是同步的，跑完时图片还没回来，PDF 里全是占位框。
+    public func loadAllAttachmentsForExport(timeout: TimeInterval = 20) async {
+        guard let rendered, !rendered.blocks.isEmpty else { return }
+        let maxW = max(200, contentWidth)
+        let scale: CGFloat = 2
+        var images: [(ImageAttachment, NSRange, URL)] = []
+        var diagrams: [(MermaidAttachment, NSRange)] = []
+        forEachLoadableAttachment { value, range in
+            if let m = value as? MermaidAttachment, !m.isRendered, !m.failed { diagrams.append((m, range)) }
+            else if let a = value as? ImageAttachment, !a.isLoaded, !a.loadFailed, let src = a.source {
+                if let url = ImageLoader.resolve(src, relativeTo: baseURL) { images.append((a, range, url)) } else { a.loadFailed = true }
             }
-            self?.relayoutAttachment(att, hint: range)
+        }
+        guard !images.isEmpty || !diagrams.isEmpty else { return }
+        // 图片：全部同时发起（ImageLoader 内部并发解码），一个 continuation 等计数归零；超时直接放行
+        if !images.isEmpty {
+            await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+                final class Gate { var remaining: Int; var finished = false; init(_ n: Int) { remaining = n } }
+                let gate = Gate(images.count)
+                let finish: @MainActor () -> Void = { guard !gate.finished else { return }; gate.finished = true; done.resume() }
+                for (att, range, url) in images {
+                    let inline = att.isInline
+                    let target = inline ? style.baseSize * 12 : maxW
+                    ImageLoader.shared.load(url, maxPixelWidth: target * scale) { [weak self] img in
+                        self?.apply(image: img, to: att, at: range, maxWidth: target, inline: inline)
+                        gate.remaining -= 1
+                        if gate.remaining <= 0 { finish() }
+                    }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { finish() }
+            }
+        }
+        // Mermaid：渲染器本身串行，逐个 await
+        let deadline = Date().addingTimeInterval(timeout)
+        for (att, range) in diagrams where Date() < deadline {
+            await renderMermaidNow(att, at: range, maxWidth: maxW)
         }
     }
 

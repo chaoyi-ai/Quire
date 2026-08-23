@@ -251,3 +251,5 @@
 "添加作者" = "Add Author";
 "归属统计…" = "Authorship Statistics…";
 "这份文件的正文在 Quire 之外被修改过，文件尾的著作归属标记对不上了，已丢弃（作者列表保留）。之后的键入与粘贴会重新记录。" = "The text was modified outside Quire, so the authorship marks at the end of the file no longer match and were discarded (the author list is kept). New typing and pastes will be recorded again.";
+"没能写入 %@" = "Could not write %@";
+"导出失败" = "Export failed";

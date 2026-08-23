@@ -105,7 +105,9 @@ enum MainMenu {
         format.addItem(.separator())
         format.addItem(withTitle: L("粗体"), action: #selector(EditorTextView.toggleBold(_:)), keyEquivalent: "b")
         format.addItem(withTitle: L("斜体"), action: #selector(EditorTextView.toggleItalic(_:)), keyEquivalent: "i")
-        format.addItem(withTitle: L("行内代码"), action: #selector(EditorTextView.toggleInlineCode(_:)), keyEquivalent: "e")
+        // 不用 ⌘E：那是系统的"使用所选内容查找"
+        let code = format.addItem(withTitle: L("行内代码"), action: #selector(EditorTextView.toggleInlineCode(_:)), keyEquivalent: "`")
+        code.keyEquivalentModifierMask = [.control, .shift]
         format.addItem(withTitle: L("链接"), action: #selector(EditorTextView.insertLink(_:)), keyEquivalent: "k")
         main.addItem(withTitle: L("格式"), action: nil, keyEquivalent: "").submenu = format
 

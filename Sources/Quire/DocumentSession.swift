@@ -22,6 +22,28 @@ final class DocumentSession {
 
     /// UI 订阅：每次有新渲染结果时调用（主线程）；`diff` 非空表示可增量替换（相对上一次发布的 rendered）
     var onRendered: ((RenderedDocument, RenderStyle, ChangeReason, BlockDiff?) -> Void)?
+    /// 一次性等待：当前源码对应的渲染结果已发布就立刻回调，否则等下一次发布；`timeout` 秒内没等到回调 false。
+    /// 给 URL scheme / Shortcuts / 跳行这类"打开后再做事"的路径用——以前用固定延时轮询，大文件（异步解析）下会带着空文档继续
+    func whenRendered(timeout: TimeInterval = 15, _ body: @escaping @MainActor (Bool) -> Void) {
+        if rendered != nil, parsedSource == source { body(true); return }
+        renderWaiters.append(body)
+        let gen = renderWaiterGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
+            guard let self, gen == self.renderWaiterGeneration, !self.renderWaiters.isEmpty else { return }
+            let ws = self.renderWaiters; self.renderWaiters = []
+            ws.forEach { $0(false) }
+        }
+    }
+    private var renderWaiters: [@MainActor (Bool) -> Void] = []
+    private var renderWaiterGeneration = 0
+    /// `parsed` 对应的源码（用来判断渲染是否已经赶上了最新编辑）
+    private(set) var parsedSource: String = ""
+    private func didPublish() {
+        renderWaiterGeneration += 1
+        guard !renderWaiters.isEmpty else { return }
+        let ws = renderWaiters; renderWaiters = []
+        ws.forEach { $0(true) }
+    }
     private var editDebounce: DispatchWorkItem?
     var onOutline: ((Outline) -> Void)?
     /// 全文统计（与解析同一趟后台任务里算）
@@ -37,9 +59,19 @@ final class DocumentSession {
     /// 被内联的文件：改了就重解析
     private var includeWatchers: [String: FileWatcher] = [:]
 
+    private var indexToken: ChangeObservers.Token?
     private func transclusionLoader() -> Transclusion.Loader? {
         guard transclusionEnabled, source.utf8.contains(0x21), source.contains("![[") else { return nil }
         guard let root = transclusionRoot?() ?? document?.fileURL?.deletingLastPathComponent() else { return nil }
+        // 文件索引还在扫（刚打开）：这次按文件系统就近找，索引扫完再重解析一次，免得 `![[note]]` 一直停在"找不到"
+        let index = FileIndex.index(for: root)
+        if index.isScanning, indexToken == nil {
+            indexToken = index.observers.add { [weak self] in
+                guard let self else { return }
+                self.indexToken = nil
+                self.sourceDidChange(self.source, reason: .externalChange)
+            }
+        }
         return TransclusionLoader.make(root: root, document: document?.fileURL)
     }
 
@@ -140,12 +172,14 @@ final class DocumentSession {
             if let loader { let r = Transclusion.expand(doc, parser: parser, fromPath: docPath, loader: loader); doc = r.document; watchIncludes(r.includedPaths) }
             let out = renderer.render(doc)
             parsed = doc
+            parsedSource = src
             rendered = out
             LaunchClock.mark("parse+render done (sync)")
             onRendered?(out, renderer.style, reason, nil)
             onOutline?(doc.outline)
             stats = TextStats.compute(src)
             onStats?(stats)
+            didPublish()
             return
         }
         Task.detached(priority: .userInitiated) { [weak self] in
@@ -172,12 +206,14 @@ final class DocumentSession {
                 guard let self, gen == self.generation else { return }
                 LaunchClock.mark("publish to UI")
                 self.parsed = doc
+                self.parsedSource = src
                 self.rendered = out
                 self.watchIncludes(includes)
                 self.onRendered?(out, renderer.style, reason, d)
                 self.onOutline?(doc.outline)
                 self.stats = st
                 self.onStats?(st)
+                self.didPublish()
             }
         }
     }
@@ -192,6 +228,8 @@ final class DocumentSession {
 
     /// 不重解析，只重建属性字符串
     private func rerender(reason: ChangeReason) {
+        // 最新编辑还没解析完（或被防抖压着）：重解析而不是拿旧的 parsed 重建，否则那次编辑的结果会被这里的 generation 顶掉、永远不再发布
+        if parsedSource != source { sourceDidChange(source, reason: .edited); return }
         generation += 1
         let gen = generation
         let doc = parsed
@@ -212,8 +250,11 @@ final class DocumentSession {
 
     // MARK: - 文件监控
 
+    /// 可重复调用：路径变了 / 偏好变了就换监视器；关了偏好或没有路径就停
     func startWatching() {
-        guard Preferences.shared.autoReload, let url = document?.fileURL else { return }
+        guard Preferences.shared.autoReload, let url = document?.fileURL else { watcher = nil; watchedURL = nil; return }
+        if watchedURL == url, watcher != nil { return }
+        watchedURL = url
         watcher = FileWatcher(url: url) { [weak self] in
             Task { @MainActor [weak self] in
                 self?.document?.reloadFromDisk()
@@ -221,5 +262,6 @@ final class DocumentSession {
         }
     }
 
-    func stopWatching() { watcher = nil }
+    private var watchedURL: URL?
+    func stopWatching() { watcher = nil; watchedURL = nil }
 }

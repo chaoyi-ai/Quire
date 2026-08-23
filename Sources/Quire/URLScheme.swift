@@ -42,8 +42,8 @@ enum URLScheme {
         guard !external || trusted(url) || confirm(String(format: L("外部应用请求打开：%@"), url.path), button: L("打开")) else { completion?(false); return }
         QuireDocumentController.shared.openDocument(withContentsOf: url, display: true) { doc, _, error in
             if let error { NSApp.presentError(error); completion?(false); return }
-            if let line, let wc = doc?.windowControllers.first as? DocumentWindowController {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { wc.jump(toLine: line) }
+            if let line, let md = doc as? MarkdownDocument, let wc = md.windowControllers.first as? DocumentWindowController {
+                md.session.whenRendered { ok in if ok { wc.jump(toLine: line) } }
             }
             completion?(true)
         }
@@ -122,24 +122,20 @@ enum URLScheme {
         QuireDocumentController.shared.openDocument(withContentsOf: url, display: true) { doc, _, error in
             if let error { NSApp.presentError(error); completion?(false); return }
             guard let md = doc as? MarkdownDocument, let wc = md.windowControllers.first as? DocumentWindowController else { completion?(false); return }
-            waitForRender(md, attempts: 40) {
-                var ok = true
-                if format == "html" {
-                    var opts = HTMLRenderer.Options(); opts.title = md.displayName
-                    let html = HTMLRenderer(theme: ThemeManager.shared.currentTheme, options: opts).render(md.session.parsed)
-                    do { try html.write(to: to, atomically: true, encoding: .utf8) } catch { NSApp.presentError(error); ok = false }
-                } else {
-                    ok = Exporter.writePDF(document: md, windowController: wc, to: to)
-                    if !ok { fail(String(format: L("导出失败：%@"), to.path)) }
+            md.session.whenRendered { rendered in
+                guard rendered else { fail(String(format: L("导出失败：%@"), to.path)); completion?(false); return }
+                Task { @MainActor in
+                    var ok = true
+                    if format == "html" {
+                        do { try Exporter.html(for: md).write(to: to, atomically: true, encoding: .utf8) } catch { NSApp.presentError(error); ok = false }
+                    } else {
+                        ok = await Exporter.writePDF(document: md, windowController: wc, to: to)
+                        if !ok { fail(String(format: L("导出失败：%@"), to.path)) }
+                    }
+                    completion?(ok)
                 }
-                completion?(ok)
             }
         }
-    }
-
-    private static func waitForRender(_ doc: MarkdownDocument, attempts: Int, then: @escaping @MainActor () -> Void) {
-        if doc.session.rendered != nil || attempts <= 0 { then(); return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { waitForRender(doc, attempts: attempts - 1, then: then) }
     }
 
     // MARK: - 工具

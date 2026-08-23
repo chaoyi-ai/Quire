@@ -14,15 +14,15 @@ final class TagIndexStore {
     let root: URL
     /// 标签 → 相对路径列表（按标签名排序）
     private(set) var tags: [(tag: String, files: [String])] = []
-    var onChange: (() -> Void)?
+    let observers = ChangeObservers()
     private var cache: [String: (mtime: Date, tags: [String])] = [:]
     private var generation = 0
+    private var indexToken: ChangeObservers.Token?
 
     private init(root: URL) {
         self.root = root
         let index = FileIndex.index(for: root)
-        let prev = index.onChange
-        index.onChange = { [weak self] in prev?(); self?.rescan() }
+        indexToken = index.observers.add { [weak self] in self?.rescan() }
         if !index.relativePaths.isEmpty { rescan() }
     }
 
@@ -51,7 +51,7 @@ final class TagIndexStore {
                 guard let self, gen == self.generation else { return }
                 self.cache = newCache
                 self.tags = sorted
-                self.onChange?()
+                self.observers.notify()
             }
         }
     }

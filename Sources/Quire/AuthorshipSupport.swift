@@ -72,8 +72,8 @@ extension DocumentWindowController {
     @objc func toggleAuthorship(_ sender: Any?) {
         Preferences.shared.authorship.toggle()
         if Preferences.shared.authorship, markdownDocument?.authorship == nil { markdownDocument?.authorship = Authorship() }
+        if mode == .reader || mode == .hybrid { setModeSplit(nil) }
         editorViewController.pushAuthorshipColors()
-        if mode == .reader { setModeSplit(nil) }
     }
 
     @objc func setCurrentAuthor(_ sender: NSMenuItem) {
@@ -86,12 +86,13 @@ extension DocumentWindowController {
         if !Preferences.shared.authorship { Preferences.shared.authorship = true }
         if doc.authorship == nil { doc.authorship = Authorship() }
         doc.nextPasteAuthor = id
-        if mode == .reader { setModeSplit(nil) }
+        if mode == .reader || mode == .hybrid { setModeSplit(nil) }
+        guard hasEditorPane else { NSSound.beep(); return }
         editorViewController.textView.paste(nil)
     }
 
     @objc func markSelectionAsAuthor(_ sender: NSMenuItem) {
-        guard let doc = markdownDocument, mode != .reader else { NSSound.beep(); return }
+        guard let doc = markdownDocument, hasEditorPane else { NSSound.beep(); return }
         let id = (sender.representedObject as? String) ?? ""
         let sel = editorViewController.textView.selectedRange()
         guard sel.length > 0 else { NSSound.beep(); return }

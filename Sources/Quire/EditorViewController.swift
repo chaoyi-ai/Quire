@@ -70,6 +70,7 @@ final class EditorViewController: NSViewController {
                 self?.textView.convertsHTMLOnPaste = Preferences.shared.convertHTMLOnPaste
                 self?.textView.typography = Preferences.shared.editorTypography
                 self?.textView.showsFormatToolbar = Preferences.shared.formatToolbar
+                self?.pushAuthorshipColors()   // ⇧⌘A 在别的窗口切换时本窗口也要跟着显示 / 隐藏
             }
         }
 
@@ -85,7 +86,8 @@ final class EditorViewController: NSViewController {
         textView.onCharactersEdited = { [weak self] range, delta, isPaste in
             guard let self, let doc = self.session.document else { return }
             doc.recordEdit(range: range, delta: delta, isPaste: isPaste)
-            self.pushAuthorshipColors()
+            // 这里还在 willProcessEditing 里，布局还没跟上新字符串：铺底色要等这轮编辑结束
+            DispatchQueue.main.async { [weak self] in self?.pushAuthorshipColors() }
         }
         textView.showsAuthorship = Preferences.shared.authorship
         pushAuthorshipColors()
@@ -96,6 +98,7 @@ final class EditorViewController: NSViewController {
                 self.textView.updateFormatToolbar()
                 self.textView.schedulePOSRecolor(delay: 0.12)
                 self.textView.scheduleStyleCheck(delay: 0.15)
+                self.textView.scheduleAuthorshipRepaint()
                 self.onScroll?(self.textView.topVisibleLine())
             }
         }

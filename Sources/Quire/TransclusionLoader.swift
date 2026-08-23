@@ -16,20 +16,28 @@ enum TransclusionLoader {
             var fromDir = fromDirAbs.hasPrefix(rootPath) ? String(fromDirAbs.dropFirst(rootPath.count)) : ""
             fromDir = fromDir.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             let ext = (target as NSString).pathExtension.lowercased()
+            let known = QuireDocumentController.markdownExtensions.contains(ext) || csvExtensions.contains(ext) || DropSupport.imageExtensions.contains(ext)
             var abs: String?
-            if ext.isEmpty || QuireDocumentController.markdownExtensions.contains(ext) {
+            if !known || QuireDocumentController.markdownExtensions.contains(ext) {
+                // `notes.2024` 这种带点的名字也走 wikilink 解析（它按文件名 / 去扩展名两种方式匹配）
                 if let rel = WikiLink.resolve(target, candidates: candidates, fromDir: fromDir) { abs = (rootPath as NSString).appendingPathComponent(rel) }
             }
             if abs == nil {
                 let t = target.replacingOccurrences(of: "\\", with: "/")
-                for base in [fromDirAbs, rootPath] {
-                    let p = ((base as NSString).appendingPathComponent(t) as NSString).standardizingPath
-                    if FileManager.default.fileExists(atPath: p) { abs = p; break }
+                // 索引可能还没扫完：直接按文件系统找，没扩展名的补 .md
+                let names = known ? [t] : [t] + QuireDocumentController.markdownExtensions.sorted().map { t + "." + $0 }
+                outer: for base in [fromDirAbs, rootPath] {
+                    for name in names {
+                        let p = ((base as NSString).appendingPathComponent(name) as NSString).standardizingPath
+                        var isDir: ObjCBool = false
+                        if FileManager.default.fileExists(atPath: p, isDirectory: &isDir), !isDir.boolValue { abs = p; break outer }
+                    }
                 }
             }
             guard let abs else { return nil }
+            // 必须落在根目录内：按解析过符号链接的真实路径判断（根内一个指向外面的符号链接也不行）
             let real = URL(fileURLWithPath: abs).resolvingSymlinksInPath().path
-            guard real.hasPrefix(rootResolved + "/") || abs.hasPrefix(rootPath + "/") else { return (abs, .unavailable("超出根目录")) }
+            guard real.hasPrefix(rootResolved + "/") else { return (abs, .unavailable("超出根目录")) }
             let e = (abs as NSString).pathExtension.lowercased()
             if DropSupport.imageExtensions.contains(e) { return (abs, .image(path: abs, alt: (abs as NSString).lastPathComponent)) }
             let size = (try? FileManager.default.attributesOfItem(atPath: abs)[.size] as? Int) ?? 0

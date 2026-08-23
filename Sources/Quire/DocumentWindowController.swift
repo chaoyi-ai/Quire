@@ -18,8 +18,8 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     let session: DocumentSession
     private var modeControl: NSSegmentedControl?
     private let wordCount = WordCountView(frame: .zero)
-    private var selectionObserver: NSObjectProtocol?
-    private var prefsObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var selectionObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var prefsObserver: NSObjectProtocol?
     private var isSyncingScroll = false
 
     var markdownDocument: MarkdownDocument? { document as? MarkdownDocument }
@@ -117,15 +117,23 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             }
         }
         prefsObserver = NotificationCenter.default.addObserver(forName: Preferences.didChange, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.wordCount.isHidden = !Preferences.shared.showWordCount }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if !self.isImmersive { self.wordCount.isHidden = !Preferences.shared.showWordCount }
+                if self.window?.isVisible == true { self.session.startWatching() }   // 自动重新载入 开 / 关
+            }
         }
         sidebarViewController.currentURL = document.fileURL
         if !document.session.parsed.blocks.isEmpty { sidebarViewController.outline = document.session.parsed.outline }
         // 存储为 / 首次存储后 URL 变化 → 侧栏跟随
         fileURLObserver = document.observe(\.fileURL, options: [.new]) { [weak self] doc, _ in
             Task { @MainActor [weak self] in
-                self?.sidebarViewController.currentURL = doc.fileURL
-                if self?.editorItem != nil { self?.editorViewController.documentURLDidChange(doc.fileURL) }
+                guard let self else { return }
+                self.sidebarViewController.currentURL = doc.fileURL
+                if self.editorItem != nil { self.editorViewController.documentURLDidChange(doc.fileURL) }
+                // 未命名文档首次存储 / 存储为：监视新路径、相对图片按新目录解析（以前只在 showWindow 时设过一次）
+                self.readerViewController.textView.baseURL = doc.fileURL
+                if self.window?.isVisible == true { self.session.startWatching() }
             }
         }
 
@@ -172,43 +180,53 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         markdownDocument?.session.stopWatching()
     }
 
+    deinit {
+        if let prefsObserver { NotificationCenter.default.removeObserver(prefsObserver) }
+        if let selectionObserver { NotificationCenter.default.removeObserver(selectionObserver) }
+    }
+
+    /// 编辑器面板已经建好（阅读 / 混合模式下没有：此时 `editorViewController.textView` 还是 nil，碰它就崩）
+    var hasEditorPane: Bool { editorItem != nil && editorViewController.isViewLoaded }
+    /// 需要源码编辑器的动作：阅读 / 混合模式先切到编辑模式
+    func ensureEditorMode() { if mode == .reader || mode == .hybrid { mode = .editor } }
+
     // MARK: - 专注 / 沉浸
 
     private(set) var focusMode: EditorFocusMode = EditorFocusMode(rawValue: UserDefaults.standard.integer(forKey: "editor.focus")) ?? .off {
         didSet {
             UserDefaults.standard.set(focusMode.rawValue, forKey: "editor.focus")
-            if editorItem != nil || focusMode != .off { editorViewController.textView.focusMode = focusMode }
+            if hasEditorPane { editorViewController.textView.focusMode = focusMode }
         }
     }
 
     private(set) var posMode: POSMode = POSMode(rawValue: UserDefaults.standard.integer(forKey: "editor.pos")) ?? .off {
         didSet {
             UserDefaults.standard.set(posMode.rawValue, forKey: "editor.pos")
-            if editorItem != nil || posMode != .off { editorViewController.textView.posMode = posMode }
+            if hasEditorPane { editorViewController.textView.posMode = posMode }
         }
     }
     private(set) var styleCheckOn: Bool = UserDefaults.standard.bool(forKey: "editor.styleCheck") {
         didSet {
             UserDefaults.standard.set(styleCheckOn, forKey: "editor.styleCheck")
-            if editorItem != nil || styleCheckOn { editorViewController.textView.styleChecker = styleCheckOn ? StyleRulesStore.checker() : nil }
+            if hasEditorPane { editorViewController.textView.styleChecker = styleCheckOn ? StyleRulesStore.checker() : nil }
         }
     }
     @objc func toggleStyleCheck(_ sender: Any?) {
-        if mode == .reader { mode = .editor }
+        ensureEditorMode()
         styleCheckOn.toggle()
     }
 
     @objc func setPOSMode(_ sender: NSMenuItem) {
-        if mode == .reader { mode = .editor }
+        ensureEditorMode()
         posMode = POSMode(rawValue: sender.tag) ?? .off
     }
 
     @objc func setFocusMode(_ sender: NSMenuItem) {
-        if mode == .reader { mode = .editor }
+        ensureEditorMode()
         focusMode = EditorFocusMode(rawValue: sender.tag) ?? .off
     }
     @objc func cycleFocusMode(_ sender: Any?) {
-        if mode == .reader { mode = .editor }
+        ensureEditorMode()
         focusMode = focusMode.next
     }
 
@@ -265,7 +283,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         if item.action == #selector(setPOSMode(_:)) { item.state = item.tag == posMode.rawValue ? .on : .off }
         if item.action == #selector(toggleStyleCheck(_:)) { item.state = styleCheckOn ? .on : .off }
         if item.action == #selector(toggleAuthorship(_:)) { item.state = Preferences.shared.authorship ? .on : .off }
-        if item.action == #selector(markSelectionAsAuthor(_:)) { return mode != .reader && editorViewController.isViewLoaded && editorViewController.textView.selectedRange().length > 0 }
+        if item.action == #selector(markSelectionAsAuthor(_:)) { return hasEditorPane && editorViewController.textView.selectedRange().length > 0 }
         if item.action == #selector(navigateBack(_:)) { return NavigationHistory.shared.canGoBack }
         if item.action == #selector(navigateForward(_:)) { return NavigationHistory.shared.canGoForward }
         if item.action == #selector(toggleImmersive(_:)) { item.title = isImmersive ? L("退出沉浸写作") : L("沉浸写作") }
@@ -329,8 +347,8 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     private func wireHybrid() {
         guard !hybridWired, let hybrid = readerViewController.textView as? HybridTextView else { return }
         hybridWired = true
-        hybrid.onSourceEdit = { [weak self] _, text, lines in
-            guard let self else { return }
+        hybrid.onSourceEdit = { [weak self, weak hybrid] _, text, lines in
+            guard let self, let hybrid else { return }
             var all = self.session.source.components(separatedBy: "\n")
             // 源码末尾有换行时 components 多出一个空串；块源码自带末尾换行
             let newLines = text.hasSuffix("\n") ? String(text.dropLast()).components(separatedBy: "\n") : text.components(separatedBy: "\n")
@@ -464,7 +482,8 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     }
 
     @objc func pasteAsPlainText(_ sender: Any?) {
-        if mode == .reader { mode = .editor }
+        ensureEditorMode()
+        guard hasEditorPane else { NSSound.beep(); return }
         editorViewController.textView.pasteAsPlainText(sender)
     }
 
@@ -479,6 +498,12 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         var fromDir = markdownDocument?.fileURL?.deletingLastPathComponent().standardizedFileURL.path ?? rootPath
         fromDir = fromDir.hasPrefix(rootPath) ? String(fromDir.dropFirst(rootPath.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/")) : ""
         guard let rel = WikiLink.resolve(name, candidates: index.relativePaths, fromDir: fromDir) else {
+            if index.isScanning {
+                // 索引还没扫完：扫完再试一次，而不是直接说找不到
+                var token: ChangeObservers.Token?
+                token = index.observers.add { [weak self] in token = nil; _ = self?.openWikiLink(name) }
+                return true
+            }
             let a = NSAlert(); a.messageText = String(format: L("找不到「%@」"), name); a.informativeText = L("侧栏根目录下没有同名的 Markdown 文件。"); a.runModal()
             return false
         }

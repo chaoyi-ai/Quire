@@ -21,7 +21,8 @@ final class FileIndex {
     private(set) var relativePaths: [String] = []
     private(set) var isScanning = false
     private(set) var truncated = false
-    var onChange: (() -> Void)?
+    /// 扫描完成（首次 / 目录变化重扫）；多订阅者，token 释放即退订
+    let observers = ChangeObservers()
     private var generation = 0
     private var rescanWork: DispatchWorkItem?
 
@@ -50,7 +51,7 @@ final class FileIndex {
                 self.relativePaths = paths
                 self.truncated = truncated
                 self.isScanning = false
-                self.onChange?()
+                self.observers.notify()
             }
         }
     }

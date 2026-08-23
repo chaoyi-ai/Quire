@@ -103,7 +103,7 @@ public final class MermaidRenderer: NSObject, WKNavigationDelegate {
     /// 打包资源里是否有 mermaid.min.js（构建时由 scripts/fetch_mermaid.sh 放入）
     public nonisolated static var isAvailable: Bool { resourceURL(for: "mermaid.min.js") != nil }
     nonisolated static func resourceURL(for name: String) -> URL? {
-        guard let dir = Bundle.module.url(forResource: "Mermaid", withExtension: nil) else { return nil }
+        guard let dir = QuireRenderResources.bundle.url(forResource: "Mermaid", withExtension: nil) else { return nil }
         let u = dir.appendingPathComponent(name)
         return FileManager.default.fileExists(atPath: u.path) ? u : nil
     }

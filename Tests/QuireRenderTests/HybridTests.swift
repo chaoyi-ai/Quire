@@ -93,6 +93,57 @@ final class HybridRerenderTests: XCTestCase {
         XCTAssertEqual(view.textStorage!.string, full.attributed.string)
         XCTAssertNil(view.activeBlock); XCTAssertFalse(view.isEditable)
     }
+
+    /// 只激活不编辑就退出：diff 为空、宿主不走 replaceBlocks，块必须已经是渲染态（以前永远停在源码态）
+    func testDeactivateWithoutEditRestoresRenderedForm() {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let style = RenderStyle(theme: theme)
+        let parser = MarkdownParser(), renderer = DocumentRenderer(style: style)
+        let src = "# T\n\n**粗** 段\n\n- 项\n"
+        let view = HybridTextView(style: style)
+        let sv = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 400)); sv.documentView = view
+        let r0 = renderer.render(parser.parse(src))
+        view.source = src; view.setRendered(r0, style: style); view.isHybridEnabled = true
+        XCTAssertTrue(view.activate(block: 1))
+        XCTAssertTrue(view.textStorage!.string.contains("**粗**"))
+        view.deactivate(commit: true)
+        XCTAssertEqual(view.textStorage!.string, r0.attributed.string)
+        view.updateRendered(r0)   // 宿主：diff 为空
+        XCTAssertEqual(view.textStorage!.string, r0.attributed.string)
+        // 关掉混合模式也一样
+        XCTAssertTrue(view.activate(block: 2))
+        view.isHybridEnabled = false
+        XCTAssertEqual(view.textStorage!.string, r0.attributed.string)
+        // 点击位置换算：激活块之后的块在退出后没有残余平移
+        XCTAssertEqual(view.blockIndex(atCharacter: r0.ranges[2].location), 2)
+    }
+
+    /// 编辑块 1 → 立刻点到块 2 → 块 1 的重渲染这时才到：块 2 应保持激活、光标不丢
+    func testAsyncRerenderKeepsNewlyActivatedBlock() {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let style = RenderStyle(theme: theme)
+        let parser = MarkdownParser(), renderer = DocumentRenderer(style: style)
+        let src = "# T\n\n第二段\n\n第三段\n"
+        let view = HybridTextView(style: style)
+        let sv = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 400)); sv.documentView = view
+        let r0 = renderer.render(parser.parse(src))
+        view.source = src; view.setRendered(r0, style: style); view.isHybridEnabled = true
+        XCTAssertTrue(view.activate(block: 1))
+        view.insertText("XY", replacementRange: NSRange(location: view.activeRange.location + 3, length: 0))
+        let newSrc = "# T\n\n第二段XY\n\n第三段\n"
+        view.source = newSrc
+        XCTAssertTrue(view.activate(block: 2, caretAt: 2))   // 用户已经点到下一块
+        XCTAssertEqual(view.activeSource, "第三段\n")
+        let (r1, diff) = renderer.render(parser.parse(newSrc), reusing: r0)
+        view.replaceBlocks(with: r1, diff: diff, previous: r0)   // 块 1 的重渲染此时到达
+        XCTAssertEqual(view.activeBlock, 2)
+        XCTAssertTrue(view.isEditable)
+        XCTAssertEqual(view.activeSource, "第三段\n")
+        XCTAssertEqual(view.selectedRange().location, view.activeRange.location + 2)
+        // 除了激活块以外，内容与全量渲染一致
+        view.deactivate(commit: false)
+        XCTAssertEqual(view.textStorage!.string, renderer.render(parser.parse(newSrc)).attributed.string)
+    }
 }
 
 @MainActor

@@ -56,6 +56,10 @@ final class EditorTests: XCTestCase {
         let end = (editor.source as NSString).length
         editor.insertText("```\n", replacementRange: NSRange(location: end, length: 0))
         XCTAssertEqual(attrs("b")[.foregroundColor] as? NSColor, code)
+        // 删掉开头的围栏：后面的行要变回正文色（以前只看新文本里有没有 ``` ，删除时漏掉）
+        editor.insertText("", replacementRange: NSRange(location: 0, length: 4))
+        XCTAssertNotEqual(attrs("b")[.foregroundColor] as? NSColor, code)
+        XCTAssertNotEqual(attrs("c")[.foregroundColor] as? NSColor, code)
     }
 
     /// 在围栏内 / front matter 内编辑一行：增量高亮要拿到正确的行首状态（不能把围栏内的文字当正文重新着色）
@@ -154,7 +158,23 @@ final class IncrementalReaderTests: XCTestCase {
             let full = renderer.render(docB).attributed.string
             XCTAssertEqual(reader.textStorage!.string, full, "增量结果应与全量一致：\(a.debugDescription) → \(b.debugDescription)")
             XCTAssertEqual(reader.rendered?.blocks.count, docB.blocks.count)
+            // 复用的块要带新解析的行号（混合模式 / 复制为 Markdown 按行号切源码）
+            XCTAssertEqual(rb.blocks.map { $0.block.sourceRange }, docB.blocks.map(\.sourceRange), "行号应来自新解析：\(b.debugDescription)")
         }
+    }
+
+    func testReusedBlocksCarryNewLineNumbersEvenWhenDiffIsEmpty() {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let style = RenderStyle(theme: theme)
+        let renderer = DocumentRenderer(style: style)
+        let parser = MarkdownParser()
+        let a = "# A\n\np1\n\np2\n"
+        let b = "\n\n# A\n\np1\n\np2\n"   // 前面多两个空行：内容没变，行号全变
+        let ra = renderer.render(parser.parse(a))
+        let docB = parser.parse(b)
+        let (rb, diff) = renderer.render(docB, reusing: ra)
+        XCTAssertTrue(diff.isEmpty)
+        XCTAssertEqual(rb.blocks.map { $0.block.sourceRange?.start.line }, [3, 5, 7])
     }
 }
 
@@ -347,6 +367,16 @@ final class TableAssistTests: XCTestCase {
         e.insertBacktab(nil)   // 回到上一行末格
         XCTAssertEqual((e.source as NSString).substring(with: e.selectedRange()), "2")
     }
+    /// 未格式化的表格里直接在末格按 Tab：格式化后字符串变长，不能再用旧快照取字符（以前越界崩溃）
+    func testTabInLastCellOfUnformattedTable() {
+        let e = make("| a | b |\n|--|--|\n| 1 | 2 |\n")
+        let ns = e.source as NSString
+        e.setSelectedRange(NSRange(location: ns.range(of: "2").location, length: 0))
+        e.insertTab(nil)
+        XCTAssertEqual(e.lineCount, 5, e.source)
+        XCTAssertTrue(e.source.contains("|     |     |"), e.source)
+    }
+
     func testTabOutsideTableIndents() {
         let e = make("plain")
         e.setSelectedRange(NSRange(location: 5, length: 0))
@@ -444,7 +474,18 @@ final class WikiCompletionTests: XCTestCase {
         var idx = 0
         let list = e.completions(forPartialWordRange: NSRange(location: 4, length: 1), indexOfSelectedItem: &idx)
         XCTAssertEqual(list, ["设计文档"])
+        // 打字触发：有候选 → 进入 wikilink 补全态，回车后补 ]]
+        e.setSource("见 [[")
+        e.setSelectedRange(NSRange(location: 4, length: 0))
+        e.insertText("设", replacementRange: NSRange(location: 4, length: 0))
         e.insertCompletion("设计文档", forPartialWordRange: NSRange(location: 4, length: 1), movement: NSTextMovement.return.rawValue, isFinal: true)
+        XCTAssertEqual(e.source, "见 [[设计文档]]")
+        // 没候选时不能把补全态卡死：之后再打 [[ 仍要能触发
+        e.setSource("")
+        e.insertText("[[zzz", replacementRange: NSRange(location: 0, length: 0))
+        e.insertText("\n[[设", replacementRange: NSRange(location: 5, length: 0))
+        e.insertCompletion("设计文档", forPartialWordRange: NSRange(location: 8, length: 1), movement: NSTextMovement.return.rawValue, isFinal: true)
+        XCTAssertTrue(e.source.hasSuffix("[[设计文档]]"), e.source)
         // 不在 [[ 里：不提供候选（回到系统行为）
         e.setSource("普通 文字")
         e.setSelectedRange(NSRange(location: 5, length: 0))

@@ -215,7 +215,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         pathControl.url = root
         rootNode = SidebarNode(kind: .folder, url: root, name: root.lastPathComponent, parent: nil)
         currentFileNode = nil
-        sectionNodes = [:]; seenSections = []; tagStore = nil
+        sectionNodes = [:]; seenSections = []; tagStore = nil; tagToken = nil
         outlineView.reloadData()
         loadChildren(of: rootNode!) { [weak self] in self?.revealCurrentFile() }
         watcher = FolderWatcher(url: root) { [weak self] dirs in
@@ -392,7 +392,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
 
     private var sectionNodes: [String: SidebarNode] = [:]
     private var tagStore: TagIndexStore?
-    private var favoritesObserver: NSObjectProtocol?
+    private var tagToken: ChangeObservers.Token?
+    nonisolated(unsafe) private var favoritesObserver: NSObjectProtocol?
 
     private func virtualSections() -> [SidebarNode] {
         func section(_ key: String, _ title: String) -> SidebarNode {
@@ -406,9 +407,11 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         refreshFavorites(fav); refreshRecents(recent); refreshTags(tags)
         if tagStore == nil, let root = rootURL {
             tagStore = TagIndexStore.store(for: root)
-            tagStore?.onChange = { [weak self] in self?.reinsertSections() }
-            favoritesObserver = NotificationCenter.default.addObserver(forName: Favorites.didChange, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.reinsertSections() }
+            tagToken = tagStore?.observers.add { [weak self] in self?.reinsertSections() }
+            if favoritesObserver == nil {
+                favoritesObserver = NotificationCenter.default.addObserver(forName: Favorites.didChange, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.reinsertSections() }
+                }
             }
         }
         return [fav, recent, tags].filter { !($0.children?.isEmpty ?? true) }

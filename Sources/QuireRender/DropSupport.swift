@@ -19,8 +19,10 @@ public enum DropSupport {
 
     /// 相对于文档目录的路径（不同卷或无文档时给绝对路径）；空格等做百分号编码
     public static func relativePath(of url: URL, to documentURL: URL?) -> String {
-        let target = url.standardizedFileURL.pathComponents
-        guard let base = documentURL?.deletingLastPathComponent().standardizedFileURL.pathComponents, base.first == target.first else {
+        // 两边都解析符号链接（/tmp vs /private/tmp），不同卷（/Volumes/X）给绝对路径
+        let target = url.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        func volume(_ c: [String]) -> String { c.count > 2 && c[1] == "Volumes" ? c[2] : "/" }
+        guard let base = documentURL?.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL.pathComponents, volume(base) == volume(target) else {
             return url.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? url.path
         }
         var i = 0

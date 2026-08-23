@@ -25,7 +25,7 @@ public enum ThemeStore {
     }
 
     public static var builtInDirectory: URL? {
-        Bundle.module.url(forResource: "Themes", withExtension: nil)
+        QuireCoreResources.bundle.url(forResource: "Themes", withExtension: nil)
     }
 
     /// 只加载内置主题（同步，通常 < 5 ms）

@@ -23,6 +23,15 @@ extension EditorTextView {
         ts.endEditing()
     }
 
+    /// 滚动后补铺新进入视口的区间（底色只铺可见带 ± 一屏）
+    public func scheduleAuthorshipRepaint(delay: TimeInterval = 0.1) {
+        guard showsAuthorship, !authorshipSpans.isEmpty else { return }
+        authorshipRepaintWork?.cancel()
+        let w = DispatchWorkItem { [weak self] in self?.applyAuthorshipColors() }
+        authorshipRepaintWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: w)
+    }
+
     func clearAuthorshipColors() {
         guard let ts = textStorage, ts.length > 0 else { return }
         ts.beginEditing(); ts.removeAttribute(.backgroundColor, range: NSRange(location: 0, length: ts.length)); ts.endEditing()

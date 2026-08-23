@@ -15,13 +15,16 @@ enum Exporter {
         panel.canCreateDirectories = true
         panel.beginSheetModal(for: window) { resp in
             guard resp == .OK, let url = panel.url else { return }
-            let theme = ThemeManager.shared.currentTheme
-            var opts = HTMLRenderer.Options()
-            opts.title = document.displayName
-            let html = HTMLRenderer(theme: theme, options: opts).render(document.session.parsed)
-            do { try html.write(to: url, atomically: true, encoding: .utf8) }
+            do { try html(for: document).write(to: url, atomically: true, encoding: .utf8) }
             catch { NSApp.presentError(error) }
         }
+    }
+
+    /// 整页 HTML（内联主题 CSS）——导出面板与 quire://export 共用
+    static func html(for document: MarkdownDocument) -> String {
+        var opts = HTMLRenderer.Options()
+        opts.title = document.displayName
+        return HTMLRenderer(theme: ThemeManager.shared.currentTheme, options: opts).render(document.session.parsed)
     }
 
     static func exportPDF(document: MarkdownDocument, from window: NSWindow) {
@@ -35,35 +38,38 @@ enum Exporter {
         panel.beginSheetModal(for: window) { resp in
             guard resp == .OK, let url = panel.url else { return }
             model.layout.save()
-            _ = writePDF(document: document, windowController: wc, to: url, layout: model.layout)
+            Task { @MainActor in
+                if await !writePDF(document: document, windowController: wc, to: url, layout: model.layout) { presentExportFailure(url) }
+            }
         }
     }
 
-    /// 直接写 PDF（分页；纸张 / 边距 / 页眉页脚按 `layout`，默认读记住的设置）
+    static func presentExportFailure(_ url: URL) {
+        let a = NSAlert(); a.messageText = L("导出失败"); a.informativeText = String(format: L("没能写入 %@"), url.path); a.runModal()
+    }
+
+    /// 直接写 PDF（分页；纸张 / 边距 / 页眉页脚按 `layout`，默认读记住的设置）。先把图片 / Mermaid 都加载完再打印
     @discardableResult
-    static func writePDF(document: MarkdownDocument, windowController wc: DocumentWindowController, to url: URL, layout: PDFLayout = .load()) -> Bool {
+    static func writePDF(document: MarkdownDocument, windowController wc: DocumentWindowController, to url: URL, layout: PDFLayout? = nil) async -> Bool {
+        let layout = layout ?? PDFLayout.load()
         let info = NSPrintInfo.shared.copy() as! NSPrintInfo
         info.jobDisposition = .save
         info.dictionary()[NSPrintInfo.AttributeKey.jobSavingURL] = url
-        info.horizontalPagination = .clip
-        info.verticalPagination = .clip
-        info.isVerticallyCentered = false
-        info.isHorizontallyCentered = false
-        layout.apply(to: info)
-        info.dictionary()[NSPrintInfo.AttributeKey.headerAndFooter] = true
-        let view = wc.readerViewController.printableView(width: info.paperSize.width - info.leftMargin - info.rightMargin, layout: layout, document: document)
+        layout.configure(info, forPrintPanel: false)
+        let view = await wc.readerViewController.printableView(width: info.paperSize.width - info.leftMargin - info.rightMargin, layout: layout, document: document)
         let op = NSPrintOperation(view: view, printInfo: info)
         op.showsPrintPanel = false
         op.showsProgressPanel = false
         guard op.run() else { return false }
-        addBookmarks(to: url, from: view, printInfo: info)
-        return true
+        return addBookmarks(to: url, from: view, printInfo: info)
     }
 
     /// PDF 书签：大纲 → PDFOutline（按标题级别嵌套），目标页与页内位置按打印分页算
-    static func addBookmarks(to url: URL, from tv: ReaderTextView, printInfo info: NSPrintInfo) {
+    @discardableResult
+    static func addBookmarks(to url: URL, from tv: ReaderTextView, printInfo info: NSPrintInfo) -> Bool {
         let headings = tv.headingPositions()
-        guard !headings.isEmpty, let pdf = PDFDocument(url: url) else { return }
+        guard !headings.isEmpty else { return true }
+        guard let pdf = PDFDocument(url: url) else { return false }
         let pageHeight = (info.paperSize.height - info.topMargin - info.bottomMargin).rounded(.down)
         let root = PDFOutline()
         var stack: [(level: Int, node: PDFOutline)] = [(0, root)]
@@ -80,7 +86,7 @@ enum Exporter {
             stack.append((h.level, item))
         }
         pdf.outlineRoot = root
-        pdf.write(to: url)
+        return pdf.write(to: url)
     }
 
     /// 导出为图片：整页 PNG（2×），超长时按高度上限截断并提示
@@ -92,15 +98,17 @@ enum Exporter {
         panel.canCreateDirectories = true
         panel.beginSheetModal(for: window) { resp in
             guard resp == .OK, let url = panel.url else { return }
-            writeImage(document: document, windowController: wc, to: url)
+            Task { @MainActor in
+                if await !writeImage(document: document, windowController: wc, to: url) { presentExportFailure(url) }
+            }
         }
     }
 
     @discardableResult
-    static func writeImage(document: MarkdownDocument, windowController wc: DocumentWindowController, to url: URL) -> Bool {
+    static func writeImage(document: MarkdownDocument, windowController wc: DocumentWindowController, to url: URL) async -> Bool {
         do {
             let width: CGFloat = 800
-            let view = wc.readerViewController.printableView(width: width - 48)
+            let view = await wc.readerViewController.printableView(width: width - 48)
             let maxH: CGFloat = 16_000
             let contentH = min(view.frame.height, maxH)
             let container = NSView(frame: NSRect(x: 0, y: 0, width: width, height: contentH + 48))

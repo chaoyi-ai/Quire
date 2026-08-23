@@ -4,6 +4,7 @@ import QuireCore
 /// 快速打开（⌘P）：悬浮面板 = 搜索框 + 结果表；↑↓ 选择、⏎ 打开、Esc 关闭。
 @MainActor
 final class QuickOpenPanel: NSPanel, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
+    private var indexToken: ChangeObservers.Token?
     private let field = NSTextField()
     private let table = NSTableView()
     private let scroll = NSScrollView()
@@ -85,7 +86,7 @@ final class QuickOpenPanel: NSPanel, NSTextFieldDelegate, NSTableViewDataSource,
             hint.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 16),
             hint.bottomAnchor.constraint(equalTo: effect.bottomAnchor, constant: -8),
         ])
-        index.onChange = { [weak self] in self?.refresh() }
+        indexToken = index.observers.add { [weak self] in self?.refresh() }
         initialFirstResponder = field
     }
 

@@ -116,17 +116,18 @@ public struct Authorship: Codable, Equatable, Sendable {
     /// 把正文与注释块分开。`mismatch`：有注释块但哈希对不上（正文被外部改过）→ 返回的 authorship 只保留作者表、区间清空
     public static func split(_ source: String) -> (body: String, authorship: Authorship?, mismatch: Bool) {
         guard let r = source.range(of: marker, options: .backwards) else { return (source, nil, false) }
-        let tail = source[r.lowerBound...]
-        guard tail.hasSuffix("-->\n") || tail.hasSuffix("-->") else { return (source, nil, false) }
+        // 别的编辑器可能在文件尾补了空行
+        let tail = source[r.lowerBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard tail.hasSuffix("-->") else { return (source, nil, false) }
         var body = String(source[..<r.lowerBound])
         if body.hasSuffix("\n\n") { body.removeLast() }   // embed 时在正文后加的那个空行
         // 首行：<!-- quire-authorship v1 hash=XXXX
         let lines = tail.split(separator: "\n", omittingEmptySubsequences: false)
-        guard lines.count >= 3 else { return (body, nil, false) }
-        let header = lines[0]
+        let header = lines.first ?? ""
         let hash = header.split(separator: " ").first { $0.hasPrefix("hash=") }.map { String($0.dropFirst(5)) }
-        let json = lines[1..<(lines.count - 1)].joined(separator: "\n").replacingOccurrences(of: "-->", with: "")
-        guard let data = json.data(using: .utf8), let a = try? JSONDecoder().decode(Authorship.self, from: data) else { return (body, nil, false) }
+        let json = lines.count >= 3 ? lines[1..<(lines.count - 1)].joined(separator: "\n").replacingOccurrences(of: "-->", with: "") : ""
+        // 注释块在但解析不了（版本 / 手改坏了）：当"对不上"处理——丢区间、提示，而不是悄悄把块吞掉
+        guard let data = json.data(using: .utf8), let a = try? JSONDecoder().decode(Authorship.self, from: data) else { return (body, Authorship(), true) }
         if let hash, hash != Self.hash(body) {
             return (body, Authorship(authors: a.authors, spans: []), true)
         }
@@ -135,10 +136,13 @@ public struct Authorship: Codable, Equatable, Sendable {
         return (body, fixed, false)
     }
 
-    /// 正文 + 注释块（没有区间时只返回正文——不往干净文件里塞东西）
+    /// 有没有值得存的东西：区间，或改过的作者表（添加过作者）。都没有就不往干净文件里塞注释块
+    public var isWorthPersisting: Bool { !spans.isEmpty || authors != Self.defaultAuthors }
+
+    /// 正文 + 注释块（没东西可存时只返回正文）
     public func embed(into body: String) -> String {
         let enc = JSONEncoder(); enc.outputFormatting = [.sortedKeys]
-        guard !spans.isEmpty, let data = try? enc.encode(self), let json = String(data: data, encoding: .utf8) else { return body }
+        guard isWorthPersisting, let data = try? enc.encode(self), let json = String(data: data, encoding: .utf8) else { return body }
         var out = body
         if !out.hasSuffix("\n") { out += "\n" }
         // 哈希算的是补过换行的正文：split 恢复出来的正文就是这个样子

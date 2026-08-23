@@ -5,5 +5,5 @@ import Foundation
 /// 测试 `LocalizationTests` 保证代码里出现的每个键在两套 .strings 里都存在。
 @inline(__always)
 public func RL(_ key: String) -> String {
-    Bundle.module.localizedString(forKey: key, value: key, table: nil)
+    QuireRenderResources.bundle.localizedString(forKey: key, value: key, table: nil)
 }

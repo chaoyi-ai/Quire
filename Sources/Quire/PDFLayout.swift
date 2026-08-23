@@ -16,8 +16,10 @@ struct PDFLayout: Codable, Equatable {
     static let key = "pdf.layout"
     static let placeholders = ["{page}", "{pages}", "{title}", "{file}", "{date}"]
 
-    static func load() -> PDFLayout {
-        guard let d = UserDefaults.standard.data(forKey: key), let l = try? JSONDecoder().decode(PDFLayout.self, from: d) else { return PDFLayout() }
+    @MainActor static func load() -> PDFLayout {
+        guard let d = UserDefaults.standard.data(forKey: key), let l = try? JSONDecoder().decode(PDFLayout.self, from: d) else {
+            var l = PDFLayout(); l.headingNumbers = Preferences.shared.headingNumbers; return l   // 没单独设过就跟阅读视图一致
+        }
         return l
     }
     func save() { if let d = try? JSONEncoder().encode(self) { UserDefaults.standard.set(d, forKey: Self.key) } }
@@ -26,9 +28,15 @@ struct PDFLayout: Codable, Equatable {
         switch paper { case .system: return system; case .a4: return NSSize(width: 595, height: 842); case .letter: return NSSize(width: 612, height: 792) }
     }
 
-    func apply(to info: NSPrintInfo) {
-        info.paperSize = paperSize(default: info.paperSize)
+    /// 打印与导出 PDF 共用的 NSPrintInfo 设置。`forPrintPanel`：纸张交给打印面板，这里不改
+    func configure(_ info: NSPrintInfo, forPrintPanel: Bool) {
+        info.horizontalPagination = .clip
+        info.verticalPagination = .clip
+        info.isVerticallyCentered = false
+        info.isHorizontallyCentered = false
+        if !forPrintPanel { info.paperSize = paperSize(default: info.paperSize) }
         info.topMargin = max(0, top); info.bottomMargin = max(0, bottom); info.leftMargin = max(0, left); info.rightMargin = max(0, right)
+        info.dictionary()[NSPrintInfo.AttributeKey.headerAndFooter] = true
     }
 
     /// 展开模板；全空返回 nil

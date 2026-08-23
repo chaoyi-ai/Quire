@@ -16,6 +16,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     /// 字符级编辑（含撤销 / 重做 / 程序插入；setSource 整体替换除外）：editedRange 是新内容范围，delta 是长度变化，isPaste 表示来自粘贴
     public var onCharactersEdited: ((_ editedRange: NSRange, _ delta: Int, _ isPaste: Bool) -> Void)?
     var isPasting = false
+    var authorshipRepaintWork: DispatchWorkItem?
 
     public var posMode: POSMode = .off {
         didSet {
@@ -98,8 +99,8 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     }
 
     public override func insertCompletion(_ word: String, forPartialWordRange charRange: NSRange, movement: Int, isFinal flag: Bool) {
-        // wikilink：选定后补上 `]]`
-        if completingWikiLink, flag, movement != NSTextMovement.cancel.rawValue {
+        // wikilink：按 Return / Tab 选定后补上 `]]`（点到别处 / 其他方式结束只收起，不补）
+        if completingWikiLink, flag, movement == NSTextMovement.return.rawValue || movement == NSTextMovement.tab.rawValue {
             super.insertCompletion(word + "]]", forPartialWordRange: charRange, movement: movement, isFinal: true)
             completingWikiLink = false
             return
@@ -110,8 +111,9 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
 
     /// 打字时：在 `[[` 之后自动弹补全
     private func maybeTriggerWikiLinkCompletion() {
-        guard wikiLinkCompletions != nil, let r = wikiLinkPrefixRange() else { completingWikiLink = false; return }
-        _ = r
+        guard let provider = wikiLinkCompletions, let r = wikiLinkPrefixRange(), let ns = textStorage?.string as NSString? else { completingWikiLink = false; return }
+        // 没候选（文档未保存 / 索引还在扫 / 没匹配）时系统不会弹面板、也不会回调 insertCompletion：标志不能置上，否则以后永远不再触发
+        guard !provider(ns.substring(with: r)).isEmpty else { completingWikiLink = false; return }
         completingWikiLink = true
         complete(nil)
     }
@@ -260,7 +262,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     // MARK: - 高亮
 
     /// 每行行首的围栏 / front matter 状态（与 lineStarts 对齐）
-    private struct LineState { var fenceChar: UInt8 = 0; var fenceLen: UInt16 = 0; var inFrontMatter = false }
+    private struct LineState: Equatable { var fenceChar: UInt8 = 0; var fenceLen: UInt16 = 0; var inFrontMatter = false }
     private var lineStates: [LineState] = [LineState()]
 
     /// 一趟重建行索引 + 每行行首状态。分块 getCharacters（不用 String.utf16 逐字遍历：1 MB 桥接串 ~9 ms → <1 ms）。
@@ -337,7 +339,10 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     private func rehighlightAll() {
         guard let ts = textStorage, ts.length > 0 else { return }
         highlight(range: NSRange(location: 0, length: ts.length), state: .initial)
+        // 全量高亮会重置所有属性：词性色 / 文风标记 / 归属底色都要重新铺
         if showsAuthorship { applyAuthorshipColors() }
+        schedulePOSRecolor(delay: 0)
+        scheduleStyleCheck(delay: 0)
     }
 
     /// `location` 所在行行首的围栏 / front matter 状态（查表，O(log 行数)）
@@ -431,13 +436,17 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         nonisolated(unsafe) let storage = textStorage
         MainActor.assumeIsolated {
             guard !isHighlighting, editedMask.contains(.editedCharacters) else { return }
+            let oldStates = lineStates
             rebuildLineStarts()
             onCharactersEdited?(editedRange, delta, isPasting)
             let ns = storage.string as NSString
             var para = ns.paragraphRange(for: editedRange)
-            // 若编辑涉及围栏标记，重新高亮到文末（围栏状态会向下传播）
-            let edited = ns.substring(with: para)
-            if edited.contains("```") || edited.contains("~~~") || edited.hasPrefix("---") {
+            // 这段编辑是否改变了其后所有行的围栏 / front matter 状态（加了或删了 ``` / ---）：
+            // 比较"编辑段之后那一行"的行首状态，新旧不同就重新高亮到文末（只看新文本里有没有 ``` 会漏掉删除围栏的情况）
+            let afterIdx = lineNumber(at: min(para.location + para.length, ns.length)) - 1
+            let oldIdx = afterIdx - (lineStates.count - oldStates.count)
+            let stateChanged = afterIdx < lineStates.count && (oldIdx < 0 || oldIdx >= oldStates.count || oldStates[oldIdx] != lineStates[afterIdx])
+            if stateChanged || ns.substring(with: para).hasPrefix("---") {
                 para = NSRange(location: para.location, length: ns.length - para.location)
             }
             let st = fenceState(before: para.location)
@@ -450,8 +459,11 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         super.didChangeText()
         onTextChange?()
         updateFormatToolbar()
+        // 文本变了：还在后台跑的词性 / 文风任务算的是旧文本，结果作废
+        posGeneration += 1; styleCheckGeneration += 1
         schedulePOSRecolor()
         scheduleStyleCheck()
+        if wikiLinkPrefixRange() == nil { completingWikiLink = false }
         if !completingWikiLink { maybeTriggerWikiLinkCompletion() }
         if focusMode != .off {
             applyFocusDim()
@@ -504,7 +516,11 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
 
     /// 剪贴板图片 → `<文档目录>/assets/<文档名>/粘贴-时间戳.png`，插入 `![](相对路径)`。文档未保存时无处可放：返回 false 走默认
     func pasteImageFromPasteboard(_ pb: NSPasteboard) -> Bool {
-        guard let documentURL else { NSSound.beep(); return false }
+        guard let documentURL else {
+            // 文档还没存盘，图片没处放：说清楚，而不是只响一声
+            let a = NSAlert(); a.messageText = RL("先存储文档再粘贴图片"); a.informativeText = RL("粘贴的图片会存到文档旁边的 assets 文件夹里，所以文档需要先有位置。"); a.runModal()
+            return false
+        }
         guard let data = pb.data(forType: .png) ?? (pb.data(forType: .tiff).flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) }) else { return false }
         let docDir = documentURL.deletingLastPathComponent()
         let folder = docDir.appendingPathComponent(pastedImagesDirectoryName).appendingPathComponent(documentURL.deletingPathExtension().lastPathComponent)
@@ -519,11 +535,9 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         let rel = DropSupport.relativePath(of: url, to: documentURL)
         let text = "![](\(rel))"
         let r = selectedRange()
-        guard shouldChangeText(in: r, replacementString: text) else { return false }
-        insertText(text, replacementRange: r)
+        insertText(text, replacementRange: r)   // insertText 自己会走 shouldChangeText / didChangeText，不要再包一层（否则钩子跑两遍）
         // 光标放到 [] 里，方便直接写 alt
         setSelectedRange(NSRange(location: r.location + 2, length: 0))
-        didChangeText()
         return true
     }
 
@@ -652,11 +666,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
                 let name = u.deletingPathExtension().lastPathComponent
                 return DropSupport.isImage(u) ? "![\(name)](\(rel))" : "[\(u.lastPathComponent)](\(rel))"
             }.joined(separator: "\n")
-            let r = NSRange(location: idx, length: 0)
-            if shouldChangeText(in: r, replacementString: text) {
-                insertText(text, replacementRange: r)
-                didChangeText()
-            }
+            insertText(text, replacementRange: NSRange(location: idx, length: 0))
         }
         return true
     }
@@ -675,7 +685,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
             if content.trimmingCharacters(in: .whitespaces).isEmpty {
                 // 空项目回车：结束列表（删掉标记）
                 let del = NSRange(location: lineRange.location, length: sel.location - lineRange.location)
-                if shouldChangeText(in: del, replacementString: "") { insertText("", replacementRange: del); didChangeText() }
+                insertText("", replacementRange: del)
                 super.insertNewline(sender)
                 return
             }
@@ -770,8 +780,8 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         cellIdx += delta
         // 先格式化整张表（光标按单元格重新定位）
         let (blockRange, lineIndex) = formatTableBlock(containing: sel.location)
-        guard let blockRange else { return false }
-        let block = ns.substring(with: NSRange(location: blockRange.location, length: 0)).isEmpty ? (textStorage!.string as NSString).substring(with: blockRange) : ""
+        guard let blockRange, let live = textStorage?.string as NSString? else { return false }   // 格式化后 ns 已是旧快照，下面一律用 live
+        let block = live.substring(with: blockRange)
         var lines = block.components(separatedBy: "\n")
         if lines.last == "" { lines.removeLast() }
         var li = lineIndex
@@ -781,7 +791,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
             if li + 1 < lines.count { li += 1 } else {
                 let newRow = "|" + String(repeating: "   |", count: max(1, ranges.count))
                 let insertAt = blockRange.location + blockRange.length
-                let text = (ns.character(at: max(0, insertAt - 1)) == 0x0A ? "" : "\n") + newRow + "\n"
+                let text = (insertAt == 0 || live.character(at: insertAt - 1) == 0x0A ? "" : "\n") + newRow + "\n"
                 insertText(text, replacementRange: NSRange(location: insertAt, length: 0))
                 _ = formatTableBlock(containing: insertAt)
                 lines = tableLines(containing: insertAt); li = lines.count - 1
@@ -853,47 +863,59 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     private func indentLines(in range: NSRange, by delta: Int) {
         guard let ns = textStorage?.string as NSString? else { return }
         let lines = ns.lineRange(for: range)
-        var out = ""
-        var removed = 0
-        ns.substring(with: lines).enumerateLines { line, _ in
-            if delta > 0 { out += "  " + line + "\n" }
-            else {
-                var l = line
-                if l.hasPrefix("  ") { l.removeFirst(2); removed += 2 } else if l.hasPrefix(" ") || l.hasPrefix("\t") { l.removeFirst(); removed += 1 }
-                out += l + "\n"
-            }
+        // 只改每行行首那几个字符（不是整段替换）：撤销是一组，归属记录只落在真正改动的字符上
+        var lineStarts: [Int] = []
+        var loc = lines.location
+        while loc < lines.location + lines.length {
+            lineStarts.append(loc)
+            let lr = ns.lineRange(for: NSRange(location: loc, length: 0))
+            loc = lr.location + lr.length
+            if lr.length == 0 { break }
         }
-        if !ns.substring(with: lines).hasSuffix("\n") { out.removeLast() }
-        if shouldChangeText(in: lines, replacementString: out) {
-            insertText(out, replacementRange: lines)
-            didChangeText()
-            setSelectedRange(NSRange(location: lines.location, length: out.utf16.count))
+        var edits: [(NSRange, String)] = []
+        for start in lineStarts {
+            if delta > 0 { edits.append((NSRange(location: start, length: 0), "  ")); continue }
+            let c0 = start < ns.length ? ns.character(at: start) : 0
+            let c1 = start + 1 < ns.length ? ns.character(at: start + 1) : 0
+            if c0 == 0x20, c1 == 0x20 { edits.append((NSRange(location: start, length: 2), "")) }
+            else if c0 == 0x20 || c0 == 0x09 { edits.append((NSRange(location: start, length: 1), "")) }
         }
+        guard !edits.isEmpty else { return }   // 没什么可去掉的：不动文档、不标脏
+        undoManager?.beginUndoGrouping()
+        var shift = 0
+        for (r, text) in edits.sorted(by: { $0.0.location > $1.0.location }).reversed() {
+            insertText(text, replacementRange: NSRange(location: r.location + shift, length: r.length))
+            shift += (text as NSString).length - r.length
+        }
+        undoManager?.endUndoGrouping()
+        setSelectedRange(NSRange(location: lines.location, length: lines.length + shift))
     }
 
     /// 用标记包裹选区（⌘B → **、⌘I → *、⌘K → [text](url)）
     public func wrapSelection(prefix: String, suffix: String, placeholder: String = RL("文本")) {
-        guard let ns = textStorage?.string as NSString? else { return }
         let sel = selectedRange()
-        let text = sel.length > 0 ? ns.substring(with: sel) : placeholder
-        let replacement = prefix + text + suffix
-        guard shouldChangeText(in: sel, replacementString: replacement) else { return }
-        insertText(replacement, replacementRange: sel)
-        didChangeText()
-        setSelectedRange(NSRange(location: sel.location + prefix.utf16.count, length: text.utf16.count))
+        // 有选区：只插入前后标记，选中的文字原样保留（归属不变）；没选区：插入占位文字
+        undoManager?.beginUndoGrouping()
+        let textLen: Int
+        if sel.length > 0 {
+            insertText(suffix, replacementRange: NSRange(location: sel.location + sel.length, length: 0))
+            insertText(prefix, replacementRange: NSRange(location: sel.location, length: 0))
+            textLen = sel.length
+        } else {
+            insertText(prefix + placeholder + suffix, replacementRange: sel)
+            textLen = (placeholder as NSString).length
+        }
+        undoManager?.endUndoGrouping()
+        setSelectedRange(NSRange(location: sel.location + prefix.utf16.count, length: textLen))
     }
 
     @objc public func toggleBold(_ sender: Any?) { wrapSelection(prefix: "**", suffix: "**") }
     @objc public func toggleItalic(_ sender: Any?) { wrapSelection(prefix: "*", suffix: "*") }
     @objc public func insertLink(_ sender: Any?) {
-        guard let ns = textStorage?.string as NSString? else { return }
         let sel = selectedRange()
-        let text = sel.length > 0 ? ns.substring(with: sel) : RL("链接文字")
-        let replacement = "[\(text)](url)"
-        guard shouldChangeText(in: sel, replacementString: replacement) else { return }
-        insertText(replacement, replacementRange: sel)
-        didChangeText()
-        setSelectedRange(NSRange(location: sel.location + text.utf16.count + 3, length: 3))
+        let textLen = sel.length > 0 ? sel.length : (RL("链接文字") as NSString).length
+        wrapSelection(prefix: "[", suffix: "](url)", placeholder: RL("链接文字"))
+        setSelectedRange(NSRange(location: sel.location + textLen + 3, length: 3))
     }
     @objc public func toggleInlineCode(_ sender: Any?) { wrapSelection(prefix: "`", suffix: "`", placeholder: "code") }
     @objc public func toggleStrikethrough(_ sender: Any?) { wrapSelection(prefix: "~~", suffix: "~~") }
@@ -905,17 +927,11 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
 
     /// 选区所在各行：设为 n 级标题（已是该级 → 去掉标记）
     public func setHeadingLevel(_ n: Int) {
-        guard let ns = textStorage?.string as NSString? else { return }
-        let lines = ns.lineRange(for: selectedRange())
-        var out: [String] = []
         let prefix = String(repeating: "#", count: n) + " "
-        ns.substring(with: lines).enumerateLines { line, _ in
-            let stripped = line.replacingOccurrences(of: "^#{1,6}\\s+", with: "", options: .regularExpression)
-            out.append(line.hasPrefix(prefix) ? stripped : prefix + stripped)
+        editLinePrefixes { line in
+            let existing = line.range(of: "^#{1,6}\\s+", options: .regularExpression).map { NSRange($0, in: line) } ?? NSRange(location: 0, length: 0)
+            return (existing, line.hasPrefix(prefix) ? "" : prefix)
         }
-        let text = out.joined(separator: "\n") + (ns.substring(with: lines).hasSuffix("\n") ? "\n" : "")
-        if shouldChangeText(in: lines, replacementString: text) { insertText(text, replacementRange: lines); didChangeText() }
-        setSelectedRange(NSRange(location: lines.location, length: (text as NSString).length - (text.hasSuffix("\n") ? 1 : 0)))
     }
 
     /// 选区所在各行加 / 去行首标记（引用、列表）
@@ -925,12 +941,43 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         var src: [String] = []
         ns.substring(with: lines).enumerateLines { line, _ in src.append(line) }
         let allHave = !src.isEmpty && src.allSatisfy { $0.range(of: pattern, options: .regularExpression) != nil }
-        let out = src.map { line -> String in
-            allHave ? line.replacingOccurrences(of: pattern, with: "$1", options: .regularExpression) : prefix + line
+        editLinePrefixes { line in
+            if allHave {
+                // 去掉标记，保留前导缩进（pattern 的第 1 组）
+                guard let m = line.range(of: pattern, options: .regularExpression) else { return nil }
+                let matched = String(line[m])
+                let indent = matched.replacingOccurrences(of: pattern, with: "$1", options: .regularExpression)
+                return (NSRange(location: 0, length: (matched as NSString).length), indent)
+            }
+            return (NSRange(location: 0, length: 0), prefix)
         }
-        let text = out.joined(separator: "\n") + (ns.substring(with: lines).hasSuffix("\n") ? "\n" : "")
-        if shouldChangeText(in: lines, replacementString: text) { insertText(text, replacementRange: lines); didChangeText() }
-        setSelectedRange(NSRange(location: lines.location, length: (text as NSString).length - (text.hasSuffix("\n") ? 1 : 0)))
+    }
+
+    /// 对选区覆盖的每一行，只替换行首一小段（`edit` 返回行内要替换的范围与新文本；nil = 这行不动）。
+    /// 不整段替换：撤销是一组、归属只落在真正改动的字符、光标 / 选区按位移修正
+    private func editLinePrefixes(_ edit: (String) -> (NSRange, String)?) {
+        guard let ns = textStorage?.string as NSString? else { return }
+        let sel = selectedRange()
+        let lines = ns.lineRange(for: sel)
+        var edits: [(NSRange, String)] = []
+        var loc = lines.location
+        while loc < lines.location + lines.length {
+            let lr = ns.lineRange(for: NSRange(location: loc, length: 0))
+            let line = ns.substring(with: lr).trimmingCharacters(in: .newlines)
+            if let (r, text) = edit(line), !(r.length == 0 && text.isEmpty) { edits.append((NSRange(location: lr.location + r.location, length: r.length), text)) }
+            loc = lr.location + lr.length
+            if lr.length == 0 { break }
+        }
+        guard !edits.isEmpty else { return }
+        undoManager?.beginUndoGrouping()
+        var shift = 0
+        for (r, text) in edits {   // 已按位置升序
+            insertText(text, replacementRange: NSRange(location: r.location + shift, length: r.length))
+            shift += (text as NSString).length - r.length
+        }
+        undoManager?.endUndoGrouping()
+        let newLen = max(0, lines.length + shift - (ns.substring(with: lines).hasSuffix("\n") ? 1 : 0))
+        setSelectedRange(NSRange(location: lines.location, length: newLen))
     }
 
     /// 选区第一行在本视图坐标里的矩形（浮动工具条定位用）
@@ -973,18 +1020,6 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         return menu
     }
 
-    public override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command, let ch = event.charactersIgnoringModifiers {
-            switch ch {
-            case "b": toggleBold(nil); return true
-            case "i": toggleItalic(nil); return true
-            case "k": insertLink(nil); return true
-            case "e": toggleInlineCode(nil); return true
-            default: break
-            }
-        }
-        return super.performKeyEquivalent(with: event)
-    }
 }
 
 // MARK: - 行号栏

@@ -66,6 +66,8 @@ final class QuireDocumentController: NSDocumentController {
 }
 
 /// Markdown 文档：读 / 写 / 自动保存；源码变化通过 DocumentSession 驱动渲染。
+struct UncheckedSendableBox<T>: @unchecked Sendable { let value: T; init(_ v: T) { value = v } }
+
 final class MarkdownDocument: NSDocument {
     /// 原始源码（编辑器与磁盘的唯一真相）。NSDocument.read(from:) 在 SDK 里是 nonisolated（实际主线程调用），故 unsafe 标注
     nonisolated(unsafe) private(set) var source: String = ""
@@ -122,7 +124,8 @@ final class MarkdownDocument: NSDocument {
 
     /// 把文件尾的著作归属注释块从 `source` 里拆出来
     nonisolated private func splitAuthorship() {
-        guard source.utf8.count < 64 * 1024 * 1024, source.contains(Authorship.marker) else { return }
+        // 磁盘上的内容是唯一真相：没有注释块就是没有归属（外部工具可能把它删了；留着旧区间只会错位）
+        guard source.utf8.count < 64 * 1024 * 1024, source.contains(Authorship.marker) else { authorship = nil; authorshipMismatch = false; return }
         let (body, a, mismatch) = Authorship.split(source)
         source = body
         authorship = a
@@ -134,11 +137,15 @@ final class MarkdownDocument: NSDocument {
 
     override func data(ofType typeName: String) throws -> Data {
         let source = sourceForDisk
+        // 原编码装不下新内容（Latin-1 文件里打了个中文）：改用 UTF-8，并记住——否则下次重载会用旧编码去解 UTF-8 字节，得到乱码再写回
+        if source.data(using: encoding) == nil { encoding = .utf8 }
         guard let d = source.data(using: encoding) ?? source.data(using: .utf8) else {
             throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteInapplicableStringEncodingError)
         }
+        lastWrittenData = d
         return d
     }
+    nonisolated(unsafe) private var lastWrittenData: Data?
 
     /// 编辑器每次击键调用（撤销由 NSTextView 走文档 undoManager，自动标脏）。
     /// `tracked`：改动已经通过 `recordEdit` 逐次记录（源码编辑器）；false = 混合模式 / pandoc 等整体替换，按差异对齐归属区间
@@ -185,6 +192,8 @@ final class MarkdownDocument: NSDocument {
     /// 有未保存改动时不静默覆盖：弹 sheet 让用户选择"重新载入（丢弃改动）/ 保留我的改动"；同一份磁盘内容只问一次。
     func reloadFromDisk() {
         guard let url = fileURL, let data = try? Data(contentsOf: url) else { return }
+        // 先按字节比：自己刚写的内容不算外部修改（也避免用记录的编码去解别的编码时"看起来不同"）
+        if data == lastWrittenData { return }
         guard let s = String(data: data, encoding: encoding), s != sourceForDisk, s != source else { return }
         // 自己刚写盘的（正文相同、只是多了归属块 / 尾换行）也不算外部修改
         if authorship != nil || s.contains(Authorship.marker) {
@@ -231,17 +240,28 @@ final class MarkdownDocument: NSDocument {
         else { handle(alert.runModal()) }
     }
 
+    /// 打印（⌘P / 脚本都经这里）：先把打印视图（含图片 / Mermaid）异步准备好，再走 NSDocument 的打印流程——
+    /// `printOperation(withSettings:)` 是同步 API，等不了加载
+    private var preparedPrintView: ReaderTextView?
+    override func print(withSettings printSettings: [NSPrintInfo.AttributeKey: Any], showPrintPanel: Bool, delegate: Any?, didPrint didPrintSelector: Selector?, contextInfo: UnsafeMutableRawPointer?) {
+        guard let wc = windowControllers.first as? DocumentWindowController else { return }
+        let ctx = UncheckedSendableBox(contextInfo)
+        let del = UncheckedSendableBox(delegate)
+        Task { @MainActor in
+            let info = NSPrintInfo(dictionary: printSettings)
+            let layout = PDFLayout.load()
+            layout.configure(info, forPrintPanel: true)
+            preparedPrintView = await wc.readerViewController.printableView(width: info.paperSize.width - info.leftMargin - info.rightMargin, layout: layout, document: self)
+            super.print(withSettings: printSettings, showPrintPanel: showPrintPanel, delegate: del.value, didPrint: didPrintSelector, contextInfo: ctx.value)
+        }
+    }
+
     override func printOperation(withSettings printSettings: [NSPrintInfo.AttributeKey: Any]) throws -> NSPrintOperation {
-        guard let wc = windowControllers.first as? DocumentWindowController else { throw NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError) }
+        guard let view = preparedPrintView else { throw NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError) }   // 只能经 printDocument(withSettings:…) 进来
+        preparedPrintView = nil
         let info = NSPrintInfo(dictionary: printSettings)
-        info.horizontalPagination = .clip
-        info.verticalPagination = .clip
-        info.isVerticallyCentered = false
-        info.isHorizontallyCentered = false
-        let layout = PDFLayout.load()
-        info.topMargin = layout.top; info.bottomMargin = layout.bottom; info.leftMargin = layout.left; info.rightMargin = layout.right
-        info.dictionary()[NSPrintInfo.AttributeKey.headerAndFooter] = true
-        let op = NSPrintOperation(view: wc.readerViewController.printableView(width: info.paperSize.width - info.leftMargin - info.rightMargin, layout: layout, document: self), printInfo: info)
+        PDFLayout.load().configure(info, forPrintPanel: true)
+        let op = NSPrintOperation(view: view, printInfo: info)
         op.showsPrintPanel = true
         op.showsProgressPanel = true
         return op

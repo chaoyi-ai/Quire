@@ -15,7 +15,8 @@ let package = Package(
         // cmark-gfm（GitHub 生产级 C 实现，Apple 维护的 fork）。直接走 C API，见 ADR-2 / ADR-12。
         // gfm 分支无 semver tag，按 revision 锁定（与 swift-markdown swift-6.3.3-RELEASE 所用一致）
         // SwiftMath（iosMath 的 Swift 移植，MIT）：LaTeX 数学 → CoreText/CoreGraphics 原生绘制，不用 WebView。见 ADR-15。
-        .package(url: "https://github.com/mgriebling/SwiftMath.git", exact: "1.7.3"),
+        // 本地 vendored 副本（1.7.3 + 资源 bundle 查找补丁，只留 Latin Modern 字体；见 Vendor/SwiftMath/README-quire.md）
+        .package(path: "Vendor/SwiftMath"),
         .package(
             url: "https://github.com/swiftlang/swift-cmark.git",
             revision: "7898f1b3e4befeecee56cb4a3bc8eebd2cb63219"

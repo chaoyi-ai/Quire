@@ -222,7 +222,9 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
     }
 
     /// 打印 / PDF 用视图：独立一份文本视图，宽度按纸张；缩放固定为 1，主题为当前主题
-    func printableView(width: CGFloat = 540, layout: PDFLayout? = nil, document: MarkdownDocument? = nil) -> ReaderTextView {
+    /// 打印 / 导出用的视图：独立渲染一份（浅色主题、打印宽度），**等全部图片 / Mermaid 加载完**再分页——
+    /// 屏幕视图那套异步加载对同步的 NSPrintOperation.run() 没用，以前导出的 PDF 里图片全是占位框
+    func printableView(width: CGFloat = 540, layout: PDFLayout? = nil, document: MarkdownDocument? = nil) async -> ReaderTextView {
         var options = session.style.options
         if let layout { options.headingNumbers = layout.headingNumbers }
         // 打印 / PDF 永远用浅色主题；导出图片（layout == nil 且来自 writeImage）保留当前主题
@@ -230,7 +232,9 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
         let style = RenderStyle(theme: theme, scale: 1, options: options)
         let tv = ReaderTextView(style: style)
         tv.showsCodeCopyButtons = false
+        tv.loadsAttachmentsAutomatically = false
         tv.keepHeadingsWithNext = layout?.keepHeadingWithNext ?? false
+        tv.baseURL = document?.fileURL ?? session.document?.fileURL
         tv.frame = NSRect(x: 0, y: 0, width: width, height: 100)
         tv.textContainerInset = CGSize(width: 0, height: 0)
         tv.setPrintingWidth(width)
@@ -239,6 +243,7 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
         tv.setRendered(rendered, style: style)
         tv.textContainerInset = CGSize(width: 0, height: 0)
         tv.setPrintingWidth(width)
+        await tv.loadAllAttachmentsForExport()
         tv.layoutAllForPrinting()
         if let layout {
             let title = session.parsed.outline.entries.first(where: { $0.level == 1 })?.title ?? document?.fileURL?.deletingPathExtension().lastPathComponent ?? ""
