@@ -4,7 +4,7 @@ import QuireRender
 
 /// 文档窗口：侧栏（目录）| 编辑器 | 阅读视图，三态（阅读 / 编辑 / 分栏），滚动同步。
 @MainActor
-final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSWindowDelegate {
+final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSWindowDelegate, NSMenuItemValidation {
     enum Mode: Int { case reader = 0, editor = 1, split = 2 }
 
     let readerViewController: ReaderViewController
@@ -151,6 +151,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     /// 首次进入编辑/分栏时把编辑器插入 split view（sidebar 之后、reader 之前）
     private func ensureEditorPane() {
         guard editorItem == nil else { return }
+        editorViewController.loadViewIfNeeded()   // 折叠插入不会触发 loadView；后面要直接碰 textView / scrollView
         let item = NSSplitViewItem(viewController: editorViewController)
         item.minimumThickness = 280
         item.canCollapse = true
@@ -159,10 +160,83 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         editorItem = item
         // 编辑器可能晚于文档打开创建：同步当前源码
         if let doc = markdownDocument { editorViewController.replaceSource(doc.source) }
+        editorViewController.textView.focusMode = focusMode
     }
 
     func windowWillClose(_ notification: Notification) {
         markdownDocument?.session.stopWatching()
+    }
+
+    // MARK: - 专注 / 沉浸
+
+    private(set) var focusMode: EditorFocusMode = EditorFocusMode(rawValue: UserDefaults.standard.integer(forKey: "editor.focus")) ?? .off {
+        didSet {
+            UserDefaults.standard.set(focusMode.rawValue, forKey: "editor.focus")
+            if editorItem != nil || focusMode != .off { editorViewController.textView.focusMode = focusMode }
+        }
+    }
+
+    @objc func setFocusMode(_ sender: NSMenuItem) {
+        if mode == .reader { mode = .editor }
+        focusMode = EditorFocusMode(rawValue: sender.tag) ?? .off
+    }
+    @objc func cycleFocusMode(_ sender: Any?) {
+        if mode == .reader { mode = .editor }
+        focusMode = focusMode.next
+    }
+
+    private struct ImmersiveSaved { var mode: Mode; var sidebarCollapsed: Bool; var toolbarVisible: Bool; var rulers: Bool; var wordCountHidden: Bool; var enteredFullScreen: Bool; var hidTabBar: Bool }
+    private var immersiveSaved: ImmersiveSaved?
+    var isImmersive: Bool { immersiveSaved != nil }
+
+    /// 沉浸写作（⌘⇧D）：只剩正文列——全屏、隐藏工具栏 / 标签栏 / 侧栏 / 行号 / 字数，编辑器居中限宽；Esc 或再按一次退出
+    @objc func toggleImmersive(_ sender: Any?) {
+        if isImmersive { exitImmersive(restoreFullScreen: true) } else { enterImmersive() }
+    }
+
+    private func enterImmersive() {
+        guard let window else { return }
+        let sidebarCollapsed = splitViewController.splitViewItems.first?.isCollapsed ?? false
+        let wasFull = window.styleMask.contains(.fullScreen)
+        let tabBarVisible = window.tabGroup?.isTabBarVisible ?? false
+        immersiveSaved = ImmersiveSaved(mode: mode, sidebarCollapsed: sidebarCollapsed, toolbarVisible: window.toolbar?.isVisible ?? true,
+                                        rulers: editorItem != nil ? editorViewController.scrollView.rulersVisible : Preferences.shared.editorLineNumbers,
+                                        wordCountHidden: wordCount.isHidden, enteredFullScreen: !wasFull, hidTabBar: tabBarVisible)
+        mode = .editor
+        if !sidebarCollapsed { splitViewController.toggleSidebar(nil) }
+        window.toolbar?.isVisible = false
+        if tabBarVisible { window.toggleTabBar(nil) }
+        editorViewController.scrollView.rulersVisible = false
+        wordCount.isHidden = true
+        editorViewController.textView.maxContentWidth = session.style.maxContentWidth
+        editorViewController.textView.onEscape = { [weak self] in self?.exitImmersive(restoreFullScreen: true) }
+        if !wasFull { window.toggleFullScreen(nil) }
+        window.makeFirstResponder(editorViewController.textView)
+    }
+
+    private func exitImmersive(restoreFullScreen: Bool) {
+        guard let saved = immersiveSaved, let window else { return }
+        immersiveSaved = nil
+        editorViewController.textView.onEscape = nil
+        editorViewController.textView.maxContentWidth = 0
+        editorViewController.scrollView.rulersVisible = saved.rulers
+        wordCount.isHidden = saved.wordCountHidden
+        window.toolbar?.isVisible = saved.toolbarVisible
+        if saved.hidTabBar, window.tabGroup?.isTabBarVisible == false { window.toggleTabBar(nil) }
+        if !saved.sidebarCollapsed, splitViewController.splitViewItems.first?.isCollapsed == true { splitViewController.toggleSidebar(nil) }
+        mode = saved.mode
+        if restoreFullScreen, saved.enteredFullScreen, window.styleMask.contains(.fullScreen) { window.toggleFullScreen(nil) }
+    }
+
+    func windowDidExitFullScreen(_ notification: Notification) {
+        // 用户用系统方式退出全屏（Esc / 绿灯）：沉浸状态一并退出
+        if isImmersive { exitImmersive(restoreFullScreen: false) }
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(setFocusMode(_:)) { item.state = item.tag == focusMode.rawValue ? .on : .off }
+        if item.action == #selector(toggleImmersive(_:)) { item.title = isImmersive ? L("退出沉浸写作") : L("沉浸写作") }
+        return true
     }
 
     /// 让 NSTextView 的撤销走文档的 UndoManager（自动标脏 / ⌘Z 与文档一致）

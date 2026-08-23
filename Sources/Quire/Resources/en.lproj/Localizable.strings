@@ -107,3 +107,11 @@
 "行" = "Lines";
 "阅读时间" = "Reading time";
 "约 %d 分钟" = "about %d min";
+"标记出挑（# - > 1. 悬挂到左边距，正文左缘对齐）" = "Hanging markers (# - > 1. outdented into the margin, body text aligned)";
+"专注" = "Focus";
+"句子" = "Sentence";
+"段落" = "Paragraph";
+"打字机" = "Typewriter";
+"切换专注模式" = "Cycle Focus Mode";
+"沉浸写作" = "Immersive Writing";
+"退出沉浸写作" = "Exit Immersive Writing";

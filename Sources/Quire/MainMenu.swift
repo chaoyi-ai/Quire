@@ -91,6 +91,18 @@ enum MainMenu {
         view.addItem(withTitle: L("编辑"), action: #selector(DocumentWindowController.setModeEditor(_:)), keyEquivalent: "2")
         view.addItem(withTitle: L("分栏"), action: #selector(DocumentWindowController.setModeSplit(_:)), keyEquivalent: "3")
         view.addItem(.separator())
+        // 专注：⌘D 循环 关闭 → 句子 → 段落 → 打字机；子菜单可直选
+        let focus = NSMenu(title: L("专注"))
+        for (title, mode) in [(L("关闭"), EditorFocusMode.off), (L("句子"), .sentence), (L("段落"), .paragraph), (L("打字机"), .typewriter)] {
+            let it = focus.addItem(withTitle: title, action: #selector(DocumentWindowController.setFocusMode(_:)), keyEquivalent: "")
+            it.tag = mode.rawValue
+        }
+        let focusItem = view.addItem(withTitle: L("专注"), action: nil, keyEquivalent: "")
+        focusItem.submenu = focus
+        view.addItem(withTitle: L("切换专注模式"), action: #selector(DocumentWindowController.cycleFocusMode(_:)), keyEquivalent: "d")
+        let immersive = view.addItem(withTitle: L("沉浸写作"), action: #selector(DocumentWindowController.toggleImmersive(_:)), keyEquivalent: "D")
+        immersive.keyEquivalentModifierMask = [.command, .shift]
+        view.addItem(.separator())
         view.addItem(withTitle: L("放大"), action: #selector(Handler.zoomIn(_:)), keyEquivalent: "+").target = Handler.shared
         view.addItem(withTitle: L("缩小"), action: #selector(Handler.zoomOut(_:)), keyEquivalent: "-").target = Handler.shared
         view.addItem(withTitle: L("实际大小"), action: #selector(Handler.zoomReset(_:)), keyEquivalent: "0").target = Handler.shared

@@ -135,6 +135,16 @@ func runViews() {
         toggle.toggle()
     }
     if toggle { editor.insertText("", replacementRange: NSRange(location: lineStart, length: 1)) }
+    // 专注（句子淡化）开着时的击键：渲染属性整篇重设
+    editor.setSelectedRange(NSRange(location: lineStart, length: 0))
+    editor.focusMode = .sentence
+    measure("view/editor-keystroke-focus-1mb", bytes: large.utf8.count) {
+        if toggle { editor.insertText("", replacementRange: NSRange(location: lineStart, length: 1)) }
+        else { editor.insertText("x", replacementRange: NSRange(location: lineStart, length: 0)) }
+        toggle.toggle()
+    }
+    if toggle { editor.insertText("", replacementRange: NSRange(location: lineStart, length: 1)) }
+    editor.focusMode = .off
 }
 
 func generate(to dir: String) throws {

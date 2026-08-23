@@ -42,6 +42,7 @@ final class EditorViewController: NSViewController {
         scrollView.verticalRulerView = ruler
         scrollView.hasVerticalRuler = true
         scrollView.rulersVisible = Preferences.shared.editorLineNumbers
+        textView.hangingMarkers = Preferences.shared.editorHangingMarkers
         let container = NSView(frame: scrollView.frame)
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(scrollView)
@@ -53,7 +54,10 @@ final class EditorViewController: NSViewController {
         ])
         view = container
         prefsObserver = NotificationCenter.default.addObserver(forName: Preferences.didChange, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.scrollView.rulersVisible = Preferences.shared.editorLineNumbers }
+            MainActor.assumeIsolated {
+                self?.scrollView.rulersVisible = Preferences.shared.editorLineNumbers
+                self?.textView.hangingMarkers = Preferences.shared.editorHangingMarkers
+            }
         }
 
         textView.documentURL = session.document?.fileURL

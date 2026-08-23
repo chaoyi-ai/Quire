@@ -9,6 +9,32 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     private let lexer = MarkdownLexer()
     private var attrsCache: [MarkdownLexer.Kind: AnyObject] = [:]
     private var baseAttrs: AnyObject!
+    /// 专注模式；变化时重算淡化 / 留白
+    public var focusMode: EditorFocusMode = .off {
+        didSet {
+            guard focusMode != oldValue else { return }
+            updateTypewriterInset()
+            applyFocusDim()
+            if focusMode == .typewriter { centerCaretLine() }
+            needsDisplay = true
+        }
+    }
+    var focusDimActive = false
+    var lastFocusRange: NSRange?
+    var dimOverlay: FocusDimOverlay?
+    /// 最近一次选区变化是否来自键盘（打字机模式只在这种情况下居中，避免点击时屏幕跳）
+    private var selectionFromKeyboard = false
+    /// 内容列最大宽度（0 = 不限制，贴左）：沉浸模式下居中成一列
+    public var maxContentWidth: CGFloat = 0 { didSet { if maxContentWidth != oldValue { updateContentInset(); needsLayout = true } } }
+    /// Esc（沉浸模式退出用）
+    public var onEscape: (() -> Void)?
+
+    /// 标记出挑（iA Writer 式）：`#` / `-` / `1.` / `>` 出挑到左边距，正文左缘对齐。关掉则普通左对齐。
+    public var hangingMarkers = true { didSet { if hangingMarkers != oldValue { applyStyle(style) } } }
+    /// 出挑列宽（字符数）：最多容纳 `### ` / `10. ` / `> > `；更长的标记（h4–h6）只能部分出挑
+    static let hangingColumnChars: CGFloat = 4
+    private var charWidth: CGFloat = 8
+    private var hangingStyles: [Int: NSParagraphStyle] = [:]   // key = spaces << 8 | markerLen
     private var boldFont: NSFont!, italicFont: NSFont!, boldItalicFont: NSFont!, editorFont: NSFont!
     private var lineStarts: [Int] = [0]     // 每行起始 UTF-16 偏移
     private var isHighlighting = false
@@ -80,6 +106,12 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         let ps = NSMutableParagraphStyle()
         ps.lineHeightMultiple = 1.35
         ps.lineBreakMode = .byWordWrapping
+        charWidth = ("0" as NSString).size(withAttributes: [.font: editorFont!]).width
+        hangingStyles = [:]
+        if hangingMarkers {
+            let col = (Self.hangingColumnChars * charWidth).rounded()
+            ps.firstLineHeadIndent = col; ps.headIndent = col
+        }
         defaultParagraphStyle = ps
         typingAttributes = [.font: editorFont!, .foregroundColor: style.foreground, .paragraphStyle: ps]
         baseAttrs = QAUniqueAttributes(typingAttributes as NSDictionary) as AnyObject
@@ -244,8 +276,60 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
                 QASetRunAttributes(ts, a, UInt(lo), UInt(hi - lo))
             }
         }
+        // 段落样式最后设：token 的属性字典整体覆盖，会把段落样式打回默认
+        if hangingMarkers { applyHangingIndents(ns, in: range) }
         ts.endEditing()
         isHighlighting = false
+    }
+
+    /// 标记出挑：按行首前缀（≤3 空格 + `#{1,6} ` / `[-*+] ` / `\d{1,9}[.)] ` / `(> )+`）设段落样式：
+    /// headIndent = 列宽 + 缩进空格宽，firstLineHeadIndent = headIndent − 标记宽（≥ 0）
+    private func applyHangingIndents(_ ns: NSString, in range: NSRange) {
+        guard let ts = textStorage else { return }
+        let col = (Self.hangingColumnChars * charWidth).rounded()
+        var loc = range.location
+        let end = range.location + range.length
+        while loc < end {
+            let para = ns.paragraphRange(for: NSRange(location: loc, length: 0))
+            defer { loc = para.location + max(1, para.length) }
+            let (spaces, marker) = Self.markerPrefix(ns, para)
+            guard marker > 0 else { continue }
+            let key = spaces << 8 | marker
+            let ps: NSParagraphStyle
+            if let cached = hangingStyles[key] { ps = cached } else {
+                let m = (defaultParagraphStyle ?? NSParagraphStyle.default).mutableCopy() as! NSMutableParagraphStyle
+                let head = col + CGFloat(spaces) * charWidth
+                m.headIndent = head
+                m.firstLineHeadIndent = max(0, head - CGFloat(marker) * charWidth)
+                hangingStyles[key] = m; ps = m
+            }
+            ts.addAttribute(.paragraphStyle, value: ps, range: para)
+        }
+    }
+
+    /// 返回 (前导空格数, 标记字符数含其后空格)；无标记返回 (0, 0)
+    static func markerPrefix(_ ns: NSString, _ para: NSRange) -> (Int, Int) {
+        let n = para.length
+        @inline(__always) func c(_ k: Int) -> unichar { k < n ? ns.character(at: para.location + k) : 0 }
+        var i = 0
+        while i < 3, c(i) == 0x20 { i += 1 }
+        let spaces = i
+        let ch = c(i)
+        if ch == 0x23 {   // #
+            var k = i; while k - i < 6, c(k) == 0x23 { k += 1 }
+            return c(k) == 0x20 ? (spaces, k - i + 1) : (0, 0)
+        }
+        if ch == 0x2D || ch == 0x2A || ch == 0x2B { return c(i + 1) == 0x20 ? (spaces, 2) : (0, 0) }   // - * +
+        if ch == 0x3E {   // > (> )+
+            var k = i; var len = 0
+            while c(k) == 0x3E { k += 1; len += 1; if c(k) == 0x20 { k += 1; len += 1 } }
+            return (spaces, len)
+        }
+        if ch >= 0x30 && ch <= 0x39 {   // 1. / 1)
+            var k = i; while k - i < 9, c(k) >= 0x30, c(k) <= 0x39 { k += 1 }
+            if (c(k) == 0x2E || c(k) == 0x29), c(k + 1) == 0x20 { return (spaces, k - i + 2) }
+        }
+        return (0, 0)
     }
 
     public nonisolated func textStorage(_ textStorage: NSTextStorage, willProcessEditing editedMask: NSTextStorageEditActions, range editedRange: NSRange, changeInLength delta: Int) {
@@ -268,6 +352,51 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     public override func didChangeText() {
         super.didChangeText()
         onTextChange?()
+        if focusMode != .off {
+            applyFocusDim()
+            if focusMode == .typewriter { centerCaretLine() }
+        }
+    }
+
+    public override func keyDown(with event: NSEvent) {
+        selectionFromKeyboard = true
+        super.keyDown(with: event)
+        selectionFromKeyboard = false
+    }
+
+    public override func mouseDown(with event: NSEvent) {
+        selectionFromKeyboard = false
+        super.mouseDown(with: event)
+    }
+
+    public override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        guard focusMode != .off, !stillSelecting else { return }
+        applyFocusDim()
+        if focusMode == .typewriter, selectionFromKeyboard { centerCaretLine() }
+    }
+
+    public override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        if focusDimActive { dimOverlay?.setNeedsDisplay(dirtyRect) }
+    }
+
+    public override func cancelOperation(_ sender: Any?) {
+        if let onEscape { onEscape() } else { super.cancelOperation(sender) }
+    }
+
+    public override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        updateContentInset()
+        updateTypewriterInset()
+    }
+
+    /// 沉浸 / 行宽限制：把超出 maxContentWidth 的宽度分到左右 inset
+    func updateContentInset() {
+        let w = bounds.width
+        var inset: CGFloat = 12
+        if maxContentWidth > 0, w - 24 > maxContentWidth { inset = ((w - maxContentWidth) / 2).rounded(.down) }
+        if abs(textContainerInset.width - inset) > 0.5 { textContainerInset = CGSize(width: inset, height: textContainerInset.height) }
     }
 
     // MARK: - 当前行高亮

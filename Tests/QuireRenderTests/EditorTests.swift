@@ -176,3 +176,80 @@ final class TextViewSizingTests: XCTestCase {
         XCTAssertGreaterThan(reader.frame.height, 2000, "长文档文本视图应远高于初始 600pt")
     }
 }
+
+@MainActor
+final class HangingMarkerTests: XCTestCase {
+    func testMarkerPrefix() {
+        func p(_ s: String) -> (Int, Int) { EditorTextView.markerPrefix(s as NSString, NSRange(location: 0, length: (s as NSString).length)) }
+        XCTAssertEqual(p("# 标题").0, 0); XCTAssertEqual(p("# 标题").1, 2)
+        XCTAssertEqual(p("### h3").1, 4)
+        XCTAssertEqual(p("#no").1, 0)
+        XCTAssertEqual(p("- item").1, 2)
+        XCTAssertEqual(p("  - nested").0, 2); XCTAssertEqual(p("  - nested").1, 2)
+        XCTAssertEqual(p("10. ten").1, 4)
+        XCTAssertEqual(p("1) one").1, 3)
+        XCTAssertEqual(p("> > quote").1, 4)
+        XCTAssertEqual(p(">quote").1, 1)
+        XCTAssertEqual(p("plain").1, 0)
+        XCTAssertEqual(p("    code").1, 0, "4 空格缩进代码不算")
+    }
+
+    func testHangingIndentsApplied() {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let editor = EditorTextView(style: RenderStyle(theme: theme))
+        editor.hangingMarkers = true
+        editor.setSource("# 标题\n正文段落\n- 列表项\n  - 嵌套\n")
+        let ns = editor.textStorage!.string as NSString
+        func ps(_ snippet: String) -> NSParagraphStyle {
+            editor.textStorage!.attribute(.paragraphStyle, at: ns.range(of: snippet).location, effectiveRange: nil) as! NSParagraphStyle
+        }
+        let col = ps("正文段落").headIndent
+        XCTAssertGreaterThan(col, 0, "普通段落退到列宽")
+        XCTAssertEqual(ps("正文段落").firstLineHeadIndent, col)
+        XCTAssertEqual(ps("# 标题").headIndent, col)
+        XCTAssertLessThan(ps("# 标题").firstLineHeadIndent, col, "标题的 # 出挑")
+        XCTAssertEqual(ps("- 列表项").headIndent, col)
+        XCTAssertGreaterThan(ps("  - 嵌套").headIndent, col, "嵌套项正文更深")
+        XCTAssertEqual(ps("  - 嵌套").headIndent - ps("  - 嵌套").firstLineHeadIndent, ps("- 列表项").headIndent - ps("- 列表项").firstLineHeadIndent, "标记宽一致")
+        // 关掉：全部回到 0
+        editor.hangingMarkers = false
+        XCTAssertEqual(ps("# 标题").firstLineHeadIndent, 0)
+        XCTAssertEqual(ps("正文段落").headIndent, 0)
+    }
+}
+
+@MainActor
+final class FocusModeTests: XCTestCase {
+    func testSentenceAndParagraphRanges() {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let editor = EditorTextView(style: RenderStyle(theme: theme))
+        editor.setSource("第一句。第二句！Third sentence here. Fourth?\n\n下一段。\n")
+        let ns = editor.textStorage!.string as NSString
+        // 光标在"第二句"中
+        editor.setSelectedRange(NSRange(location: ns.range(of: "第二句").location + 1, length: 0))
+        let s = editor.focusRange(for: .sentence)!
+        XCTAssertEqual(ns.substring(with: s).trimmingCharacters(in: .whitespaces), "第二句！")
+        let p = editor.focusRange(for: .paragraph)!
+        XCTAssertEqual(ns.substring(with: p), "第一句。第二句！Third sentence here. Fourth?")
+        // 光标在英文句子中
+        editor.setSelectedRange(NSRange(location: ns.range(of: "sentence").location, length: 0))
+        XCTAssertEqual(ns.substring(with: editor.focusRange(for: .sentence)!).trimmingCharacters(in: .whitespaces), "Third sentence here.")
+        // 下一段
+        editor.setSelectedRange(NSRange(location: ns.range(of: "下一段").location, length: 0))
+        XCTAssertEqual(ns.substring(with: editor.focusRange(for: .paragraph)!), "下一段。")
+    }
+
+    func testDimDoesNotTouchStorage() {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let editor = EditorTextView(style: RenderStyle(theme: theme))
+        let src = "A sentence. Another one.\n\nPara two.\n"
+        editor.setSource(src)
+        editor.setSelectedRange(NSRange(location: 2, length: 0))
+        let before = editor.textStorage!.copy() as! NSAttributedString
+        editor.focusMode = .sentence
+        XCTAssertTrue(editor.textStorage!.isEqual(to: before), "淡化只走渲染属性，不改 textStorage")
+        XCTAssertEqual(editor.source, src)
+        editor.focusMode = .off
+        XCTAssertTrue(editor.textStorage!.isEqual(to: before))
+    }
+}

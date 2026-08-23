@@ -17,6 +17,7 @@ final class Preferences: ObservableObject {
         static let editorLineNumbers = "editor.lineNumbers"
         static let largeFileMB = "render.largeFileThresholdMB"
         static let wordCount = "reader.wordCount"
+        static let hangingMarkers = "editor.hangingMarkers"
     }
 
     @Published var codeLineNumbers: Bool { didSet { d.set(codeLineNumbers, forKey: Key.codeLineNumbers); ThemeManager.shared.refresh() } }
@@ -26,11 +27,12 @@ final class Preferences: ObservableObject {
     @Published var editorLineNumbers: Bool { didSet { d.set(editorLineNumbers, forKey: Key.editorLineNumbers); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var largeFileThresholdMB: Int { didSet { d.set(largeFileThresholdMB, forKey: Key.largeFileMB) } }
     @Published var showWordCount: Bool { didSet { d.set(showWordCount, forKey: Key.wordCount); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    @Published var editorHangingMarkers: Bool { didSet { d.set(editorHangingMarkers, forKey: Key.hangingMarkers); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
 
     static let didChange = Notification.Name("com.korako.quire.preferencesDidChange")
 
     private init() {
-        d.register(defaults: [Key.codeCopyButton: true, Key.autoReload: true, Key.editorLineNumbers: true, Key.largeFileMB: 8, Key.wordCount: true])
+        d.register(defaults: [Key.codeCopyButton: true, Key.autoReload: true, Key.editorLineNumbers: true, Key.largeFileMB: 8, Key.wordCount: true, Key.hangingMarkers: true])
         codeLineNumbers = d.bool(forKey: Key.codeLineNumbers)
         codeCopyButton = d.bool(forKey: Key.codeCopyButton)
         linkUnderline = d.bool(forKey: Key.linkUnderline)
@@ -38,6 +40,7 @@ final class Preferences: ObservableObject {
         editorLineNumbers = d.bool(forKey: Key.editorLineNumbers)
         largeFileThresholdMB = max(1, d.integer(forKey: Key.largeFileMB))
         showWordCount = d.bool(forKey: Key.wordCount)
+        editorHangingMarkers = d.bool(forKey: Key.hangingMarkers)
     }
 
     var renderOptions: RenderOptions {
@@ -132,6 +135,7 @@ struct PreferencesView: View {
             }
             Section(L("编辑")) {
                 Toggle(L("显示行号"), isOn: $prefs.editorLineNumbers)
+                Toggle(L("标记出挑（# - > 1. 悬挂到左边距，正文左缘对齐）"), isOn: $prefs.editorHangingMarkers)
             }
         }
         .formStyle(.grouped)
