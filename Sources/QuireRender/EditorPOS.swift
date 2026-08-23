@@ -10,7 +10,7 @@ public enum POSMode: Int, CaseIterable, Sendable {
 
 extension EditorTextView {
     /// 词性 → 颜色（系统色，深浅色都清楚）
-    static func posColor(_ tag: NLTag, mode: POSMode) -> NSColor? {
+    nonisolated static func posColor(_ tag: NLTag, mode: POSMode) -> NSColor? {
         switch tag {
         case .noun, .personalName, .placeName, .organizationName: return mode == .all || mode == .nouns ? .systemBlue : nil
         case .verb: return mode == .all || mode == .verbs ? .systemRed : nil
@@ -81,8 +81,8 @@ extension EditorTextView {
         }
     }
 
-    static let posSupported: Set<NLLanguage> = [.english, .german, .french, .italian, .spanish, .portuguese, .russian, .dutch]
-    static func isPOSColor(_ c: NSColor) -> Bool { [NSColor.systemBlue, .systemRed, .systemGreen, .systemOrange, .systemPurple, .systemTeal].contains(c) }
+    nonisolated static let posSupported: Set<NLLanguage> = [.english, .german, .french, .italian, .spanish, .portuguese, .russian, .dutch]
+    nonisolated static func isPOSColor(_ c: NSColor) -> Bool { [NSColor.systemBlue, .systemRed, .systemGreen, .systemOrange, .systemPurple, .systemTeal].contains(c) }
 
     /// 关闭 / 切换时把可见区恢复成普通高亮
     func clearPOSColors() {

@@ -3,8 +3,8 @@ import QuireCore
 
 /// 文风检查在编辑器里的呈现：命中的短语画橙色虚线删除线 + 悬停提示类别；只做可见段落 ± 一屏，后台匹配，主线程只改属性。
 extension EditorTextView {
-    static let styleCheckColor = NSColor.systemOrange
-    static let styleCheckStyle = NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDash.rawValue
+    nonisolated static let styleCheckColor = NSColor.systemOrange
+    nonisolated static let styleCheckStyle = NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDash.rawValue
 
     public func scheduleStyleCheck(delay: TimeInterval = 0.3) {
         guard styleChecker != nil else { return }
@@ -54,7 +54,7 @@ extension EditorTextView {
         }
     }
 
-    static func label(for c: StyleChecker.Category) -> String {
+    nonisolated static func label(for c: StyleChecker.Category) -> String {
         switch c {
         case .filler: return RL("文风：填充词，可删")
         case .redundancy: return RL("文风：冗余，留一个就够")
