@@ -13,3 +13,5 @@
 "未知错误" = "Unknown error";
 "缺少 mermaid.min.js，请运行 scripts/fetch_mermaid.sh 后重新构建" = "mermaid.min.js is missing; run scripts/fetch_mermaid.sh and rebuild";
 "链接文字" = "link text";
+"表格，%d 行 %d 列" = "Table, %d rows by %d columns";
+"Mermaid 图" = "Mermaid diagram";

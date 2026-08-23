@@ -23,6 +23,15 @@ public final class TableAttachment: NSTextAttachment {
         super.init(data: nil, ofType: nil)
         let rowH = style.lineHeight + style.tableCellPadding.vertical * 2
         bounds = CGRect(x: 0, y: 0, width: 400, height: rowH * CGFloat(rows.count + 1))
+        // 可访问性：表格在片段里自绘，VoiceOver 只能读到附件；给一张 1×1 透明图挂上表格文本（行用换行、列用制表符）
+        let placeholder = NSImage(size: CGSize(width: 1, height: 1))
+        placeholder.accessibilityDescription = Self.accessibilityText(header: header, rows: rows)
+        image = placeholder
+    }
+
+    static func accessibilityText(header: [NSAttributedString], rows: [[NSAttributedString]]) -> String {
+        let lines = ([header] + rows).map { $0.map(\.string).joined(separator: "\t") }
+        return String(format: RL("表格，%d 行 %d 列"), rows.count + 1, header.count) + "\n" + lines.joined(separator: "\n")
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }

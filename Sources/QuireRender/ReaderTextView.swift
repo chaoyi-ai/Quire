@@ -363,6 +363,7 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
                 att.isRendered = true
                 var w = img.size.width, h = img.size.height
                 if w > maxWidth { h *= maxWidth / w; w = maxWidth }
+                img.accessibilityDescription = RL("Mermaid 图") + "\n" + att.source
                 att.image = img
                 att.bounds = CGRect(x: 0, y: 0, width: w.rounded(), height: h.rounded())
             } catch {
@@ -436,6 +437,7 @@ public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManag
     private func apply(image: NSImage?, to att: ImageAttachment, at range: NSRange, maxWidth: CGFloat, inline: Bool) {
         guard let image else { att.loadFailed = true; return }
         att.isLoaded = true
+        image.accessibilityDescription = att.altText.isEmpty ? RL("图片") : att.altText
         var size = image.size
         if size.width <= 0 || size.height <= 0 { size = CGSize(width: 100, height: 100) }
         let inlineMaxH = style.baseSize * 1.5

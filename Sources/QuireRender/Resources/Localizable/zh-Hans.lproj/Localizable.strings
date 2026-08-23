@@ -13,3 +13,5 @@
 "未知错误" = "未知错误";
 "缺少 mermaid.min.js，请运行 scripts/fetch_mermaid.sh 后重新构建" = "缺少 mermaid.min.js，请运行 scripts/fetch_mermaid.sh 后重新构建";
 "链接文字" = "链接文字";
+"表格，%d 行 %d 列" = "表格，%d 行 %d 列";
+"Mermaid 图" = "Mermaid 图";

@@ -398,6 +398,7 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         } else {
             att.bounds = CGRect(x: 0, y: 0, width: 240, height: style.baseSize * 4)
             att.image = ImageAttachment.placeholder(size: att.bounds.size, alt: "Mermaid…", style: style)
+            att.image?.accessibilityDescription = RL("Mermaid 图") + "\n" + source
         }
         var a = para.base
         a[.font] = style.bodyFont
@@ -416,6 +417,7 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         let h: CGFloat = inline ? style.baseSize * 1.2 : style.baseSize * 4
         att.bounds = CGRect(x: 0, y: inline ? -style.baseSize * 0.2 : 0, width: inline ? h : min(style.maxContentWidth * 0.6, 240), height: h)
         att.image = ImageAttachment.placeholder(size: att.bounds.size, alt: alt, style: style)
+        att.image?.accessibilityDescription = alt.isEmpty ? RL("图片") : alt
         var a = ctx.para.base
         a[.font] = font(for: ctx)
         a[.attachment] = att

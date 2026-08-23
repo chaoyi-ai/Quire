@@ -61,3 +61,20 @@ final class TableTests: XCTestCase {
         }
     }
 }
+
+final class AttachmentAccessibilityTests: XCTestCase {
+    func testAttachmentsCarryDescriptions() {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let md = "| a | b |\n|--|--|\n| 1 | 2 |\n\n![一张图](x.png)\n\n```mermaid\ngraph TD\nA-->B\n```\n"
+        let r = DocumentRenderer(theme: theme).render(MarkdownParser().parse(md))
+        var descs: [String] = []
+        r.attributed.enumerateAttribute(.attachment, in: NSRange(location: 0, length: r.attributed.length)) { v, _, _ in
+            if let a = v as? NSTextAttachment, let d = a.image?.accessibilityDescription { descs.append(d) }
+        }
+        XCTAssertEqual(descs.count, 3)
+        XCTAssertTrue(descs[0].contains("a\tb"), descs[0])
+        XCTAssertTrue(descs[0].contains("1\t2"))
+        XCTAssertEqual(descs[1], "一张图")
+        XCTAssertTrue(descs[2].contains("graph TD"))
+    }
+}
