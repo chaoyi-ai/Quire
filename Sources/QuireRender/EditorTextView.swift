@@ -599,6 +599,29 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
             insertText(String(line[m]), replacementRange: selectedRange())
             return
         }
+        // 表格：表头行回车 → 补分隔行 + 空行；表格内回车 → 新行模板
+        if TableFormatter.isTableLine(line), !TableFormatter.isSeparatorLine(line), sel.location == lineRange.location + lineRange.length - (ns.substring(with: lineRange).hasSuffix("\n") ? 1 : 0) {
+            let nextLineStart = lineRange.location + lineRange.length
+            let nextLine: String = nextLineStart < ns.length ? ns.substring(with: ns.lineRange(for: NSRange(location: nextLineStart, length: 0))).trimmingCharacters(in: .newlines) : ""
+            let prevLine: String = lineRange.location > 0 ? ns.substring(with: ns.lineRange(for: NSRange(location: lineRange.location - 1, length: 0))).trimmingCharacters(in: .newlines) : ""
+            let n = max(1, TableFormatter.cells(line).count)
+            let emptyRow = "|" + String(repeating: "   |", count: n)
+            if !TableFormatter.isSeparatorLine(nextLine), !TableFormatter.isTableLine(prevLine) {
+                // 这是表头
+                super.insertNewline(sender)
+                let pos = selectedRange().location
+                insertText(TableFormatter.separator(forHeader: line) + "\n" + emptyRow, replacementRange: NSRange(location: pos, length: 0))
+                _ = formatTableBlock(containing: pos)
+                _ = moveTableCell(by: 0)
+                return
+            }
+            super.insertNewline(sender)
+            let pos = selectedRange().location
+            insertText(emptyRow, replacementRange: NSRange(location: pos, length: 0))
+            _ = formatTableBlock(containing: pos)
+            _ = moveTableCell(by: 0)
+            return
+        }
         // 围栏自动闭合：输入 ``` 回车 → 补 ```
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         if trimmed.hasPrefix("```"), !fenceState(before: lineRange.location).inFence, ns.length == lineRange.location + lineRange.length || !nextNonEmptyLineIsFence(ns, from: lineRange) {
@@ -623,6 +646,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     }
 
     public override func insertTab(_ sender: Any?) {
+        if moveTableCell(by: 1) { return }
         // 选区多行：整体缩进；否则插入两个空格
         let sel = selectedRange()
         if sel.length > 0, let ns = textStorage?.string as NSString?, ns.substring(with: sel).contains("\n") {
@@ -631,8 +655,104 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         insertText("  ", replacementRange: sel)
     }
     public override func insertBacktab(_ sender: Any?) {
+        if moveTableCell(by: -1) { return }
         indentLines(in: selectedRange(), by: -1)
     }
+
+    // MARK: - 表格源码辅助（#57）
+
+    /// 光标所在行是表格行时：Tab / ⇧Tab 在单元格间移动（先把整张表格式化对齐），末格 Tab 追加一行
+    private func moveTableCell(by delta: Int) -> Bool {
+        guard let ns = textStorage?.string as NSString? else { return false }
+        let sel = selectedRange()
+        let lineRange = ns.lineRange(for: NSRange(location: sel.location, length: 0))
+        let line = ns.substring(with: lineRange).trimmingCharacters(in: .newlines)
+        guard TableFormatter.isTableLine(line) else { return false }
+        // 当前格
+        let col = sel.location - lineRange.location
+        var cellIdx = TableFormatter.cellRanges(line).firstIndex { col >= $0.location && col <= $0.location + $0.length } ?? 0
+        cellIdx += delta
+        // 先格式化整张表（光标按单元格重新定位）
+        let (blockRange, lineIndex) = formatTableBlock(containing: sel.location)
+        guard let blockRange else { return false }
+        let block = ns.substring(with: NSRange(location: blockRange.location, length: 0)).isEmpty ? (textStorage!.string as NSString).substring(with: blockRange) : ""
+        var lines = block.components(separatedBy: "\n")
+        if lines.last == "" { lines.removeLast() }
+        var li = lineIndex
+        var ranges = TableFormatter.cellRanges(lines[li])
+        if cellIdx >= ranges.count {
+            // 下一行；没有就新增一行
+            if li + 1 < lines.count { li += 1 } else {
+                let newRow = "|" + String(repeating: "   |", count: max(1, ranges.count))
+                let insertAt = blockRange.location + blockRange.length
+                let text = (ns.character(at: max(0, insertAt - 1)) == 0x0A ? "" : "\n") + newRow + "\n"
+                insertText(text, replacementRange: NSRange(location: insertAt, length: 0))
+                _ = formatTableBlock(containing: insertAt)
+                lines = tableLines(containing: insertAt); li = lines.count - 1
+            }
+            if TableFormatter.isSeparatorLine(lines[li]), li + 1 < lines.count { li += 1 }
+            ranges = TableFormatter.cellRanges(lines[li]); cellIdx = 0
+        } else if cellIdx < 0 {
+            guard li > 0 else { return true }
+            li -= 1
+            if TableFormatter.isSeparatorLine(lines[li]), li > 0 { li -= 1 }
+            ranges = TableFormatter.cellRanges(lines[li]); cellIdx = max(0, ranges.count - 1)
+        }
+        // 定位到该格内容（选中内容，便于直接覆盖）
+        guard let blk = currentTableBlockRange(containing: selectedRange().location) else { return true }
+        var offset = blk.location
+        for k in 0..<li { offset += (lines[k] as NSString).length + 1 }
+        guard cellIdx < ranges.count else { return true }
+        let r = ranges[cellIdx]
+        let cellText = (lines[li] as NSString).substring(with: r)
+        let lead = cellText.prefix(while: { $0 == " " }).count
+        let trail = cellText.reversed().prefix(while: { $0 == " " }).count
+        let contentLen = max(0, r.length - lead - trail)
+        setSelectedRange(NSRange(location: offset + r.location + lead, length: contentLen))
+        scrollRangeToVisible(selectedRange())
+        return true
+    }
+
+    private func tableLines(containing location: Int) -> [String] {
+        guard let r = currentTableBlockRange(containing: location), let ns = textStorage?.string as NSString? else { return [] }
+        var lines = ns.substring(with: r).components(separatedBy: "\n")
+        if lines.last == "" { lines.removeLast() }
+        return lines
+    }
+
+    /// 光标所在的连续表格行区间（字符范围，含末尾换行）
+    private func currentTableBlockRange(containing location: Int) -> NSRange? {
+        guard let ns = textStorage?.string as NSString? else { return nil }
+        let lineNo = lineNumber(at: location) - 1
+        var all: [String] = []
+        // 只取附近 ±200 行，避免大文档整篇切分
+        let lo = max(0, lineNo - 200), hi = min(lineCount - 1, lineNo + 200)
+        for k in lo...hi { let r = ns.lineRange(for: NSRange(location: self.location(ofLine: k + 1), length: 0)); all.append(ns.substring(with: r).trimmingCharacters(in: .newlines)) }
+        guard let block = TableFormatter.tableBlock(lines: all, containing: lineNo - lo) else { return nil }
+        let start = self.location(ofLine: lo + block.lowerBound + 1)
+        let endLine = ns.lineRange(for: NSRange(location: self.location(ofLine: lo + block.upperBound + 1), length: 0))
+        return NSRange(location: start, length: endLine.location + endLine.length - start)
+    }
+
+    /// 格式化光标所在表格；返回格式化后的块范围与光标所在行在块内的下标
+    @discardableResult
+    public func formatTableBlock(containing location: Int) -> (NSRange?, Int) {
+        guard let blk = currentTableBlockRange(containing: location), let ns = textStorage?.string as NSString? else { return (nil, 0) }
+        let lineIndex = lineNumber(at: location) - lineNumber(at: blk.location)
+        var lines = ns.substring(with: blk).components(separatedBy: "\n")
+        let hadTrailingNewline = lines.last == ""
+        if hadTrailingNewline { lines.removeLast() }
+        let formatted = TableFormatter.format(lines).joined(separator: "\n") + (hadTrailingNewline ? "\n" : "")
+        if formatted != ns.substring(with: blk) {
+            let sel = selectedRange()
+            insertText(formatted, replacementRange: blk)
+            setSelectedRange(NSRange(location: min(sel.location, blk.location + (formatted as NSString).length), length: 0))
+        }
+        return (NSRange(location: blk.location, length: (formatted as NSString).length), lineIndex)
+    }
+
+    /// 菜单：格式化当前表格
+    @objc public func formatTable(_ sender: Any?) { _ = formatTableBlock(containing: selectedRange().location) }
 
     private func indentLines(in range: NSRange, by delta: Int) {
         guard let ns = textStorage?.string as NSString? else { return }

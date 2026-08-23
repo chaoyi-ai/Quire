@@ -98,6 +98,9 @@ enum MainMenu {
 
         // Format（编辑器）
         let format = NSMenu(title: L("格式"))
+        let fmtTable = format.addItem(withTitle: L("格式化表格"), action: #selector(EditorTextView.formatTable(_:)), keyEquivalent: "T")
+        fmtTable.keyEquivalentModifierMask = [.command, .shift]
+        format.addItem(.separator())
         format.addItem(withTitle: L("粗体"), action: #selector(EditorTextView.toggleBold(_:)), keyEquivalent: "b")
         format.addItem(withTitle: L("斜体"), action: #selector(EditorTextView.toggleItalic(_:)), keyEquivalent: "i")
         format.addItem(withTitle: L("行内代码"), action: #selector(EditorTextView.toggleInlineCode(_:)), keyEquivalent: "e")

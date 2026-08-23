@@ -317,3 +317,40 @@ final class ImagePasteTests: XCTestCase {
         XCTAssertEqual(editor.selectedRange().location, 3)
     }
 }
+
+@MainActor
+final class TableAssistTests: XCTestCase {
+    func make(_ s: String) -> EditorTextView {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let e = EditorTextView(style: RenderStyle(theme: theme)); e.setSource(s); return e
+    }
+    func testHeaderEnterGeneratesSeparatorAndRow() {
+        let e = make("| a | bb |")
+        e.setSelectedRange(NSRange(location: (e.source as NSString).length, length: 0))
+        e.insertNewline(nil)
+        XCTAssertEqual(e.source, "| a   | bb  |\n| --- | --- |\n|     |     |")
+        // 光标在新行第一格
+        let sel = e.selectedRange()
+        XCTAssertEqual(e.lineNumber(at: sel.location), 3)
+    }
+    func testTabMovesAcrossCellsAndAppendsRow() {
+        let e = make("| a | b |\n|--|--|\n| 1 | 2 |\n")
+        e.setSelectedRange(NSRange(location: 2, length: 0))   // 在 a 里
+        e.insertTab(nil)
+        let ns = e.source as NSString
+        XCTAssertEqual(ns.substring(with: e.selectedRange()), "b")
+        e.insertTab(nil)   // 越过分隔行到数据行第一格
+        XCTAssertEqual((e.source as NSString).substring(with: e.selectedRange()), "1")
+        e.insertTab(nil); e.insertTab(nil)   // 末格再 Tab → 新行
+        XCTAssertEqual(e.lineCount, 5)   // 4 行 + 末尾换行后的空行
+        XCTAssertTrue(e.source.hasSuffix("|     |     |\n") || e.source.contains("\n|     |     |"), e.source)
+        e.insertBacktab(nil)   // 回到上一行末格
+        XCTAssertEqual((e.source as NSString).substring(with: e.selectedRange()), "2")
+    }
+    func testTabOutsideTableIndents() {
+        let e = make("plain")
+        e.setSelectedRange(NSRange(location: 5, length: 0))
+        e.insertTab(nil)
+        XCTAssertEqual(e.source, "plain  ")
+    }
+}
