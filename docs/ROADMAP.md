@@ -172,7 +172,7 @@
 
 ### 6.3 导出与集成
 - [ ] PDF 书签（大纲 → PDF outline）、导出为图片（整页 PNG，2×）；pandoc 可选集成：检测到 `pandoc` 时在导出 / 导入菜单出现 docx / epub / LaTeX（不内置、不下载）（#69）
-- [ ] `quire` 命令行工具（`quire file.md` / `quire .`），偏好里一键安装到 `/usr/local/bin`；macOS 服务菜单 "在 Quire 中打开"（#70）
+- [x] `quire` 命令行工具（随包 `Contents/Resources/quire`；`quire file.md` / `quire .`——目录里没有 .md 时新建文档并把侧栏根设为该目录），设置 → 语言区「安装命令行工具」软链到 `/usr/local/bin`；服务菜单「Open in Quire」（Info.plist NSServices + servicesProvider）（#70，0.4.4）
 
 **测试**：混合模式的源码 ↔ 渲染往返测试（任意文档进出混合模式字节不变）；表格编辑的 GFM 写回测试；扩展语法开关关闭时 CommonMark spec 抽样结果不变。
 

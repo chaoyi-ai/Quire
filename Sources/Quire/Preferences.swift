@@ -121,6 +121,8 @@ struct PreferencesView: View {
     @State private var language = AppLanguage.current
     @State private var languageChanged = false
     @State private var fontMessage = ""
+    @State private var cliMessage = ""
+    @State private var cliInstalled = CLIInstaller.isInstalled
     private var allFamilies: [String] {
         var out = NSFontManager.shared.availableFontFamilies.filter { !$0.hasPrefix(".") }.sorted()
         if !prefs.readerBodyFontFamily.isEmpty, !out.contains(prefs.readerBodyFontFamily) { out.insert(prefs.readerBodyFontFamily, at: 0) }
@@ -150,6 +152,12 @@ struct PreferencesView: View {
                     Text(L("重新打开 Quire 后生效")).font(.caption).foregroundStyle(.secondary)
                 }
                 Toggle(L("每天自动检查更新（只读 GitHub Releases，不上传信息）"), isOn: $prefs.checkForUpdates)
+                HStack {
+                    Button(cliInstalled ? L("重新安装命令行工具") : L("安装命令行工具 quire…")) {
+                        if let err = CLIInstaller.install() { cliMessage = err } else { cliMessage = L("已安装：终端里 quire 文件.md / quire ."); cliInstalled = true }
+                    }
+                    Text(cliMessage.isEmpty ? (cliInstalled ? L("已安装到 /usr/local/bin/quire") : L("quire README.md · quire .")) : cliMessage).font(.caption).foregroundStyle(.secondary)
+                }
             }
             Section(L("外观")) {
                 Picker(L("模式"), selection: $mode) {

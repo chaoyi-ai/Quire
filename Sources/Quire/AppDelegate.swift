@@ -20,6 +20,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 延迟做非关键初始化：用户主题目录监听（首帧之后）
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { ThemeManager.shared.startWatchingUserThemes() }
         UpdateChecker.checkOnLaunchIfDue()
+        NSApp.servicesProvider = ServicesProvider.shared
+        // `quire <目录>`（目录里没有 .md）：新建文档并把侧栏根设为该目录
+        if let folder = UserDefaults.standard.string(forKey: "QuireOpenFolder"), !folder.isEmpty {
+            UserDefaults.standard.removeObject(forKey: "QuireOpenFolder")
+            DispatchQueue.main.async {
+                NSDocumentController.shared.newDocument(nil)
+                if let wc = NSDocumentController.shared.currentDocument?.windowControllers.first as? DocumentWindowController {
+                    wc.sidebarViewController.setRoot(URL(fileURLWithPath: folder, isDirectory: true))
+                }
+            }
+        }
         if let path = ProcessInfo.processInfo.environment["QUIRE_EXPORT_PDF"] {
             // 调试 / 脚本：首个文档渲染后导出 PDF 并退出
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {

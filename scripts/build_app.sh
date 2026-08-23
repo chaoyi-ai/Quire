@@ -52,6 +52,8 @@ if [ ! -f assets/AppIcon.icns ]; then
   iconutil -c icns assets/AppIcon.iconset -o assets/AppIcon.icns
 fi
 cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+cp assets/quire-cli.sh "$APP/Contents/Resources/quire"   # 命令行工具（设置里一键装到 /usr/local/bin）
+chmod +x "$APP/Contents/Resources/quire"
 
 echo "▸ ad-hoc 签名"
 codesign --force --deep --sign - "$APP"

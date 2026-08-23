@@ -160,3 +160,9 @@
 "混合" = "Hybrid";
 "混合（实验，⌘4）：点击块进入源码编辑" = "Hybrid (experimental, ⌘4): click a block to edit its source";
 "混合（实验）" = "Hybrid (Experimental)";
+"安装命令行工具 quire…" = "Install Command Line Tool quire…";
+"重新安装命令行工具" = "Reinstall Command Line Tool";
+"已安装：终端里 quire 文件.md / quire ." = "Installed: run quire file.md / quire . in Terminal";
+"已安装到 /usr/local/bin/quire" = "Installed at /usr/local/bin/quire";
+"quire README.md · quire ." = "quire README.md · quire .";
+"手动安装：sudo ln -sf \"%@\" /usr/local/bin/quire" = "Manual install: sudo ln -sf \"%@\" /usr/local/bin/quire";
