@@ -222,10 +222,15 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
     }
 
     /// 打印 / PDF 用视图：独立一份文本视图，宽度按纸张；缩放固定为 1，主题为当前主题
-    func printableView(width: CGFloat = 540) -> NSView {
-        let style = RenderStyle(theme: session.style.theme, scale: 1, options: session.style.options)
+    func printableView(width: CGFloat = 540, layout: PDFLayout? = nil, document: MarkdownDocument? = nil) -> ReaderTextView {
+        var options = session.style.options
+        if let layout { options.headingNumbers = layout.headingNumbers }
+        // 打印 / PDF 永远用浅色主题；导出图片（layout == nil 且来自 writeImage）保留当前主题
+        let theme = layout != nil ? ThemeManager.shared.printTheme : session.style.theme
+        let style = RenderStyle(theme: theme, scale: 1, options: options)
         let tv = ReaderTextView(style: style)
         tv.showsCodeCopyButtons = false
+        tv.keepHeadingsWithNext = layout?.keepHeadingWithNext ?? false
         tv.frame = NSRect(x: 0, y: 0, width: width, height: 100)
         tv.textContainerInset = CGSize(width: 0, height: 0)
         tv.setPrintingWidth(width)
@@ -235,6 +240,17 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
         tv.textContainerInset = CGSize(width: 0, height: 0)
         tv.setPrintingWidth(width)
         tv.layoutAllForPrinting()
+        if let layout {
+            let title = session.parsed.outline.entries.first(where: { $0.level == 1 })?.title ?? document?.fileURL?.deletingPathExtension().lastPathComponent ?? ""
+            let file = document?.fileURL?.lastPathComponent ?? ""
+            let font = NSFont.systemFont(ofSize: 9)
+            let color = NSColor(white: 0.45, alpha: 1)
+            tv.printHeaderFooter = { page, pages in
+                let h = PDFLayout.expand(layout.header, page: page, pages: pages, title: title, file: file).map { PDFLayout.line($0, width: width, font: font, color: color) }
+                let f = PDFLayout.expand(layout.footer, page: page, pages: pages, title: title, file: file).map { PDFLayout.line($0, width: width, font: font, color: color) }
+                return (h, f)
+            }
+        }
         return tv
     }
 }

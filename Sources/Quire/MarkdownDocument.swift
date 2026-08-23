@@ -174,8 +174,10 @@ final class MarkdownDocument: NSDocument {
         info.verticalPagination = .clip
         info.isVerticallyCentered = false
         info.isHorizontallyCentered = false
-        info.topMargin = 36; info.bottomMargin = 36; info.leftMargin = 36; info.rightMargin = 36
-        let op = NSPrintOperation(view: wc.readerViewController.printableView(width: info.paperSize.width - info.leftMargin - info.rightMargin), printInfo: info)
+        let layout = PDFLayout.load()
+        info.topMargin = layout.top; info.bottomMargin = layout.bottom; info.leftMargin = layout.left; info.rightMargin = layout.right
+        info.dictionary()[NSPrintInfo.AttributeKey.headerAndFooter] = true
+        let op = NSPrintOperation(view: wc.readerViewController.printableView(width: info.paperSize.width - info.leftMargin - info.rightMargin, layout: layout, document: self), printInfo: info)
         op.showsPrintPanel = true
         op.showsProgressPanel = true
         return op

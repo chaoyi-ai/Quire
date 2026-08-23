@@ -209,3 +209,15 @@
 "从收藏移除" = "Remove from Favorites";
 "加入收藏" = "Add to Favorites";
 "内容块：独占一行的 ![[文件]] 展开为该文件内容（.md / .csv / 图片）" = "Content blocks: a line with only ![[file]] expands to that file (.md / .csv / images)";
+"左" = "Left";
+"标题不孤行（标题与下一段同页）" = "Keep headings with next paragraph";
+"右" = "Right";
+"页脚" = "Footer";
+"例：{title}|  |{date}" = "e.g. {title}|  |{date}";
+"页边距（pt）" = "Margins (pt)";
+"下" = "Bottom";
+"上" = "Top";
+"占位符：{page} {pages} {title} {file} {date}；用 | 分成 左|中|右" = "Placeholders: {page} {pages} {title} {file} {date}; use | for left|center|right";
+"纸张" = "Paper";
+"标题自动编号" = "Number headings";
+"页眉" = "Header";

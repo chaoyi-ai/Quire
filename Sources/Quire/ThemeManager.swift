@@ -93,6 +93,13 @@ final class ThemeManager {
         }
     }
 
+    /// 打印 / PDF 用：永远是浅色主题（当前浅色槽位；纸是白的，深色主题的浅字印出来看不见）
+    var printTheme: Theme {
+        if currentTheme.appearance == .light { return currentTheme }
+        if let t = catalog.theme(id: lightThemeID), t.appearance == .light { return t }
+        return catalog.themes(for: .light).first ?? currentTheme
+    }
+
     private func resolveTheme() -> Theme {
         let id = effectiveAppearance == .dark ? darkThemeID : lightThemeID
         if let t = catalog.theme(id: id) { return t }

@@ -195,7 +195,7 @@
 - [x] 内容块（#80，0.5.4）：独占一段的 `![[file]]`（Obsidian 风格，与 wikilinks 同族；不用 iA 的裸行写法——裸行会改变合法 GFM 段落的语义）。解析器不碰文件：`Transclusion.expand` 后处理 + App 给的 Loader（Markdown 走 FileIndex 快照 + `WikiLink.resolve` 就近；csv / 图片按当前目录 → 根目录找；必须落在根目录内；≤ 2 MB）。`.md` 递归内联（深度 ≤ 6，循环包含拦下，front matter 去掉，相对图片按被包含文件目录重定位）、`.csv/.tsv` → 表格（全数字列右对齐）、图片 → 图片块；展开块带指令行的 sourceRange，滚动同步照旧；被包含文件改动即重渲染；导出走展开后的文档；设置 → 阅读 开关，默认关
 
 ### 7.4 导出与集成
-- [ ] PDF 排版参数：页边距、页眉 / 页脚占位符、标题编号、标题不孤行，进导出面板并记忆（#81）
+- [x] PDF 排版参数（#81，0.5.5）：导出 PDF 的存盘面板带附加视图——纸张（跟随系统 / A4 / Letter）、四边距、页眉 / 页脚模板（`{page} {pages} {title} {file} {date}`，`|` 分左中右）、标题编号、标题不孤行；记在 `pdf.layout`（JSON），⌘P 打印也用同一套。页眉页脚走 AppKit 自带的 `pageHeader / pageFooter`（自己改 frame 画会触发 TextKit 重排、分页失效）；标题不孤行在 `computePageRects` 里把页尾标题带到下一页；打印 / PDF 永远用浅色主题
 - [ ] `quire://open?path=…&line=…` URL scheme（**来自外部 App 的打开先弹确认，路径限制在已打开的根目录或用户明确选择过的位置**）；Apple Shortcuts 动作（打开、新建、追加文本、导出 PDF）（#82）
 
 **测试**：词性 / 文风标注不改变 textStorage 字符串（字节级断言）；著作归属区间在插入 / 删除 / 外部重载后的对齐测试；wikilink / 内容块路径解析的越界用例；导出产物不含归属注释块。

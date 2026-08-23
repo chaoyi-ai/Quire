@@ -220,23 +220,48 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
 
     private var pageRects: [CGRect]?
 
+    /// 打印：标题不孤行——标题落在页尾而正文被挤到下一页时，把标题一起带过去
+    public var keepHeadingsWithNext = false
+    /// 打印分页结果（页数给页眉 / 页脚用）
+    public var printedPageCount: Int { pageRects?.count ?? 1 }
+    /// 打印：页眉 / 页脚（页号从 1 起）；nil = 不画。走 AppKit 自带的 pageHeader / pageFooter 机制
+    /// （NSPrintInfo 的 headerAndFooter = true 时 drawPageBorder 默认实现会画）——别自己重写 drawPageBorder 改 frame，
+    /// NSTextView 的 frame 一动就触发 TextKit 重排，分页矩形随之失效（实测第 2 页起画错内容）
+    public var printHeaderFooter: ((_ page: Int, _ pages: Int) -> (header: NSAttributedString?, footer: NSAttributedString?))?
+
+    public override var pageHeader: NSAttributedString {
+        guard let printHeaderFooter, let op = NSPrintOperation.current else { return NSAttributedString() }
+        return printHeaderFooter(op.currentPage, printedPageCount).header ?? NSAttributedString()
+    }
+    public override var pageFooter: NSAttributedString {
+        guard let printHeaderFooter, let op = NSPrintOperation.current else { return NSAttributedString() }
+        return printHeaderFooter(op.currentPage, printedPageCount).footer ?? NSAttributedString()
+    }
+
     private func computePageRects(pageHeight: CGFloat) -> [CGRect] {
         guard let tlm = textLayoutManager, pageHeight > 10 else { return [bounds] }
         var rects: [CGRect] = []
         var pageTop: CGFloat = 0
         var lastBottom: CGFloat = 0
+        var lastTop: CGFloat = 0
+        var lastWasHeading = false
         let width = bounds.width
+        let keep = keepHeadingsWithNext
         tlm.enumerateTextLayoutFragments(from: nil, options: [.ensuresLayout]) { frag in
             let f = frag.layoutFragmentFrame
+            let top = f.minY + self.textContainerInset.height
             let bottom = f.maxY + self.textContainerInset.height
             if bottom - pageTop > pageHeight {
-                // 当前片段放不下：在它之前分页（若它本身超过一页，硬切）
-                if lastBottom > pageTop { rects.append(CGRect(x: 0, y: pageTop, width: width, height: lastBottom - pageTop)); pageTop = lastBottom }
+                // 当前片段放不下：在它之前分页（若它本身超过一页，硬切）；前一片是标题则连标题一起带到下一页
+                let breakAt = (keep && lastWasHeading && lastTop > pageTop) ? lastTop : lastBottom
+                if breakAt > pageTop { rects.append(CGRect(x: 0, y: pageTop, width: width, height: breakAt - pageTop)); pageTop = breakAt }
                 while bottom - pageTop > pageHeight {
                     rects.append(CGRect(x: 0, y: pageTop, width: width, height: pageHeight)); pageTop += pageHeight
                 }
             }
             lastBottom = bottom
+            lastTop = top
+            lastWasHeading = keep && (frag as? BlockLayoutFragment)?.isHeading == true
             return true
         }
         if lastBottom > pageTop { rects.append(CGRect(x: 0, y: pageTop, width: width, height: lastBottom - pageTop)) }

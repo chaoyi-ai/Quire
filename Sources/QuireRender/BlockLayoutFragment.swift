@@ -11,6 +11,9 @@ public final class BlockLayoutFragment: NSTextLayoutFragment {
         return p.attributedString.attributes(at: 0, effectiveRange: nil)
     }
 
+    /// 打印分页用：这一片是不是标题
+    var isHeading: Bool { role == .heading }
+
     private var role: BlockRole {
         (paragraphAttributes[QuireAttribute.blockRole] as? Int).flatMap(BlockRole.init(rawValue:)) ?? .body
     }

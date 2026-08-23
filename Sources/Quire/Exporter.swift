@@ -1,3 +1,4 @@
+import SwiftUI
 import AppKit
 import PDFKit
 import UniformTypeIdentifiers
@@ -29,15 +30,18 @@ enum Exporter {
         panel.allowedContentTypes = [.pdf]
         panel.nameFieldStringValue = (document.fileURL?.deletingPathExtension().lastPathComponent ?? "Untitled") + ".pdf"
         panel.canCreateDirectories = true
+        let model = PDFLayoutModel()
+        panel.accessoryView = NSHostingView(rootView: PDFLayoutView(model: model))
         panel.beginSheetModal(for: window) { resp in
             guard resp == .OK, let url = panel.url else { return }
-            _ = writePDF(document: document, windowController: wc, to: url)
+            model.layout.save()
+            _ = writePDF(document: document, windowController: wc, to: url, layout: model.layout)
         }
     }
 
-    /// 直接写 PDF（分页，A4/Letter 由系统打印设置决定）
+    /// 直接写 PDF（分页；纸张 / 边距 / 页眉页脚按 `layout`，默认读记住的设置）
     @discardableResult
-    static func writePDF(document: MarkdownDocument, windowController wc: DocumentWindowController, to url: URL) -> Bool {
+    static func writePDF(document: MarkdownDocument, windowController wc: DocumentWindowController, to url: URL, layout: PDFLayout = .load()) -> Bool {
         let info = NSPrintInfo.shared.copy() as! NSPrintInfo
         info.jobDisposition = .save
         info.dictionary()[NSPrintInfo.AttributeKey.jobSavingURL] = url
@@ -45,13 +49,14 @@ enum Exporter {
         info.verticalPagination = .clip
         info.isVerticallyCentered = false
         info.isHorizontallyCentered = false
-        info.topMargin = 40; info.bottomMargin = 40; info.leftMargin = 40; info.rightMargin = 40
-        let view = wc.readerViewController.printableView(width: info.paperSize.width - info.leftMargin - info.rightMargin)
+        layout.apply(to: info)
+        info.dictionary()[NSPrintInfo.AttributeKey.headerAndFooter] = true
+        let view = wc.readerViewController.printableView(width: info.paperSize.width - info.leftMargin - info.rightMargin, layout: layout, document: document)
         let op = NSPrintOperation(view: view, printInfo: info)
         op.showsPrintPanel = false
         op.showsProgressPanel = false
         guard op.run() else { return false }
-        if let tv = view as? ReaderTextView { addBookmarks(to: url, from: tv, printInfo: info) }
+        addBookmarks(to: url, from: view, printInfo: info)
         return true
     }
 
