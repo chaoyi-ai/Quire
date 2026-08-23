@@ -212,6 +212,21 @@ enum Block: Hashable {
 - 复用 M1 渲染器与 M3 高亮器，用同一份 `Document`；不写第二套渲染。
 - 表格 / Mermaid / 图片 / 数学等附件块激活后就是 Markdown 源码——不做渲染态的单元格编辑。
 
+### M7 著作归属
+
+文件尾一段 HTML 注释块：
+
+```
+<!-- quire-authorship v1 hash=<FNV-1a 64 of body>
+{"authors":[{"id":"me","name":"我","color":"#3B82F6"},…],"spans":[["me",19,10],["paste",29,11]]}
+-->
+```
+
+- 正文不受影响：任何 Markdown 工具都把它当注释；`MarkdownDocument.source` 永远是去掉注释块的正文，渲染 / 导出 / 复制天然看不到它
+- 区间按 UTF-16 偏移，与 NSTextView 一致；在 `NSTextStorageDelegate.willProcessEditing`（只看 `.editedCharacters`）处按 `(editedRange, delta)` 增量维护，撤销 / 重做 / 程序插入都经过这里；`setSource` 整体替换不经过（那是磁盘重载，重新 split）
+- 哈希对不上（正文被外部改过）：区间整体丢弃、作者表保留、提示一次——错位的归属比没有更糟
+- 没有区间就不写注释块：不往干净文件里塞东西
+
 ## 8. 主题系统
 
 见 [THEMES.md](THEMES.md)。核心约束：

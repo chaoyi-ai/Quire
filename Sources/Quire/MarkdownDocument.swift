@@ -74,6 +74,12 @@ final class MarkdownDocument: NSDocument {
     nonisolated(unsafe) var isNewDocument = false
     /// 渲染会话（解析 / 渲染 / 监控），窗口控制器持有 UI
     private(set) lazy var session = DocumentSession(document: self)
+    /// 著作归属（文件尾注释块）；nil = 这份文件没有。`source` 永远是去掉注释块的正文
+    nonisolated(unsafe) var authorship: Authorship?
+    /// 读入时注释块的哈希对不上（正文被外部改过）→ 打开后提示一次
+    nonisolated(unsafe) var authorshipMismatch = false
+    /// 下一次粘贴用的作者（"以作者粘贴"一次性覆盖）
+    var nextPasteAuthor: String?
 
     override class var autosavesInPlace: Bool { true }
     override class var readableTypes: [String] { [QuireDocumentController.markdownType, "public.plain-text", "public.text"] }
@@ -104,6 +110,7 @@ final class MarkdownDocument: NSDocument {
             else if let s = String(data: data, encoding: .isoLatin1) { source = s; encoding = .isoLatin1 }
             else { throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownStringEncodingError, userInfo: [NSLocalizedDescriptionKey: L("无法识别文件编码")]) }
         }
+        splitAuthorship()
         isNewDocument = false
         let src = source
         LaunchClock.mark("file read (\(data.count) bytes)")
@@ -113,7 +120,20 @@ final class MarkdownDocument: NSDocument {
         }
     }
 
+    /// 把文件尾的著作归属注释块从 `source` 里拆出来
+    private func splitAuthorship() {
+        guard source.utf8.count < 64 * 1024 * 1024, source.contains(Authorship.marker) else { return }
+        let (body, a, mismatch) = Authorship.split(source)
+        source = body
+        authorship = a
+        authorshipMismatch = mismatch
+    }
+
+    /// 写盘内容：正文 + 著作归属注释块（有区间才写）
+    nonisolated var sourceForDisk: String { authorship?.embed(into: source) ?? source }
+
     override func data(ofType typeName: String) throws -> Data {
+        let source = sourceForDisk
         guard let d = source.data(using: encoding) ?? source.data(using: .utf8) else {
             throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteInapplicableStringEncodingError)
         }
@@ -123,6 +143,24 @@ final class MarkdownDocument: NSDocument {
     /// 编辑器每次击键调用（撤销由 NSTextView 走文档 undoManager，自动标脏）
     func setSourceFromEditor(_ text: String) {
         source = text
+    }
+
+    // MARK: - 著作归属
+
+    /// 编辑器字符级改动：维护区间。开着著作归属时新内容归当前作者（粘贴归粘贴作者）；关着但文件已有区间时只做平移 / 裁切，不新增
+    @MainActor
+    func recordEdit(range: NSRange, delta: Int, isPaste: Bool) {
+        let prefs = Preferences.shared
+        let tracking = prefs.authorship
+        if authorship == nil { guard tracking else { return }; authorship = Authorship() }
+        let oldLength = range.length - delta
+        var author: String? = nil
+        if tracking {
+            if isPaste { author = nextPasteAuthor ?? prefs.authorshipPasteAuthor; nextPasteAuthor = nil }
+            else { author = prefs.authorshipAuthor }
+            if let a = author, authorship?.author(a) == nil { author = Authorship.me.id }
+        }
+        authorship?.apply(replacing: range.location, length: max(0, oldLength), withLength: range.length, author: author)
     }
 
     /// 程序化整体替换内容（URL scheme / Shortcuts）：同步编辑器与渲染，标脏
@@ -138,7 +176,12 @@ final class MarkdownDocument: NSDocument {
     /// 有未保存改动时不静默覆盖：弹 sheet 让用户选择"重新载入（丢弃改动）/ 保留我的改动"；同一份磁盘内容只问一次。
     func reloadFromDisk() {
         guard let url = fileURL, let data = try? Data(contentsOf: url) else { return }
-        guard let s = String(data: data, encoding: encoding), s != source else { return }
+        guard let s = String(data: data, encoding: encoding), s != sourceForDisk, s != source else { return }
+        // 自己刚写盘的（正文相同、只是多了归属块 / 尾换行）也不算外部修改
+        if authorship != nil || s.contains(Authorship.marker) {
+            let diskBody = Authorship.split(s).body
+            if diskBody == source || diskBody == source + "\n" { return }
+        }
         if isDocumentEdited {
             guard s != conflictPromptedContent else { return }
             conflictPromptedContent = s
@@ -151,10 +194,13 @@ final class MarkdownDocument: NSDocument {
 
     private func applyReloaded(_ s: String) {
         source = s
+        splitAuthorship()
+        let s = source
         conflictPromptedContent = nil
         MainActor.assumeIsolated {
             session.sourceDidChange(s, reason: .externalChange)
             (windowControllers.first as? DocumentWindowController)?.documentDidReload(s)
+            (windowControllers.first as? DocumentWindowController)?.noteAuthorshipMismatchIfNeeded()
         }
     }
 

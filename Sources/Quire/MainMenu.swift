@@ -94,6 +94,8 @@ enum MainMenu {
         let findPrev = find.addItem(withTitle: L("查找上一个"), action: #selector(NSTextView.performFindPanelAction(_:)), keyEquivalent: "g"); findPrev.tag = 3; findPrev.keyEquivalentModifierMask = [.command, .shift]
         let useSel = find.addItem(withTitle: L("使用所选内容查找"), action: #selector(NSTextView.performFindPanelAction(_:)), keyEquivalent: "e"); useSel.tag = 7
         edit.addItem(withTitle: L("查找"), action: nil, keyEquivalent: "").submenu = find
+        edit.addItem(.separator())
+        edit.addItem(withTitle: L("著作归属"), action: nil, keyEquivalent: "").submenu = AuthorshipMenu.build()
         main.addItem(withTitle: L("编辑"), action: nil, keyEquivalent: "").submenu = edit
 
         // Format（编辑器）

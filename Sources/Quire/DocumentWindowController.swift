@@ -22,7 +22,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     private var prefsObserver: NSObjectProtocol?
     private var isSyncingScroll = false
 
-    private var markdownDocument: MarkdownDocument? { document as? MarkdownDocument }
+    var markdownDocument: MarkdownDocument? { document as? MarkdownDocument }
 
     private(set) var mode: Mode = .reader {
         didSet { applyMode(); UserDefaults.standard.set(mode.rawValue, forKey: "view.mode") }
@@ -43,6 +43,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         super.init(window: window)
         LaunchClock.mark("  wc: window")
         session.transclusionRoot = { [weak self] in self?.sidebarViewController.rootURL }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.noteAuthorshipMismatchIfNeeded() }
         // 注意：不要在这里 self.document = document —— NSDocument.addWindowController 会因"已关联"而跳过登记
         window.delegate = self
 
@@ -263,6 +264,8 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         if item.action == #selector(setFocusMode(_:)) { item.state = item.tag == focusMode.rawValue ? .on : .off }
         if item.action == #selector(setPOSMode(_:)) { item.state = item.tag == posMode.rawValue ? .on : .off }
         if item.action == #selector(toggleStyleCheck(_:)) { item.state = styleCheckOn ? .on : .off }
+        if item.action == #selector(toggleAuthorship(_:)) { item.state = Preferences.shared.authorship ? .on : .off }
+        if item.action == #selector(markSelectionAsAuthor(_:)) { return mode != .reader && editorViewController.isViewLoaded && editorViewController.textView.selectedRange().length > 0 }
         if item.action == #selector(navigateBack(_:)) { return NavigationHistory.shared.canGoBack }
         if item.action == #selector(navigateForward(_:)) { return NavigationHistory.shared.canGoForward }
         if item.action == #selector(toggleImmersive(_:)) { item.title = isImmersive ? L("退出沉浸写作") : L("沉浸写作") }

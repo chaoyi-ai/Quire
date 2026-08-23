@@ -29,6 +29,7 @@ final class Preferences: ObservableObject {
         static let math = "parser.math"
         static let toc = "parser.toc"
         static let transclusion = "parser.transclusion"
+        static let authorship = "authorship.enabled", authorshipAuthor = "authorship.author", authorshipPasteAuthor = "authorship.pasteAuthor"
         static let smart = "parser.smartPunctuation"
         static let headingNumbers = "render.headingNumbers"
         static let formatToolbar = "editor.formatToolbar"
@@ -60,6 +61,10 @@ final class Preferences: ObservableObject {
     @Published var mathEnabled: Bool { didSet { d.set(mathEnabled, forKey: Key.math); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var tocEnabled: Bool { didSet { d.set(tocEnabled, forKey: Key.toc); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var transclusion: Bool { didSet { d.set(transclusion, forKey: Key.transclusion); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    /// 著作归属（⇧⌘A）：记录键入 / 粘贴区间并着色，存在文件尾注释块
+    @Published var authorship: Bool { didSet { d.set(authorship, forKey: Key.authorship); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    var authorshipAuthor: String { get { d.string(forKey: Key.authorshipAuthor) ?? "me" } set { d.set(newValue, forKey: Key.authorshipAuthor) } }
+    var authorshipPasteAuthor: String { get { d.string(forKey: Key.authorshipPasteAuthor) ?? "paste" } set { d.set(newValue, forKey: Key.authorshipPasteAuthor) } }
     @Published var smartPunctuation: Bool { didSet { d.set(smartPunctuation, forKey: Key.smart); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var headingNumbers: Bool { didSet { d.set(headingNumbers, forKey: Key.headingNumbers); ThemeManager.shared.refresh() } }
     @Published var checkForUpdates: Bool { didSet { d.set(checkForUpdates, forKey: Key.updates) } }
@@ -111,6 +116,7 @@ final class Preferences: ObservableObject {
         mathEnabled = d.bool(forKey: Key.math)
         tocEnabled = d.bool(forKey: Key.toc)
         transclusion = d.bool(forKey: Key.transclusion)
+        authorship = d.bool(forKey: Key.authorship)
         smartPunctuation = d.bool(forKey: Key.smart)
         headingNumbers = d.bool(forKey: Key.headingNumbers)
         formatToolbar = d.bool(forKey: Key.formatToolbar)

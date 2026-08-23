@@ -82,6 +82,13 @@ final class EditorViewController: NSViewController {
             self.session.sourceDidChangeDebounced(src)
             self.onEdit?()
         }
+        textView.onCharactersEdited = { [weak self] range, delta, isPaste in
+            guard let self, let doc = self.session.document else { return }
+            doc.recordEdit(range: range, delta: delta, isPaste: isPaste)
+            self.pushAuthorshipColors()
+        }
+        textView.showsAuthorship = Preferences.shared.authorship
+        pushAuthorshipColors()
         boundsObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -120,6 +127,17 @@ final class EditorViewController: NSViewController {
         textView.setSource(text)
         let len = (text as NSString).length
         textView.setSelectedRange(NSRange(location: min(sel.location, len), length: 0))
+        pushAuthorshipColors()
+    }
+
+    /// 著作归属区间 → 编辑器底色（作者色 22% 透明）
+    func pushAuthorshipColors() {
+        guard isViewLoaded else { return }
+        textView.showsAuthorship = Preferences.shared.authorship
+        guard let a = session.document?.authorship, Preferences.shared.authorship else { if !textView.authorshipSpans.isEmpty { textView.authorshipSpans = [] }; return }
+        var colors: [String: NSColor] = [:]
+        for au in a.authors { colors[au.id] = (ThemeColor(hex: au.color) ?? ThemeColor(hex: "#888888")!).nsColor.withAlphaComponent(0.22) }
+        textView.authorshipSpans = a.spans.compactMap { s in colors[s.author].map { (NSRange(location: s.start, length: s.length), $0) } }
     }
 
     func scroll(toLine line: Int) { if isViewLoaded { textView.scroll(toLine: line) } }

@@ -10,6 +10,13 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     private var attrsCache: [MarkdownLexer.Kind: AnyObject] = [:]
     private var baseAttrs: AnyObject!
     /// 词性高亮模式；切换时清掉旧色、重新着色可见区
+    /// 著作归属：区间 → 底色（已排序）；`showsAuthorship` 关时不画但照常记录
+    public var authorshipSpans: [(range: NSRange, color: NSColor)] = [] { didSet { if showsAuthorship { applyAuthorshipColors() } } }
+    public var showsAuthorship = false { didSet { guard showsAuthorship != oldValue else { return }; showsAuthorship ? applyAuthorshipColors() : clearAuthorshipColors() } }
+    /// 字符级编辑（含撤销 / 重做 / 程序插入；setSource 整体替换除外）：editedRange 是新内容范围，delta 是长度变化，isPaste 表示来自粘贴
+    public var onCharactersEdited: ((_ editedRange: NSRange, _ delta: Int, _ isPaste: Bool) -> Void)?
+    var isPasting = false
+
     public var posMode: POSMode = .off {
         didSet {
             guard posMode != oldValue else { return }
@@ -330,6 +337,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     private func rehighlightAll() {
         guard let ts = textStorage, ts.length > 0 else { return }
         highlight(range: NSRange(location: 0, length: ts.length), state: .initial)
+        if showsAuthorship { applyAuthorshipColors() }
     }
 
     /// `location` 所在行行首的围栏 / front matter 状态（查表，O(log 行数)）
@@ -424,6 +432,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         MainActor.assumeIsolated {
             guard !isHighlighting, editedMask.contains(.editedCharacters) else { return }
             rebuildLineStarts()
+            onCharactersEdited?(editedRange, delta, isPasting)
             let ns = storage.string as NSString
             var para = ns.paragraphRange(for: editedRange)
             // 若编辑涉及围栏标记，重新高亮到文末（围栏状态会向下传播）
@@ -433,6 +442,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
             }
             let st = fenceState(before: para.location)
             highlight(range: para, state: st)
+            if showsAuthorship { applyAuthorshipColors(in: para) }
         }
     }
 
@@ -477,6 +487,8 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     public var pastedImagesDirectoryName = "assets"
 
     public override func paste(_ sender: Any?) {
+        isPasting = true
+        defer { isPasting = false }
         let pb = NSPasteboard.general
         // 剪贴板是图片（截图 / 从浏览器复制图片）且没有文本：存成文件、插入 ![](相对路径)
         if pb.string(forType: .string) == nil, pb.string(forType: .html) == nil, pb.canReadItem(withDataConformingToTypes: [NSPasteboard.PasteboardType.png.rawValue, NSPasteboard.PasteboardType.tiff.rawValue]) {
@@ -517,6 +529,8 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
 
     /// ⇧⌘V：只粘纯文本
     public override func pasteAsPlainText(_ sender: Any?) {
+        isPasting = true
+        defer { isPasting = false }
         guard let s = NSPasteboard.general.string(forType: .string) else { return super.paste(sender) }
         insertText(s, replacementRange: selectedRange())
     }
