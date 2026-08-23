@@ -749,8 +749,12 @@ final class SidebarOutlineView: NSOutlineView {
 
 extension SidebarViewController: @preconcurrency QLPreviewPanelDataSource, @preconcurrency QLPreviewPanelDelegate {
     override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { true }
-    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) { panel.dataSource = self; panel.delegate = self }
-    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) { panel.dataSource = nil; panel.delegate = nil }
+    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        MainActor.assumeIsolated { panel.dataSource = self; panel.delegate = self }   // CI 的 Swift 6.1 把这两个方法当 nonisolated
+    }
+    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        MainActor.assumeIsolated { panel.dataSource = nil; panel.delegate = nil }
+    }
     func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int { quickLookURL == nil ? 0 : 1 }
     func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! { quickLookURL as NSURL? }
 }
