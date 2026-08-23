@@ -227,6 +227,12 @@ enum Block: Hashable {
 - 哈希对不上（正文被外部改过）：区间整体丢弃、作者表保留、提示一次——错位的归属比没有更糟
 - 没有区间就不写注释块：不往干净文件里塞东西
 
+## 7.5 资源 bundle 与打印管线（2026-08 review 后补）
+
+- **资源查找**：SwiftPM 给每个目标生成的 `Bundle.module` 只会在 `Bundle.main.bundleURL/<包>_<目标>.bundle`（.app 根目录，codesign 不允许放东西）和**编译机的绝对 .build 路径**里找，所以 `build_app.sh` 装进 `Contents/Resources` 的 bundle 永远找不到——0.3.0–0.5.8 的发布包在别的机器上第一个 `L("…")` 就 fatalError，本机因为 .build 还在从没发现。现在所有资源都经 `QuireCore.ResourceBundle.locate`（先 `Contents/Resources`，再 bundleURL，最后才 `Bundle.module`），SwiftMath vendored 到 `Vendor/SwiftMath` 打同样的补丁。`scripts/smoke_app.sh` 把 App 拷到别处、用 sandbox 禁止读 .build 再跑一遍"打开 → 渲染公式 → 导出 PDF"，`build_app.sh` 与 CI 都跑。
+- **打印 / 导出**：`NSPrintOperation.run()` 是同步的，屏幕视图那套"先占位、异步加载"对它没用。打印视图 `loadsAttachmentsAutomatically = false`，`loadAllAttachmentsForExport()` 等图片（含表格单元格里的）、Mermaid 全部就绪再 `layoutAllForPrinting`；`Exporter.writePDF/writeImage` 是 async，⌘P 经 `MarkdownDocument.print(withSettings:…)` 先异步准备视图再调 super。页眉页脚走 AppKit 自带的 `pageHeader / pageFooter`——自己重写 `drawPageBorder` 改 frame 会触发 TextKit 重排、分页错位。
+- **增量渲染的块位置**：`Block` 的相等性不看 `sourceRange`，`render(_:reusing:)` 复用的块必须换成新解析的 `Block`（行号变了），否则混合模式、复制为 Markdown、滚动同步拿旧行号切源码。
+
 ## 8. 主题系统
 
 见 [THEMES.md](THEMES.md)。核心约束：
