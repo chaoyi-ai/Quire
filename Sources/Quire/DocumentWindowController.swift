@@ -311,6 +311,11 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             // 后续块的行号随之平移：由下次重解析修正；本块行范围的变化在 HybridTextView 内部按 activeLines 维护
             hybrid.activeLinesDidChange(to: lines.lowerBound...(lines.lowerBound + newLines.count - 1))
         }
+        hybrid.renderPreview = { [weak self] src in
+            guard let self else { return nil }
+            let doc = MarkdownParser(options: Preferences.shared.parserOptions).parse(src)
+            return DocumentRenderer(style: self.session.style).render(doc).attributed
+        }
         hybrid.onDeactivate = { [weak self] in
             guard let self else { return }
             self.session.sourceDidChange(self.session.source, reason: .edited)

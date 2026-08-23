@@ -29,6 +29,8 @@ public enum BlockRole: Int, Sendable {
     case mermaid
     case listItem
     case math
+    /// 混合模式里处于源码态的块（每个源码行一段）：画成一整块浅底，不带复制按钮与行号
+    case source
 }
 
 /// 代码块内换行使用 U+2028（行分隔符），使整个代码块保持为一个段落 → 一个布局片段 → 一块背景。

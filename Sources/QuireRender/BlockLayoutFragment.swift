@@ -60,6 +60,11 @@ public final class BlockLayoutFragment: NSTextLayoutFragment {
         }
 
         switch role {
+        case .source:
+            // 源码态：方形浅底铺满整行（相邻源码行拼成一块），不画圆角 / 边框
+            let rect = CGRect(x: originX, y: point.y, width: width, height: height)
+            context.setFillColor(style.codeBackground.withAlphaComponent(0.7).cgColor)
+            context.fill(rect)
         case .codeBlock, .htmlBlock, .frontMatter:
             let pad = style.codeBlockPadding
             let spacingBefore = ps?.paragraphSpacingBefore ?? pad

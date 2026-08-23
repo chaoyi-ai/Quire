@@ -94,3 +94,50 @@ final class HybridRerenderTests: XCTestCase {
         XCTAssertNil(view.activeBlock); XCTAssertFalse(view.isEditable)
     }
 }
+
+@MainActor
+final class HybridPolishTests: XCTestCase {
+    func make(_ src: String) -> (HybridTextView, RenderedDocument, DocumentRenderer) {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let style = RenderStyle(theme: theme)
+        let renderer = DocumentRenderer(style: style)
+        let view = HybridTextView(style: style)
+        let sv = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 400)); sv.documentView = view
+        let doc = renderer.render(MarkdownParser().parse(src))
+        view.source = src; view.setRendered(doc, style: style); view.isHybridEnabled = true
+        view.renderPreview = { s in renderer.render(MarkdownParser().parse(s)).attributed }
+        return (view, doc, renderer)
+    }
+
+    func testAttachmentBlockKeepsPreviewBelowSource() {
+        let (v, _, _) = make("段落\n\n| a | b |\n|--|--|\n| 1 | 2 |\n\n尾\n")
+        XCTAssertTrue(v.activate(block: 1))
+        let s = v.textStorage!.string
+        XCTAssertTrue(s.contains("| a | b |"), "源码在")
+        XCTAssertTrue(s.contains("\u{FFFC}"), "预览（表格附件）也在")
+        // 编辑源码后预览刷新（150 ms）
+        let r = v.activeRange
+        v.insertText("3", replacementRange: NSRange(location: r.location + r.length - 3, length: 0))
+        let exp = expectation(description: "preview")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { exp.fulfill() }
+        wait(for: [exp], timeout: 2)
+        XCTAssertEqual(v.textStorage!.string.components(separatedBy: "23").count, 3, "源码里一次 + 预览镜像里一次")
+        // 退出 + 重渲染后没有残片
+        v.deactivate(commit: false)
+        XCTAssertNil(v.activeBlock)
+    }
+
+    func testSourceOffsetFromRenderedPrefix() {
+        let src = "这是 **粗体** 和 *斜体* 的段落。\n"
+        XCTAssertEqual(HybridTextView.sourceOffset(forRenderedPrefix: "这是 粗体", in: src), ("这是 **粗体" as NSString).length)
+        XCTAssertEqual(HybridTextView.sourceOffset(forRenderedPrefix: "", in: src), 0)
+    }
+
+    func testSourceIsHighlighted() {
+        let (v, _, _) = make("# 标题\n\n**粗** 字\n")
+        XCTAssertTrue(v.activate(block: 0))
+        let ts = v.textStorage!
+        let attrs = ts.attributes(at: v.activeRange.location, effectiveRange: nil)   // "#" 标记
+        XCTAssertEqual(attrs[.foregroundColor] as? NSColor, v.style.theme.colors.editor.markdownMarker.nsColor)
+    }
+}
