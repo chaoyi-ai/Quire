@@ -9,6 +9,7 @@ public struct BlockDiff: Hashable, Sendable {
     public var newChanged: Range<Int>
 
     public var isEmpty: Bool { oldChanged.isEmpty && newChanged.isEmpty }
+    public init(oldChanged: Range<Int>, newChanged: Range<Int>) { self.oldChanged = oldChanged; self.newChanged = newChanged }
 
     public static func compute(old: [Block], new: [Block]) -> BlockDiff {
         let n = old.count, m = new.count

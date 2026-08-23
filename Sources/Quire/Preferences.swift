@@ -27,6 +27,9 @@ final class Preferences: ObservableObject {
         static let readerCodeFont = "reader.codeFontFamily"
         static let readerFontSize = "reader.baseFontSize"
         static let math = "parser.math"
+        static let toc = "parser.toc"
+        static let smart = "parser.smartPunctuation"
+        static let headingNumbers = "render.headingNumbers"
         static let updates = "update.check"
         static let sidebarHidden = "sidebar.showHidden"
         static let sidebarOthers = "sidebar.showOtherFiles"
@@ -52,6 +55,9 @@ final class Preferences: ObservableObject {
     @Published var readerBaseFontSize: Int { didSet { d.set(readerBaseFontSize, forKey: Key.readerFontSize); ThemeManager.shared.refresh() } }
 
     @Published var mathEnabled: Bool { didSet { d.set(mathEnabled, forKey: Key.math); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    @Published var tocEnabled: Bool { didSet { d.set(tocEnabled, forKey: Key.toc); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    @Published var smartPunctuation: Bool { didSet { d.set(smartPunctuation, forKey: Key.smart); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    @Published var headingNumbers: Bool { didSet { d.set(headingNumbers, forKey: Key.headingNumbers); ThemeManager.shared.refresh() } }
     @Published var checkForUpdates: Bool { didSet { d.set(checkForUpdates, forKey: Key.updates) } }
     @Published var sidebarShowHidden: Bool { didSet { d.set(sidebarShowHidden, forKey: Key.sidebarHidden); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var sidebarShowOtherFiles: Bool { didSet { d.set(sidebarShowOtherFiles, forKey: Key.sidebarOthers); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
@@ -61,7 +67,7 @@ final class Preferences: ObservableObject {
     /// 侧栏过滤规则快照（给后台目录扫描用）
     struct SidebarRules: Sendable, Equatable { var showHidden: Bool; var showOthers: Bool; var extraExtensions: Set<String> }
     var sidebarRules: SidebarRules { SidebarRules(showHidden: sidebarShowHidden, showOthers: sidebarShowOtherFiles, extraExtensions: extraExtensionSet) }
-    var parserOptions: MarkdownParser.Options { var o = MarkdownParser.Options(); o.math = mathEnabled; return o }
+    var parserOptions: MarkdownParser.Options { var o = MarkdownParser.Options(); o.math = mathEnabled; o.toc = tocEnabled; o.smartPunctuation = smartPunctuation; return o }
 
     var editorTypography: EditorTypography {
         EditorTypography(fontFamily: editorFontFamily.isEmpty ? nil : editorFontFamily, fontSize: CGFloat(editorFontSize), lineHeight: CGFloat(editorLineHeight), columnChars: editorColumnChars)
@@ -70,7 +76,7 @@ final class Preferences: ObservableObject {
     static let didChange = Notification.Name("com.korako.quire.preferencesDidChange")
 
     private init() {
-        d.register(defaults: [Key.codeCopyButton: true, Key.autoReload: true, Key.editorLineNumbers: true, Key.largeFileMB: 8, Key.wordCount: true, Key.hangingMarkers: true, Key.htmlPaste: true, Key.editorLineHeight: 1.35, Key.math: true, Key.updates: true])
+        d.register(defaults: [Key.codeCopyButton: true, Key.autoReload: true, Key.editorLineNumbers: true, Key.largeFileMB: 8, Key.wordCount: true, Key.hangingMarkers: true, Key.htmlPaste: true, Key.editorLineHeight: 1.35, Key.math: true, Key.updates: true, Key.toc: true])
         codeLineNumbers = d.bool(forKey: Key.codeLineNumbers)
         codeCopyButton = d.bool(forKey: Key.codeCopyButton)
         linkUnderline = d.bool(forKey: Key.linkUnderline)
@@ -88,6 +94,9 @@ final class Preferences: ObservableObject {
         readerCodeFontFamily = d.string(forKey: Key.readerCodeFont) ?? ""
         readerBaseFontSize = d.integer(forKey: Key.readerFontSize)
         mathEnabled = d.bool(forKey: Key.math)
+        tocEnabled = d.bool(forKey: Key.toc)
+        smartPunctuation = d.bool(forKey: Key.smart)
+        headingNumbers = d.bool(forKey: Key.headingNumbers)
         checkForUpdates = d.bool(forKey: Key.updates)
         sidebarShowHidden = d.bool(forKey: Key.sidebarHidden)
         sidebarShowOtherFiles = d.bool(forKey: Key.sidebarOthers)
@@ -96,7 +105,7 @@ final class Preferences: ObservableObject {
 
     var renderOptions: RenderOptions {
         RenderOptions(codeLineNumbers: codeLineNumbers, linkUnderline: linkUnderline, largeFile: false,
-                      bodyFontFamily: readerBodyFontFamily, codeFontFamily: readerCodeFontFamily, baseFontSize: readerBaseFontSize)
+                      bodyFontFamily: readerBodyFontFamily, codeFontFamily: readerCodeFontFamily, baseFontSize: readerBaseFontSize, headingNumbers: headingNumbers)
     }
     var largeFileThresholdBytes: Int { largeFileThresholdMB * 1024 * 1024 }
 }
@@ -217,6 +226,9 @@ struct PreferencesView: View {
                     ForEach([13, 14, 15, 16, 17, 18, 19, 20, 22, 24], id: \.self) { Text("\($0) pt").tag($0) }
                 }
                 Toggle(L("数学公式（$$…$$ 块与 $…$ 行内，LaTeX）"), isOn: $prefs.mathEnabled)
+                Toggle(L("[TOC] 展开为目录"), isOn: $prefs.tocEnabled)
+                Toggle(L("标题自动编号（1 / 1.1 / 1.1.1）"), isOn: $prefs.headingNumbers)
+                Toggle(L("智能标点（弯引号、破折号、省略号）"), isOn: $prefs.smartPunctuation)
                 Toggle(L("代码块显示行号"), isOn: $prefs.codeLineNumbers)
                 Toggle(L("代码块显示复制按钮"), isOn: $prefs.codeCopyButton)
                 Toggle(L("链接显示下划线"), isOn: $prefs.linkUnderline)

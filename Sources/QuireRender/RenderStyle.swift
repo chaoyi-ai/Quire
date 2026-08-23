@@ -17,10 +17,13 @@ public struct RenderOptions: Hashable, Sendable {
     public var bodyFontFamily = ""
     public var codeFontFamily = ""
     public var baseFontSize: Int = 0
+    /// 标题自动编号（1 / 1.1 / 1.1.1，按文档里的级别相对计）；开着时增量渲染退化为全量（编号会跨块变化）
+    public var headingNumbers = false
     public init(codeLineNumbers: Bool = false, linkUnderline: Bool = false, largeFile: Bool = false,
-                bodyFontFamily: String = "", codeFontFamily: String = "", baseFontSize: Int = 0) {
+                bodyFontFamily: String = "", codeFontFamily: String = "", baseFontSize: Int = 0, headingNumbers: Bool = false) {
         self.codeLineNumbers = codeLineNumbers; self.linkUnderline = linkUnderline; self.largeFile = largeFile
         self.bodyFontFamily = bodyFontFamily; self.codeFontFamily = codeFontFamily; self.baseFontSize = baseFontSize
+        self.headingNumbers = headingNumbers
     }
 }
 

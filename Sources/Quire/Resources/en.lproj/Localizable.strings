@@ -170,3 +170,6 @@
 "显示隐藏文件与文件夹" = "Show hidden files and folders";
 "显示非 Markdown 文件（双击用默认 App 打开）" = "Show non-Markdown files (open with default app)";
 "额外按 Markdown 处理的扩展名（空格分隔）" = "Extra extensions treated as Markdown (space-separated)";
+"[TOC] 展开为目录" = "Expand [TOC] into a table of contents";
+"标题自动编号（1 / 1.1 / 1.1.1）" = "Number headings automatically (1 / 1.1 / 1.1.1)";
+"智能标点（弯引号、破折号、省略号）" = "Smart punctuation (curly quotes, dashes, ellipsis)";

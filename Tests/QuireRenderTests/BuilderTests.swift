@@ -142,3 +142,16 @@ final class ImageWidthTests: XCTestCase {
         XCTAssertTrue(r.attributed.string.contains(" 后面"))
     }
 }
+
+final class HeadingNumberTests: XCTestCase {
+    func testNumbersRelativeToMinLevel() {
+        let doc = MarkdownParser().parse("## A\n\n### A1\n\n### A2\n\n#### A2a\n\n## B\n\n正文\n")
+        let n = DocumentRenderer.headingNumbers(for: doc)
+        XCTAssertEqual(n[0], "1"); XCTAssertEqual(n[1], "1.1"); XCTAssertEqual(n[2], "1.2"); XCTAssertEqual(n[3], "1.2.1"); XCTAssertEqual(n[4], "2")
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        var o = RenderOptions(); o.headingNumbers = true
+        let r = DocumentRenderer(style: RenderStyle(theme: theme, options: o)).render(doc)
+        XCTAssertTrue(r.attributed.string.contains("1.2.1  A2a"))
+        XCTAssertFalse(DocumentRenderer(theme: theme).render(doc).attributed.string.contains("1.2.1"))
+    }
+}

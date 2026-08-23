@@ -41,7 +41,7 @@ final class DocumentSession {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 let o = Preferences.shared.parserOptions
-                if o.math != self.parser.options.math {   // 解析选项变了：重解析
+                if o.math != self.parser.options.math || o.toc != self.parser.options.toc || o.smartPunctuation != self.parser.options.smartPunctuation {   // 解析选项变了：重解析
                     self.parser = MarkdownParser(options: o)
                     self.sourceDidChange(self.source, reason: .externalChange)
                 }

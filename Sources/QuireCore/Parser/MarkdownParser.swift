@@ -16,6 +16,10 @@ public struct MarkdownParser: Sendable {
         public var mermaid = true
         /// `$$…$$` 段落 → `.math`；`$…$`（Pandoc 规则：开头 `$` 后无空白、结尾 `$` 前无空白且后面不是数字）→ `.inlineMath`
         public var math = true
+        /// 独占段落 `[TOC]`（也认 `[[TOC]]` / `{{TOC}}` / `[toc]`）→ 按标题生成嵌套链接列表
+        public var toc = true
+        /// 智能标点（cmark `CMARK_OPT_SMART`）：直引号 → 弯引号、`--` → 短破折、`---` → 长破折、`...` → 省略号
+        public var smartPunctuation = false
         /// 自动识别裸 URL（http/https/www.）为链接。自研扫描器：遇到 CJK 标点即停止（比 GFM autolink 更适合中文文本）
         public var autolink = true
         /// 脚注 `[^1]`
@@ -48,6 +52,7 @@ public struct MarkdownParser: Sendable {
 
         var cmarkOptions = CMARK_OPT_DEFAULT | CMARK_OPT_SOURCEPOS | CMARK_OPT_VALIDATE_UTF8 | CMARK_OPT_UNSAFE
         if options.footnotes { cmarkOptions |= CMARK_OPT_FOOTNOTES }
+        if options.smartPunctuation { cmarkOptions |= CMARK_OPT_SMART }
         guard let parser = cmark_parser_new(cmarkOptions) else { return .empty }
         for name in ["table", "strikethrough", "tasklist"] {
             if let ext = cmark_find_syntax_extension(name) { cmark_parser_attach_syntax_extension(parser, ext) }
@@ -84,7 +89,41 @@ public struct MarkdownParser: Sendable {
                                      blockIndex: i, line: b.sourceRange?.start.line))
             }
         }
-        return Document(blocks: blocks, outline: Outline(entries: entries))
+        let outline = Outline(entries: entries)
+        if options.toc { Self.expandTOC(&blocks, outline: outline) }
+        return Document(blocks: blocks, outline: outline)
+    }
+
+    /// `[TOC]` 段落 → 嵌套的链接列表（只含 `[TOC]` 之外的标题；层级按标题级别相对缩进）
+    static func expandTOC(_ blocks: inout [Block], outline: Outline) {
+        let markers: Set<String> = ["[toc]", "[[toc]]", "{{toc}}"]
+        for (i, b) in blocks.enumerated() {
+            guard case .paragraph(let inl) = b.kind, inl.count == 1, case .text(let t) = inl[0],
+                  markers.contains(t.trimmingCharacters(in: .whitespaces).lowercased()) else { continue }
+            let entries = outline.entries.filter { $0.blockIndex != i }
+            guard !entries.isEmpty else { blocks[i] = Block(kind: .paragraph([]), sourceRange: b.sourceRange); continue }
+            blocks[i] = Block(kind: tocList(entries[...], minLevel: entries.map(\.level).min() ?? 1), sourceRange: b.sourceRange)
+        }
+    }
+
+    private static func tocList(_ entries: ArraySlice<Outline.Entry>, minLevel: Int) -> BlockKind {
+        var items: [ListItem] = []
+        var k = entries.startIndex
+        while k < entries.endIndex {
+            let e = entries[k]
+            let level = max(e.level, minLevel)
+            // 该项的子项：后续级别更深的连续条目
+            var j = k + 1
+            while j < entries.endIndex, entries[j].level > level { j += 1 }
+            var blocks: [Block] = [Block(kind: .paragraph([.link(destination: "#" + e.id, title: nil, children: [.text(e.title)])]))]
+            if j > k + 1 {
+                let childMin = entries[(k + 1)..<j].map(\.level).min() ?? level + 1
+                blocks.append(Block(kind: tocList(entries[(k + 1)..<j], minLevel: childMin)))
+            }
+            items.append(ListItem(checkbox: nil, blocks: blocks))
+            k = j
+        }
+        return .list(ordered: false, start: 1, items: items)
     }
 
     // MARK: - Conversion

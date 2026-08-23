@@ -73,8 +73,24 @@ public final class DocumentRenderer: @unchecked Sendable {
 
     /// 全量渲染
     public func render(_ document: Document) -> RenderedDocument {
+        builder.headingNumbers = style.options.headingNumbers ? Self.headingNumbers(for: document) : [:]
         let rendered = render(blocks: document.blocks)
         return assemble(rendered)
+    }
+
+    /// 标题编号：按文档里出现的最小级别起算，跳级按 1 补；只编顶级块里的标题
+    public static func headingNumbers(for doc: Document) -> [Int: String] {
+        var counters = [Int](repeating: 0, count: 7)
+        var out: [Int: String] = [:]
+        let minLevel = doc.blocks.compactMap { if case .heading(let l, _, _) = $0.kind { l } else { nil } }.min() ?? 1
+        for (i, b) in doc.blocks.enumerated() {
+            guard case .heading(let level, _, _) = b.kind else { continue }
+            let depth = max(1, level - minLevel + 1)
+            counters[depth] += 1
+            for d in (depth + 1)..<7 { counters[d] = 0 }
+            out[i] = (1...depth).map { String(max(1, counters[$0])) }.joined(separator: ".")
+        }
+        return out
     }
 
     /// 渲染一组块（增量路径用）
@@ -92,6 +108,8 @@ public final class DocumentRenderer: @unchecked Sendable {
     public func render(_ document: Document, reusing previous: RenderedDocument) -> (RenderedDocument, BlockDiff) {
         let diff = BlockDiff.compute(old: previous.blocks.map(\.block), new: document.blocks)
         if diff.isEmpty, previous.theme.id == style.theme.id { return (previous, diff) }
+        // 标题编号跨块联动：有改动就整篇重建（编号是可选项，1 MB 全量 130 ms 可接受）
+        if style.options.headingNumbers { return (render(document), BlockDiff(oldChanged: 0..<previous.blocks.count, newChanged: 0..<document.blocks.count)) }
         var blocks: [RenderedBlock] = []
         blocks.reserveCapacity(document.blocks.count)
         blocks.append(contentsOf: previous.blocks[0..<diff.oldChanged.lowerBound])

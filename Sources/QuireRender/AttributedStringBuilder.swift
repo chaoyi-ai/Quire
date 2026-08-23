@@ -66,9 +66,14 @@ public final class AttributedStringBuilder: @unchecked Sendable {
 
     /// 同上，并报告该块是否含需要异步加载的附件（图片 / Mermaid），供 loadImages 跳过无关块，
     /// 避免对整份 1 MB 文档做属性枚举（实测 ~100 ms/次）。
+    /// 标题编号表（块下标 → "1.2"），由 DocumentRenderer 在开启编号时整篇算好后设置
+    public var headingNumbers: [Int: String] = [:]
+    private var currentBlockIndex = 0
+
     public func build(_ block: Block, index: Int) -> (attributed: NSAttributedString, hasLoadableAttachments: Bool) {
         let out = NSMutableAttributedString()
         appendedLoadableAttachment = false
+        currentBlockIndex = index
         out.beginEditing()
         append(block, into: out, ctx: BlockContext())
         out.endEditing()
@@ -145,6 +150,7 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         para.baseFont = font; para.color = style.heading
         let ic = InlineContext(para: para)
         if let marker = ctx.marker, ctx.isFirstInItem { appendMarker(marker, into: out, para: para); appendRun("\t", into: out, ctx: ic) }
+        if let n = headingNumbers[currentBlockIndex] { appendRun(n + "  ", into: out, ctx: ic, muted: true) }
         appendInlines(inlines, into: out, ctx: ic)
         appendRun("\n", into: out, ctx: ic)
         _ = id   // 锚点跳转按 Block.kind 查，不需要写进属性
