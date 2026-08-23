@@ -177,6 +177,8 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         smartInsertDeleteEnabled = false
         textContainerInset = CGSize(width: 12, height: 16)
         textStorage?.delegate = self
+        // 文件拖放（图片 / Markdown 链接）：显式登记 fileURL，别指望纯文本视图的默认类型里有它
+        registerForDraggedTypes(Array(Set(registeredDraggedTypes + [.fileURL])))
         applyStyle(style)
     }
 
@@ -653,7 +655,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
                 let name = u.deletingPathExtension().lastPathComponent
                 return DropSupport.isImage(u) ? "![\(name)](\(rel))" : "[\(u.lastPathComponent)](\(rel))"
             }.joined(separator: "\n")
-            insertText(text, replacementRange: NSRange(location: idx, length: 0))
+            isPasting = true; insertText(text, replacementRange: NSRange(location: idx, length: 0)); isPasting = false   // 拖进来的算"粘贴"
         }
         return true
     }

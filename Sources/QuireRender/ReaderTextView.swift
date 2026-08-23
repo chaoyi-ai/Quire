@@ -309,16 +309,25 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
 
     /// y → (页号从 0 起, 页内距顶偏移)；按与打印相同的分页算
     public func pagePlacement(forY y: CGFloat, pageHeight: CGFloat) -> (page: Int, offset: CGFloat) {
-        let rects = computePageRects(pageHeight: pageHeight)
+        // 与打印用同一份分页表（同一 pageHeight 才复用；每个标题各算一遍分页是 O(标题 × 片段)）
+        let rects: [CGRect]
+        if let cached = pageRects, pageRectsHeight == pageHeight { rects = cached } else { rects = computePageRects(pageHeight: pageHeight); pageRects = rects; pageRectsHeight = pageHeight }
         for (i, r) in rects.enumerated() where y < r.maxY { return (i, max(0, y - r.minY)) }
         return (max(0, rects.count - 1), 0)
     }
+    private var pageRectsHeight: CGFloat = 0
 
     public override func knowsPageRange(_ range: NSRangePointer) -> Bool {
-        guard fixedPrintingWidth != nil, let op = NSPrintOperation.current else { return super.knowsPageRange(range) }
+        guard let fixed = fixedPrintingWidth, let op = NSPrintOperation.current else { return super.knowsPageRange(range) }
         let info = op.printInfo
+        // 用户在打印面板里换了纸张 / 方向：视图宽度跟着变，重排再分页（视图是在面板之前按默认纸张建的）
+        let expectedWidth = (info.paperSize.width - info.leftMargin - info.rightMargin).rounded(.down)
+        if abs(expectedWidth - fixed) > 1 {
+            setPrintingWidth(expectedWidth)
+            layoutAllForPrinting()
+        }
         let pageHeight = (info.paperSize.height - info.topMargin - info.bottomMargin).rounded(.down)
-        if pageRects == nil { pageRects = computePageRects(pageHeight: pageHeight) }
+        if pageRects == nil || pageRectsHeight != pageHeight { pageRects = computePageRects(pageHeight: pageHeight); pageRectsHeight = pageHeight }
         range.pointee = NSRange(location: 1, length: pageRects!.count)
         return true
     }

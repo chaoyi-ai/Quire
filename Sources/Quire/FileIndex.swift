@@ -43,9 +43,10 @@ final class FileIndex {
         generation += 1
         let gen = generation
         let root = self.root
+        let extensions = QuireDocumentController.allMarkdownExtensions   // 含设置里的额外扩展名（侧栏认的文件 ⌘P / wikilink / 搜索也要认）
         isScanning = true
         Task.detached(priority: .utility) {
-            let (paths, truncated) = Self.scan(root: root)
+            let (paths, truncated) = Self.scan(root: root, extensions: extensions)
             await MainActor.run { [weak self] in
                 guard let self, gen == self.generation else { return }
                 self.relativePaths = paths
@@ -56,7 +57,7 @@ final class FileIndex {
         }
     }
 
-    nonisolated static func scan(root: URL) -> ([String], Bool) {
+    nonisolated static func scan(root: URL, extensions: Set<String> = QuireDocumentController.markdownExtensions) -> ([String], Bool) {
         let fm = FileManager.default
         guard let e = fm.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey, .isPackageKey],
                                     options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return ([], false) }
@@ -65,7 +66,7 @@ final class FileIndex {
         for case let u as URL in e {
             let name = u.lastPathComponent
             if name == "node_modules" || name == ".build" || name == "Pods" { e.skipDescendants(); continue }
-            guard QuireDocumentController.markdownExtensions.contains(u.pathExtension.lowercased()),
+            guard extensions.contains(u.pathExtension.lowercased()),
                   (try? u.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
             out.append(RelativePath.relative(u, to: root))
             if out.count >= maxFiles { truncated = true; break }

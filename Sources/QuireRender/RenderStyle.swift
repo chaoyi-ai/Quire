@@ -11,7 +11,7 @@ public struct RenderOptions: Hashable, Sendable {
     public var codeLineNumbers = false
     /// 链接下划线
     public var linkUnderline = false
-    /// 大文件模式：不高亮、不渲染 Mermaid、图片不加载
+    /// 大文件模式：不高亮、不渲染 Mermaid（图片照常加载——按视口惰性，代价不大）
     public var largeFile = false
     /// 字体覆盖（设置里选的；空 = 跟随主题）：正文 / 代码字体族名，基础字号（0 = 主题）
     public var bodyFontFamily = ""

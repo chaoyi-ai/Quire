@@ -16,9 +16,15 @@ public struct RenderedBlock: @unchecked Sendable {
 /// 整份已渲染文档：块列表 + 拼接结果 + 每块在拼接串中的范围
 public struct RenderedDocument: @unchecked Sendable {
     public let theme: Theme
+    /// 渲染时的选项（大文件模式、行号、标题编号…）：复用上一版的块时要确认选项没变
+    public let options: RenderOptions
     public let blocks: [RenderedBlock]
     public let attributed: NSAttributedString
     public let ranges: [NSRange]
+
+    public init(theme: Theme, options: RenderOptions = RenderOptions(), blocks: [RenderedBlock], attributed: NSAttributedString, ranges: [NSRange]) {
+        self.theme = theme; self.options = options; self.blocks = blocks; self.attributed = attributed; self.ranges = ranges
+    }
 
     public static func empty(theme: Theme) -> RenderedDocument {
         RenderedDocument(theme: theme, blocks: [], attributed: NSAttributedString(), ranges: [])
@@ -112,10 +118,10 @@ public final class DocumentRenderer: @unchecked Sendable {
         func rebased(_ rb: RenderedBlock, _ newBlock: Block) -> RenderedBlock {
             RenderedBlock(block: newBlock, attributed: rb.attributed, hasLoadableAttachments: rb.hasLoadableAttachments)
         }
-        if diff.isEmpty, previous.theme.id == style.theme.id {
+        if diff.isEmpty, previous.theme.id == style.theme.id, previous.options == style.options {
             if previous.blocks.count == document.blocks.count, zip(previous.blocks, document.blocks).allSatisfy({ $0.block.sourceRange == $1.sourceRange }) { return (previous, diff) }
             let blocks = zip(previous.blocks, document.blocks).map { rebased($0, $1) }
-            return (RenderedDocument(theme: previous.theme, blocks: blocks, attributed: previous.attributed, ranges: previous.ranges), diff)
+            return (RenderedDocument(theme: previous.theme, options: previous.options, blocks: blocks, attributed: previous.attributed, ranges: previous.ranges), diff)
         }
         // 标题编号跨块联动：有改动就整篇重建（编号是可选项，1 MB 全量 130 ms 可接受）
         if style.options.headingNumbers { return (render(document), BlockDiff(oldChanged: 0..<previous.blocks.count, newChanged: 0..<document.blocks.count)) }
@@ -139,6 +145,6 @@ public final class DocumentRenderer: @unchecked Sendable {
             ranges.append(NSRange(location: total.length, length: rb.attributed.length))
             total.append(rb.attributed)
         }
-        return RenderedDocument(theme: style.theme, blocks: blocks, attributed: total, ranges: ranges)
+        return RenderedDocument(theme: style.theme, options: style.options, blocks: blocks, attributed: total, ranges: ranges)
     }
 }

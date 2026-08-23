@@ -251,8 +251,8 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
             let font = NSFont.systemFont(ofSize: 9)
             let color = NSColor(white: 0.45, alpha: 1)
             tv.printHeaderFooter = { page, pages in
-                let h = PDFLayout.expand(layout.header, page: page, pages: pages, title: title, file: file).map { PDFLayout.line($0, width: width, font: font, color: color) }
-                let f = PDFLayout.expand(layout.footer, page: page, pages: pages, title: title, file: file).map { PDFLayout.line($0, width: width, font: font, color: color) }
+                let h = PDFLayout.line(template: layout.header, width: width, font: font, color: color, page: page, pages: pages, title: title, file: file)
+                let f = PDFLayout.line(template: layout.footer, width: width, font: font, color: color, page: page, pages: pages, title: title, file: file)
                 return (h, f)
             }
         }

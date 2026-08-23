@@ -16,9 +16,11 @@ final class ServicesProvider: NSObject {
 enum CLIInstaller {
     static let target = URL(fileURLWithPath: "/usr/local/bin/quire")
     static var bundled: URL? { Bundle.main.url(forResource: "quire", withExtension: nil) }
+    /// 已装好 = /usr/local/bin/quire 指向**当前这个 App** 里的脚本（指向别的副本 / 悬空的链接都要能重装）
     static var isInstalled: Bool {
-        guard let dest = try? FileManager.default.destinationOfSymbolicLink(atPath: target.path) else { return FileManager.default.fileExists(atPath: target.path) }
-        return FileManager.default.fileExists(atPath: dest)
+        guard let dest = try? FileManager.default.destinationOfSymbolicLink(atPath: target.path) else { return false }
+        guard let bundled else { return false }
+        return URL(fileURLWithPath: dest).resolvingSymlinksInPath().path == bundled.resolvingSymlinksInPath().path && FileManager.default.fileExists(atPath: dest)
     }
     /// 返回错误说明（nil = 成功）
     static func install() -> String? {

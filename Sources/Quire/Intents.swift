@@ -46,6 +46,7 @@ struct NewQuireDocumentIntent: AppIntent {
 struct AppendToQuireDocumentIntent: AppIntent {
     static let title: LocalizedStringResource = "Append Text to Markdown File"
     static let description = IntentDescription("Append text to the end of a Markdown file. If the file is open in Quire it is updated and saved.")
+    static let openAppWhenRun = true   // 与其他动作一致：在 App 进程里做，已打开的文档直接改
 
     @Parameter(title: "File") var file: IntentFile
     @Parameter(title: "Text") var text: String

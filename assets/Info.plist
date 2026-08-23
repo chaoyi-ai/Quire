@@ -18,7 +18,6 @@
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>net.daringfireball.markdown</string>
-				<string>com.korako.quire.markdown</string>
 			</array>
 			<key>NSDocumentClass</key>
 			<string>Quire.MarkdownDocument</string>

@@ -43,6 +43,13 @@ public struct MarkdownParser: Sendable {
     /// `\$` 的占位符：cmark 会把 `\$` 解成字面 `$` 并合并文本节点，等到我们切行内数学时转义已经没了；
     /// 先换成私用区字符喂给 cmark，转换节点时再换回来（文本里是 `$`，代码 / 数学里保留 `\$`）。
     static let escapedDollar = "\u{E000}"
+    @inline(__always) static func containsEscapedDollar(_ s: String) -> Bool {
+        s.utf8.withContiguousStorageIfAvailable { buf -> Bool in
+            guard buf.count >= 2 else { return false }
+            for i in 0..<(buf.count - 1) where buf[i] == 0x5C && buf[i + 1] == 0x24 { return true }
+            return false
+        } ?? s.contains("\\$")
+    }
 
     public func parse(_ source: String) -> Document {
         _ = Self.extensionsRegistered
@@ -50,7 +57,9 @@ public struct MarkdownParser: Sendable {
         // Swift 把 "\r\n" 当一个字符，CRLF 文件会整篇只剩"一行"——独立公式、下标全部静默失效
         var source = source
         if source.utf8.contains(0x0D) { source = source.replacingOccurrences(of: "\r\n", with: "\n") }
-        if options.math, source.contains("\\$") { source = source.replacingOccurrences(of: "\\$", with: Self.escapedDollar) }
+        // 只有文档里真有 `\$` 才走占位符路线（每个文本节点再查一遍占位符对 1 MB 文档是 30 ms）
+        let hasEscapedDollar = options.math && Self.containsEscapedDollar(source)
+        if hasEscapedDollar { source = source.replacingOccurrences(of: "\\$", with: Self.escapedDollar) }
         var lineOffset = 0
         var blocks: [Block] = []
         var body = Substring(source)
@@ -72,6 +81,7 @@ public struct MarkdownParser: Sendable {
         }
         var ctx = Context(options: options, lineOffset: lineOffset)
         ctx.fullSource = source
+        ctx.hasEscapedDollar = hasEscapedDollar
         // 只有源码里出现 `$$` 才做数学块相关的额外工作（按行切分 1 MB 要 ~40 ms，绝大多数文档用不上）
         let hasDisplayMath = options.math && source.utf8.withContiguousStorageIfAvailable { buf -> Bool in
             guard buf.count >= 2 else { return false }
@@ -157,6 +167,8 @@ public struct MarkdownParser: Sendable {
         var footnoteOrdinal = 0
         /// 正在转换链接 / 图片的子节点：里面的 URL 文字不能再自动链接（否则内层链接盖掉外层显式目标）
         var inLink = 0
+        /// 源码里有 `\$`（已换成占位符）：字面量要换回来
+        var hasEscapedDollar = false
 
         func range(_ n: UnsafeMutablePointer<cmark_node>) -> SourceRange? {
             let sl = Int(cmark_node_get_start_line(n))
@@ -168,7 +180,7 @@ public struct MarkdownParser: Sendable {
         /// 节点字面量；`\$` 占位符在代码 / HTML / 数学里还原成 `\$`，在普通文本里由 appendText 还原成 `$`
         @inline(__always) func literal(_ n: UnsafeMutablePointer<cmark_node>, keepEscape: Bool = true) -> String {
             let s = cmark_node_get_literal(n).map { String(cString: $0) } ?? ""
-            guard options.math, s.contains(MarkdownParser.escapedDollar) else { return s }
+            guard hasEscapedDollar, s.contains(MarkdownParser.escapedDollar) else { return s }
             return s.replacingOccurrences(of: MarkdownParser.escapedDollar, with: keepEscape ? "\\$" : "$")
         }
         @inline(__always) func typeString(_ n: UnsafeMutablePointer<cmark_node>) -> String {
@@ -321,12 +333,12 @@ public struct MarkdownParser: Sendable {
         /// 文本节点：行内数学切分 + 自动链接
         mutating func appendText(_ s: String, into out: inout [Inline]) {
             let autolink = options.autolink && inLink == 0
-            func plain(_ t: String) -> String { options.math && t.contains(MarkdownParser.escapedDollar) ? t.replacingOccurrences(of: MarkdownParser.escapedDollar, with: "$") : t }
+            func plain(_ t: String) -> String { hasEscapedDollar && t.contains(MarkdownParser.escapedDollar) ? t.replacingOccurrences(of: MarkdownParser.escapedDollar, with: "$") : t }
             if options.math, s.utf8.contains(0x24) {   // 有 $ 才切行内数学（1 MB 文档十万个文本节点，不能每个都走 String.contains）
                 for piece in InlineMath.split(s) {
                     switch piece {
                     case .text(let t): if autolink { Autolink.scan(plain(t), into: &out) } else { out.append(.text(plain(t))) }
-                    case .inlineMath(let m): out.append(.inlineMath(m.replacingOccurrences(of: MarkdownParser.escapedDollar, with: "\\$")))
+                    case .inlineMath(let m): out.append(.inlineMath(hasEscapedDollar ? m.replacingOccurrences(of: MarkdownParser.escapedDollar, with: "\\$") : m))
                     default: out.append(piece)
                     }
                 }
@@ -383,14 +395,14 @@ public enum FrontMatter {
     /// 这一行（不含换行；允许尾部 `\r`）是不是 front matter 的开头 `---`——必须**恰好**三个横线，
     /// `----` / `- - -` 是分割线不是 front matter。解析器、HeadingScanner、MarkdownLexer 都用这一个判断，以前三处各写一套、
     /// 文件以 `----` 开头时阅读视图当分割线、侧栏和编辑器却当 front matter 把整篇吞掉
-    @inline(__always) public static func isOpener<C: Collection>(_ line: C) -> Bool where C.Element: BinaryInteger {
+    @inlinable @inline(__always) public static func isOpener<C: Collection>(_ line: C) -> Bool where C.Element: BinaryInteger {
         isExactly(line, 0x2D)
     }
     /// 结束行：`---` 或 `...`
-    @inline(__always) public static func isCloser<C: Collection>(_ line: C) -> Bool where C.Element: BinaryInteger {
+    @inlinable @inline(__always) public static func isCloser<C: Collection>(_ line: C) -> Bool where C.Element: BinaryInteger {
         isExactly(line, 0x2D) || isExactly(line, 0x2E)
     }
-    @inline(__always) private static func isExactly<C: Collection>(_ line: C, _ ch: C.Element) -> Bool where C.Element: BinaryInteger {
+    @inlinable @inline(__always) static func isExactly<C: Collection>(_ line: C, _ ch: C.Element) -> Bool where C.Element: BinaryInteger {
         var it = line.makeIterator()
         var n = 0
         while let u = it.next() {

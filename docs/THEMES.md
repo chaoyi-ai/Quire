@@ -61,7 +61,7 @@
       "headerBackground": "#f6f8fa",
       "stripe": "#f6f8fa",           // 偶数行底色
       "border": "#d0d7de",
-      "hover": "#0969da0f"
+      "hover": "#0969da0f"     // 预留：表格在片段里静态绘制，目前没有悬停态；写了也不会有效果
     },
     "syntax": {                      // 代码高亮 token 颜色；缺失的 token 回退 foreground
       "keyword": "#cf222e",

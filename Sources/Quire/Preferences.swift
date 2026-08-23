@@ -156,6 +156,8 @@ final class PreferencesWindowController: NSWindowController {
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
     func show() {
+        // 每次打开重建视图：主题 / 外观 / 语言 / CLI 状态是 @State 快照，用菜单改过之后再开设置要看到当前值
+        if let host = window?.contentViewController as? NSHostingController<PreferencesView> { host.rootView = PreferencesView() }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }

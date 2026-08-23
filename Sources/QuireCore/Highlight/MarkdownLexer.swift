@@ -286,6 +286,7 @@ public struct MarkdownLexer: Sendable {
 
     // 围栏判定的原语（编辑器的行状态表 EditorTextView.advance 也用这一套，别再各写一份）
     /// `u[i..<e]` 从 i 起是不是围栏标记（≥3 个同样的 ` 或 ~；反引号围栏 info 里不能再有反引号）
+    @inlinable @inline(__always)
     public static func fence<C: RandomAccessCollection>(_ u: C, _ i: Int, _ e: Int) -> (UInt8, Int)? where C.Element == UInt16, C.Index == Int {
         guard i < e, u[i] == 0x60 || u[i] == 0x7E else { return nil }
         let ch = u[i]
@@ -295,12 +296,14 @@ public struct MarkdownLexer: Sendable {
         return (UInt8(ch), k - i)
     }
     /// 围栏标记之后只有空白（闭合行的条件）
+    @inlinable @inline(__always)
     public static func onlyFence<C: RandomAccessCollection>(_ u: C, _ i: Int, _ e: Int) -> Bool where C.Element == UInt16, C.Index == Int {
         var k = i; while k < e, u[k] == u[i] { k += 1 }
         while k < e { if u[k] != 0x20, u[k] != 0x09, u[k] != 0x0D { return false }; k += 1 }
         return true
     }
     /// 行首缩进（空格或制表符都算一列，与 tokenizeLine 一致）
+    @inlinable @inline(__always)
     public static func indent<C: RandomAccessCollection>(_ u: C, _ s: Int, _ e: Int) -> Int where C.Element == UInt16, C.Index == Int {
         var i = s
         while i < e, u[i] == 0x20 || u[i] == 0x09 { i += 1 }

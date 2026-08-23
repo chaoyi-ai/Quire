@@ -57,9 +57,16 @@ struct PDFLayout: Codable, Equatable {
         return NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color, .paragraphStyle: ps])
     }
 
-    /// 用 tab stop 把 `左|中|右` 排进一行
-    static func line(_ text: String, width: CGFloat, font: NSFont, color: NSColor) -> NSAttributedString {
-        let parts = text.components(separatedBy: "|")
+    /// 用 tab stop 把 `左|中|右` 排进一行。先按模板里的 `|` 分段再展开占位符：标题里带 `|` 不会被当成分栏
+    static func line(template: String, width: CGFloat, font: NSFont, color: NSColor, page: Int, pages: Int, title: String, file: String) -> NSAttributedString? {
+        let t = template.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty else { return nil }
+        let parts = t.components(separatedBy: "|").map { expand($0.isEmpty ? " " : $0, page: page, pages: pages, title: title, file: file) ?? "" }
+        return line(parts.joined(separator: "|"), width: width, font: font, color: color, presplit: parts)
+    }
+
+    static func line(_ text: String, width: CGFloat, font: NSFont, color: NSColor, presplit: [String]? = nil) -> NSAttributedString {
+        let parts = presplit ?? text.components(separatedBy: "|")
         guard parts.count > 1 else { return attributed(text, font: font, color: color, alignment: .center) }
         let ps = NSMutableParagraphStyle()
         ps.tabStops = [NSTextTab(textAlignment: .center, location: width / 2), NSTextTab(textAlignment: .right, location: width)]

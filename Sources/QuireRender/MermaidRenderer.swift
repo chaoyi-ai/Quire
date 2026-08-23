@@ -155,12 +155,12 @@ public final class MermaidRenderer: NSObject, WKNavigationDelegate {
     private var waiters: [CheckedContinuation<Void, Never>] = []
     private func acquire() async {
         if !busy { busy = true; return }
+        // 等待者被唤醒时 stage 已经直接交到它手上（release 不清 busy），中间插进来的新请求看到 busy 仍会排队
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in waiters.append(c) }
-        busy = true
     }
     private func release() {
-        busy = false
-        if !waiters.isEmpty { waiters.removeFirst().resume() }
+        if waiters.isEmpty { busy = false; return }
+        waiters.removeFirst().resume()   // 把 stage 交给下一个，busy 保持 true
     }
 
     /// PNG（2× 像素）→ NSImage（pt 尺寸 = 像素 / rasterScale）

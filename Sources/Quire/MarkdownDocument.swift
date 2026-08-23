@@ -9,9 +9,13 @@ final class QuireDocumentController: NSDocumentController {
     static let markdownType = "net.daringfireball.markdown"
     nonisolated static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "mkdn", "mdwn", "mdtxt", "mdtext", "txt", "text"]
 
+    /// 内置扩展名 + 设置里"额外按 Markdown 处理"的扩展名（侧栏、打开面板、类型判定共用）
+    @MainActor static var allMarkdownExtensions: Set<String> { markdownExtensions.union(Preferences.shared.extraExtensionSet) }
+
     override func typeForContents(of url: URL) throws -> String {
         LaunchClock.mark("typeForContents")
         if Self.markdownExtensions.contains(url.pathExtension.lowercased()) { return Self.markdownType }
+        if Self.allMarkdownExtensions.contains(url.pathExtension.lowercased()) { return Self.markdownType }
         if let t = try? super.typeForContents(of: url) { return t }
         return Self.markdownType
     }
@@ -23,7 +27,9 @@ final class QuireDocumentController: NSDocumentController {
     override var defaultType: String? { Self.markdownType }
 
     override func runModalOpenPanel(_ openPanel: NSOpenPanel, forTypes types: [String]?) -> Int {
-        openPanel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText, .plainText, UTType("net.daringfireball.markdown") ?? .plainText]
+        // 设置里加的扩展名（.mdx / .qmd…）也要能在打开面板里选
+        let extras = Preferences.shared.extraExtensionSet.compactMap { UTType(filenameExtension: $0) }
+        openPanel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText, .plainText, UTType("net.daringfireball.markdown") ?? .plainText] + extras
         openPanel.allowsMultipleSelection = true
         openPanel.canChooseDirectories = true   // 选文件夹 = 以它为侧栏根打开
         openPanel.message = L("选择 Markdown 文件，或选一个文件夹作为工作目录")
@@ -43,7 +49,9 @@ final class QuireDocumentController: NSDocumentController {
     /// 打开文件夹：优先 README.md / index.md，否则第一个 Markdown；都没有就新建一篇并把侧栏根设为该文件夹
     func openFolder(_ folder: URL, completionHandler: ((NSDocument?, Bool, (any Error)?) -> Void)? = nil) {
         let fm = FileManager.default
-        let items = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles])) ?? []
+        let items: [URL]
+        do { items = try fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) }
+        catch { completionHandler?(nil, false, error); if completionHandler == nil { NSApp.presentError(error) }; return }   // 读不了目录：说出来，别悄悄开个空文档
         let mds = items.filter { Self.markdownExtensions.contains($0.pathExtension.lowercased()) && ((try? $0.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile ?? false) }
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
         let preferred = mds.first { ["readme.md", "index.md", "readme.markdown"].contains($0.lastPathComponent.lowercased()) } ?? mds.first
@@ -228,6 +236,8 @@ final class MarkdownDocument: NSDocument {
         source = s
         normalizeLineEndings()
         splitAuthorship()
+        // 告诉 NSDocument 磁盘版本已经是这个了：否则它按自己记的修改时间，下次存储时还会问"文件已被修改"
+        if let url = fileURL, let date = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date { fileModificationDate = date }
         let s = source
         conflictPromptedContent = nil
         MainActor.assumeIsolated {

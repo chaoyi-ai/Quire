@@ -786,16 +786,27 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
                 let b = batch; batch = []
                 DispatchQueue.main.async { [weak self] in self?.appendSearchResults(b, for: search) }
             }
-            search.run(query: query, files: files, options: opts) { r in
+            let summary = search.run(query: query, files: files, options: opts) { r in
                 batch.append(r); total += 1
                 if total >= maxFiles { search.cancel() }
                 let now = ProcessInfo.processInfo.systemUptime
                 if batch.count >= 20 || now - lastFlush > 0.05 { flush(); lastFlush = now }
             }
             flush()
+            let truncatedIndex = index.truncated
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.activeSearch === search else { return }
-                if self.searchRoot?.children?.isEmpty ?? true { self.searchRoot?.children = [SidebarNode(kind: .hit, url: nil, name: L("没有找到"), parent: self.searchRoot)]; self.outlineView.reloadData() }
+                var notes: [String] = []
+                if self.searchRoot?.children?.isEmpty ?? true { notes.append(L("没有找到")) }
+                // 没搜到的和"有文件没搜"要分开说
+                let skipped = summary.skippedTooLarge + summary.skippedUnreadable
+                if skipped > 0 { notes.append(String(format: L("（%d 个文件过大或读不了，没有搜）"), skipped)) }
+                if truncatedIndex { notes.append(String(format: L("（文件超过 %d 个，只搜了前面的）"), FileIndex.maxFiles)) }
+                if total >= maxFiles { notes.append(String(format: L("（命中文件超过 %d 个，只显示前面的）"), maxFiles)) }
+                if !notes.isEmpty {
+                    self.searchRoot?.children?.append(contentsOf: notes.map { SidebarNode(kind: .hit, url: nil, name: $0, parent: self.searchRoot) })
+                    self.outlineView.reloadData()
+                }
             }
         }
     }

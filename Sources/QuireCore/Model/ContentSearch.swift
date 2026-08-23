@@ -6,7 +6,7 @@ import Foundation
 public final class ContentSearch: @unchecked Sendable {
     public struct Hit: Sendable, Equatable {
         public var line: Int          // 1-based
-        public var column: Int        // 1-based UTF-8 字节列
+        public var column: Int        // 1-based，UTF-16 单元（与 text / range 同一坐标）
         public var text: String       // 该行文本（去掉换行）
         public var range: Range<Int>  // 命中在 text 里的 UTF-16 范围（用于高亮）
     }
@@ -28,20 +28,27 @@ public final class ContentSearch: @unchecked Sendable {
     public func cancel() { cancelled.lock(); _cancelled = true; cancelled.unlock() }
     public init() {}
 
-    /// 同步扫描（调用方放后台线程）；`onFile` 在扫描线程上回调
-    public func run(query: String, files: [URL], options: Options = Options(), onFile: (FileResult) -> Void) {
-        guard !query.isEmpty else { return }
+    /// 一次扫描的统计：被跳过的文件（读不了 / 超过 maxFileBytes）——"没有找到"和"有 3 个文件没搜"是两回事
+    public struct Summary: Sendable { public var skippedUnreadable = 0; public var skippedTooLarge = 0; public var invalidPattern = false }
+
+    /// 同步扫描（调用方放后台线程）；`onFile` 在扫描线程上回调。返回跳过统计
+    @discardableResult
+    public func run(query: String, files: [URL], options: Options = Options(), onFile: (FileResult) -> Void) -> Summary {
+        var summary = Summary()
+        guard !query.isEmpty else { return summary }
         let regex: NSRegularExpression?
         if options.regex {
-            guard let r = try? NSRegularExpression(pattern: query, options: options.caseSensitive ? [] : [.caseInsensitive]) else { return }
+            guard let r = try? NSRegularExpression(pattern: query, options: options.caseSensitive ? [] : [.caseInsensitive]) else { summary.invalidPattern = true; return summary }
             regex = r
         } else { regex = nil }
         let needle = Array(query.utf8)
         let needleLower = Array(query.lowercased().utf8)
         let asciiNeedle = needle.allSatisfy { $0 < 0x80 }
         for url in files {
-            if isCancelled { return }
-            guard let data = try? Data(contentsOf: url, options: .mappedIfSafe), data.count <= options.maxFileBytes, !data.isEmpty else { continue }
+            if isCancelled { return summary }
+            guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { summary.skippedUnreadable += 1; continue }
+            guard data.count <= options.maxFileBytes else { summary.skippedTooLarge += 1; continue }
+            guard !data.isEmpty else { continue }
             var hits: [Hit] = []
             data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
                 guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return }
@@ -82,6 +89,7 @@ public final class ContentSearch: @unchecked Sendable {
             }
             if !hits.isEmpty { onFile(FileResult(url: url, hits: hits)) }
         }
+        return summary
     }
 
     /// 行内快速预筛：ASCII 不区分大小写时把行字节折成小写比较；非 ASCII 或区分大小写直接 memcmp 滑动；
