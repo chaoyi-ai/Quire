@@ -1,4 +1,5 @@
 import AppKit
+import Quartz
 import QuireCore
 import QuireRender
 
@@ -22,7 +23,10 @@ final class SidebarNode {
         self.kind = kind; self.url = url; self.name = name; self.parent = parent
     }
 
-    var isMarkdown: Bool { kind == .file && QuireDocumentController.markdownExtensions.contains(url?.pathExtension.lowercased() ?? "") }
+    var isMarkdown: Bool {
+        guard kind == .file, let ext = url?.pathExtension.lowercased() else { return false }
+        return QuireDocumentController.markdownExtensions.contains(ext) || Preferences.shared.extraExtensionSet.contains(ext)
+    }
 }
 
 /// 侧栏：目录树 → Markdown 文件 → 文件内大纲（当前文档用完整解析结果，其他文件展开时快速扫描）。
@@ -63,7 +67,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     private static let otherIcon = NSImage(systemSymbolName: "doc", accessibilityDescription: L("文件"))
 
     override func loadView() {
-        outlineView = NSOutlineView()
+        outlineView = SidebarOutlineView()
+        (outlineView as? SidebarOutlineView)?.onKeyDown = { [weak self] e in self?.outlineViewKeyDown(e) ?? false }
         outlineView.headerView = nil
         outlineView.style = .sourceList
         outlineView.rowSizeStyle = .default
@@ -154,6 +159,26 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     override func viewDidLoad() {
         super.viewDidLoad()
         currentURLDidChange()
+        prefsObserver = NotificationCenter.default.addObserver(forName: Preferences.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let rules = Preferences.shared.sidebarRules
+                if rules != self.lastRules { self.lastRules = rules; self.reloadTree() }
+            }
+        }
+        lastRules = Preferences.shared.sidebarRules
+    }
+    private var prefsObserver: NSObjectProtocol?
+    private var lastRules: Preferences.SidebarRules?
+
+    /// 规则变了：重扫所有已加载的文件夹（保持展开状态）
+    private func reloadTree() {
+        guard let root = rootNode else { return }
+        func walk(_ n: SidebarNode) {
+            if n.kind == .folder, n.children != nil { loadChildren(of: n) }
+            for c in n.children ?? [] where c.kind == .folder { walk(c) }
+        }
+        walk(root)
     }
 
     // MARK: - 根目录 / 当前文档
@@ -277,8 +302,9 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         switch node.kind {
         case .folder:
             guard let url = node.url else { return }
+            let rules = Preferences.shared.sidebarRules
             ioQueue.async {
-                let entries = Self.listFolder(url)
+                let entries = Self.listFolder(url, rules: rules)
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     node.isLoading = false
@@ -329,14 +355,17 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     }
 
     /// 目录列表（后台）：可见项，文件夹优先，自然排序；只列 Markdown 文件与文件夹
-    nonisolated private static func listFolder(_ url: URL) -> [(URL, Bool)] {
+    nonisolated private static func listFolder(_ url: URL, rules: Preferences.SidebarRules) -> [(URL, Bool)] {
         let fm = FileManager.default
-        guard let items = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: [.isDirectoryKey, .isHiddenKey, .isPackageKey], options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return [] }
+        var opts: FileManager.DirectoryEnumerationOptions = [.skipsPackageDescendants]
+        if !rules.showHidden { opts.insert(.skipsHiddenFiles) }
+        guard let items = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: [.isDirectoryKey, .isHiddenKey, .isPackageKey], options: opts) else { return [] }
         var folders: [(URL, Bool)] = [], files: [(URL, Bool)] = []
         for u in items {
             guard let v = try? u.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey]) else { continue }
+            let ext = u.pathExtension.lowercased()
             if v.isDirectory == true, v.isPackage != true { folders.append((u, true)) }
-            else if QuireDocumentController.markdownExtensions.contains(u.pathExtension.lowercased()) { files.append((u, false)) }
+            else if QuireDocumentController.markdownExtensions.contains(ext) || rules.extraExtensions.contains(ext) || rules.showOthers { files.append((u, false)) }
         }
         let cmp: ((URL, Bool), (URL, Bool)) -> Bool = { $0.0.lastPathComponent.localizedStandardCompare($1.0.lastPathComponent) == .orderedAscending }
         folders.sort(by: cmp); files.sort(by: cmp)
@@ -432,11 +461,33 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
                 onOpenFile?(url, node.line)
             }
         case .file:
-            if let url = node.url, url.standardizedFileURL != currentURL?.standardizedFileURL { onOpenFile?(url, nil) }
+            guard let url = node.url else { return }
+            if !node.isMarkdown { NSWorkspace.shared.open(url); return }   // 非 Markdown：交给默认 App
+            if url.standardizedFileURL != currentURL?.standardizedFileURL { onOpenFile?(url, nil) }
         case .folder:
             break
         }
     }
+
+    /// 键盘：回车打开 / 跳转，空格 Quick Look，←→ 折叠展开由 NSOutlineView 自带
+    func outlineViewKeyDown(_ event: NSEvent) -> Bool {
+        let row = outlineView.selectedRow
+        guard row >= 0, let node = outlineView.item(atRow: row) as? SidebarNode else { return false }
+        switch event.keyCode {
+        case 36, 76:   // Return / Enter
+            if node.kind == .folder { outlineView.isItemExpanded(node) ? outlineView.collapseItem(node) : outlineView.expandItem(node) } else { activate(node) }
+            return true
+        case 49:       // Space → Quick Look
+            guard node.kind == .file || node.kind == .folder, let url = node.url else { return false }
+            quickLookURL = url
+            if let panel = QLPreviewPanel.shared() {
+                if panel.isVisible { panel.reloadData() } else { panel.makeKeyAndOrderFront(nil) }
+            }
+            return true
+        default: return false
+        }
+    }
+    private var quickLookURL: URL?
 
     private func fileNode(of heading: SidebarNode) -> SidebarNode? {
         var n: SidebarNode? = heading
@@ -684,4 +735,22 @@ extension SidebarViewController: NSSearchFieldDelegate {
         }
         return false
     }
+}
+
+
+/// 侧栏用的 NSOutlineView：把回车 / 空格交给控制器（方向键、←→ 折叠展开保留系统行为）
+final class SidebarOutlineView: NSOutlineView {
+    var onKeyDown: ((NSEvent) -> Bool)?
+    override func keyDown(with event: NSEvent) {
+        if onKeyDown?(event) == true { return }
+        super.keyDown(with: event)
+    }
+}
+
+extension SidebarViewController: @preconcurrency QLPreviewPanelDataSource, @preconcurrency QLPreviewPanelDelegate {
+    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { true }
+    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) { panel.dataSource = self; panel.delegate = self }
+    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) { panel.dataSource = nil; panel.delegate = nil }
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int { quickLookURL == nil ? 0 : 1 }
+    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! { quickLookURL as NSURL? }
 }

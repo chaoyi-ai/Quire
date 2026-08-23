@@ -166,3 +166,7 @@
 "已安装到 /usr/local/bin/quire" = "Installed at /usr/local/bin/quire";
 "quire README.md · quire ." = "quire README.md · quire .";
 "手动安装：sudo ln -sf \"%@\" /usr/local/bin/quire" = "Manual install: sudo ln -sf \"%@\" /usr/local/bin/quire";
+"侧栏" = "Sidebar";
+"显示隐藏文件与文件夹" = "Show hidden files and folders";
+"显示非 Markdown 文件（双击用默认 App 打开）" = "Show non-Markdown files (open with default app)";
+"额外按 Markdown 处理的扩展名（空格分隔）" = "Extra extensions treated as Markdown (space-separated)";

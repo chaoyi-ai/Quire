@@ -28,6 +28,9 @@ final class Preferences: ObservableObject {
         static let readerFontSize = "reader.baseFontSize"
         static let math = "parser.math"
         static let updates = "update.check"
+        static let sidebarHidden = "sidebar.showHidden"
+        static let sidebarOthers = "sidebar.showOtherFiles"
+        static let sidebarExts = "sidebar.extraExtensions"
     }
 
     @Published var codeLineNumbers: Bool { didSet { d.set(codeLineNumbers, forKey: Key.codeLineNumbers); ThemeManager.shared.refresh() } }
@@ -50,6 +53,14 @@ final class Preferences: ObservableObject {
 
     @Published var mathEnabled: Bool { didSet { d.set(mathEnabled, forKey: Key.math); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var checkForUpdates: Bool { didSet { d.set(checkForUpdates, forKey: Key.updates) } }
+    @Published var sidebarShowHidden: Bool { didSet { d.set(sidebarShowHidden, forKey: Key.sidebarHidden); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    @Published var sidebarShowOtherFiles: Bool { didSet { d.set(sidebarShowOtherFiles, forKey: Key.sidebarOthers); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    /// 额外当作 Markdown 显示 / 打开的扩展名（空格分隔，如 "mdx rmd qmd"）
+    @Published var sidebarExtraExtensions: String { didSet { d.set(sidebarExtraExtensions, forKey: Key.sidebarExts); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    var extraExtensionSet: Set<String> { Set(sidebarExtraExtensions.lowercased().split(whereSeparator: { $0 == " " || $0 == "," }).map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ". ")) }.filter { !$0.isEmpty }) }
+    /// 侧栏过滤规则快照（给后台目录扫描用）
+    struct SidebarRules: Sendable, Equatable { var showHidden: Bool; var showOthers: Bool; var extraExtensions: Set<String> }
+    var sidebarRules: SidebarRules { SidebarRules(showHidden: sidebarShowHidden, showOthers: sidebarShowOtherFiles, extraExtensions: extraExtensionSet) }
     var parserOptions: MarkdownParser.Options { var o = MarkdownParser.Options(); o.math = mathEnabled; return o }
 
     var editorTypography: EditorTypography {
@@ -78,6 +89,9 @@ final class Preferences: ObservableObject {
         readerBaseFontSize = d.integer(forKey: Key.readerFontSize)
         mathEnabled = d.bool(forKey: Key.math)
         checkForUpdates = d.bool(forKey: Key.updates)
+        sidebarShowHidden = d.bool(forKey: Key.sidebarHidden)
+        sidebarShowOtherFiles = d.bool(forKey: Key.sidebarOthers)
+        sidebarExtraExtensions = d.string(forKey: Key.sidebarExts) ?? ""
     }
 
     var renderOptions: RenderOptions {
@@ -210,6 +224,11 @@ struct PreferencesView: View {
                 Toggle(L("右下角显示字数统计"), isOn: $prefs.showWordCount)
                 Stepper(String(format: L("大文件模式阈值：%d MB"), prefs.largeFileThresholdMB), value: $prefs.largeFileThresholdMB, in: 1...64)
                     .help(L("超过阈值的文件关闭代码高亮与 Mermaid 渲染"))
+            }
+            Section(L("侧栏")) {
+                Toggle(L("显示隐藏文件与文件夹"), isOn: $prefs.sidebarShowHidden)
+                Toggle(L("显示非 Markdown 文件（双击用默认 App 打开）"), isOn: $prefs.sidebarShowOtherFiles)
+                TextField(L("额外按 Markdown 处理的扩展名（空格分隔）"), text: $prefs.sidebarExtraExtensions, prompt: Text("mdx rmd qmd"))
             }
             Section(L("编辑")) {
                 Picker(L("字体"), selection: $prefs.editorFontFamily) {
