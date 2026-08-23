@@ -15,7 +15,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     private let splitViewController = NSSplitViewController()
     private var editorItem: NSSplitViewItem?
     private var readerItem: NSSplitViewItem!
-    private let session: DocumentSession
+    let session: DocumentSession
     private var modeControl: NSSegmentedControl?
     private let wordCount = WordCountView(frame: .zero)
     private var selectionObserver: NSObjectProtocol?

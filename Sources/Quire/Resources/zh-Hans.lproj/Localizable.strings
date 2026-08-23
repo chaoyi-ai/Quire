@@ -180,3 +180,10 @@
 "打开" = "打开";
 "选择一个文件夹：打开其中的 README / 第一篇 Markdown，并在侧栏显示整个目录" = "选择一个文件夹：打开其中的 README / 第一篇 Markdown，并在侧栏显示整个目录";
 "扩展语法（非标准，默认关）" = "扩展语法（非标准，默认关）";
+"图片（PNG）…" = "图片（PNG）…";
+"（经 pandoc）" = "（经 pandoc）";
+"导入 Word / HTML / EPUB…（经 pandoc）" = "导入 Word / HTML / EPUB…（经 pandoc）";
+"选择 Word / HTML / RTF / EPUB 文件，pandoc 会把它转成 Markdown 新文档" = "选择 Word / HTML / RTF / EPUB 文件，pandoc 会把它转成 Markdown 新文档";
+"pandoc 失败" = "pandoc 失败";
+"图片已截断" = "图片已截断";
+"文档太长，只导出了前 %d 像素高度。" = "文档太长，只导出了前 %d 像素高度。";

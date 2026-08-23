@@ -50,7 +50,20 @@ enum MainMenu {
         let export = NSMenu(title: L("导出"))
         export.addItem(withTitle: "HTML…", action: #selector(Handler.exportHTML(_:)), keyEquivalent: "").target = Handler.shared
         export.addItem(withTitle: "PDF…", action: #selector(Handler.exportPDF(_:)), keyEquivalent: "").target = Handler.shared
+        export.addItem(withTitle: L("图片（PNG）…"), action: #selector(Handler.exportImage(_:)), keyEquivalent: "").target = Handler.shared
+        if PandocBridge.isAvailable {
+            export.addItem(.separator())
+            for (i, f) in PandocBridge.exportFormats.enumerated() {
+                let it = export.addItem(withTitle: f.title, action: #selector(Handler.exportPandoc(_:)), keyEquivalent: "")
+                it.tag = i; it.target = Handler.shared
+            }
+            export.addItem(.separator())
+            export.addItem(withTitle: L("（经 pandoc）"), action: nil, keyEquivalent: "")
+        }
         file.addItem(withTitle: L("导出"), action: nil, keyEquivalent: "").submenu = export
+        if PandocBridge.isAvailable {
+            file.addItem(withTitle: L("导入 Word / HTML / EPUB…（经 pandoc）"), action: #selector(Handler.importPandoc(_:)), keyEquivalent: "").target = Handler.shared
+        }
         file.addItem(.separator())
         file.addItem(withTitle: L("重新载入"), action: #selector(Handler.reload(_:)), keyEquivalent: "r").target = Handler.shared
         file.addItem(withTitle: L("在 Finder 中显示"), action: #selector(Handler.revealInFinder(_:)), keyEquivalent: "").target = Handler.shared
@@ -230,6 +243,15 @@ enum MainMenu {
             guard let doc = NSDocumentController.shared.currentDocument as? MarkdownDocument, let w = doc.windowControllers.first?.window else { return }
             Exporter.exportHTML(document: doc, from: w)
         }
+        @objc func exportImage(_ sender: Any?) {
+            guard let doc = NSDocumentController.shared.currentDocument as? MarkdownDocument, let w = doc.windowForSheet else { return }
+            Exporter.exportImage(document: doc, from: w)
+        }
+        @objc func exportPandoc(_ sender: NSMenuItem) {
+            guard let doc = NSDocumentController.shared.currentDocument as? MarkdownDocument, let w = doc.windowForSheet, sender.tag < PandocBridge.exportFormats.count else { return }
+            PandocBridge.export(document: doc, format: PandocBridge.exportFormats[sender.tag], from: w)
+        }
+        @objc func importPandoc(_ sender: Any?) { PandocBridge.importDocument() }
         @objc func exportPDF(_ sender: Any?) {
             guard let doc = NSDocumentController.shared.currentDocument as? MarkdownDocument, let w = doc.windowControllers.first?.window else { return }
             Exporter.exportPDF(document: doc, from: w)

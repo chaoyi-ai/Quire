@@ -171,7 +171,7 @@
 - [x] `[TOC]` / `[[TOC]]` / `{{TOC}}` 独占段落 → 按标题生成嵌套链接列表（解析期展开，点击走内部锚点）；标题自动编号（按文档最小级别相对计，开着时增量渲染退化为全量）；智能标点用 cmark `CMARK_OPT_SMART`。三者在设置 → 阅读 开关，TOC 默认开（#68，0.4.6）
 
 ### 6.3 导出与集成
-- [ ] PDF 书签（大纲 → PDF outline）、导出为图片（整页 PNG，2×）；pandoc 可选集成：检测到 `pandoc` 时在导出 / 导入菜单出现 docx / epub / LaTeX（不内置、不下载）（#69）
+- [x] PDF 书签（大纲 → `PDFOutline` 嵌套，目标页与页内位置按打印分页算）；导出为图片（800pt 宽整页 PNG 2×，上限 16000pt 高并提示）；pandoc 可选：装了 pandoc 才出现 导出 → Word / EPUB / LaTeX 与 导入 Word / HTML / EPUB…（stdin 喂源码，`--resource-path` 文档目录）（#69，0.4.9）。调试钩子 `QUIRE_EXPORT_PNG=path`
 - [x] `quire` 命令行工具（随包 `Contents/Resources/quire`；`quire file.md` / `quire .`——目录里没有 .md 时新建文档并把侧栏根设为该目录），设置 → 语言区「安装命令行工具」软链到 `/usr/local/bin`；服务菜单「Open in Quire」（Info.plist NSServices + servicesProvider）（#70，0.4.4）
 
 **测试**：混合模式的源码 ↔ 渲染往返测试（任意文档进出混合模式字节不变）；表格编辑的 GFM 写回测试；扩展语法开关关闭时 CommonMark spec 抽样结果不变。

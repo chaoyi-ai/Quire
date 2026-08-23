@@ -31,6 +31,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        if let path = ProcessInfo.processInfo.environment["QUIRE_EXPORT_PNG"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                if let doc = NSDocumentController.shared.documents.first as? MarkdownDocument, let wc = doc.windowControllers.first as? DocumentWindowController {
+                    let ok = Exporter.writeImage(document: doc, windowController: wc, to: URL(fileURLWithPath: path))
+                    FileHandle.standardError.write("QUIRE_EXPORT_PNG=\(ok ? "ok" : "failed")\n".data(using: .utf8)!)
+                }
+            }
+        }
         if let path = ProcessInfo.processInfo.environment["QUIRE_EXPORT_PDF"] {
             // 调试 / 脚本：首个文档渲染后导出 PDF 并退出
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {

@@ -243,6 +243,24 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
         return rects.isEmpty ? [bounds] : rects
     }
 
+    /// 打印坐标系里的标题位置（块下标、级别、标题、y）；要先 layoutAllForPrinting
+    public func headingPositions() -> [(index: Int, level: Int, title: String, y: CGFloat)] {
+        guard let rendered else { return [] }
+        var out: [(Int, Int, String, CGFloat)] = []
+        for (i, b) in rendered.blocks.enumerated() {
+            guard case .heading(let level, let inl, _) = b.block.kind, let frag = layoutFragment(atCharacter: rendered.ranges[i].location) else { continue }
+            out.append((i, level, inl.plainText.trimmingCharacters(in: .whitespaces), frag.layoutFragmentFrame.minY + textContainerInset.height))
+        }
+        return out
+    }
+
+    /// y → (页号从 0 起, 页内距顶偏移)；按与打印相同的分页算
+    public func pagePlacement(forY y: CGFloat, pageHeight: CGFloat) -> (page: Int, offset: CGFloat) {
+        let rects = computePageRects(pageHeight: pageHeight)
+        for (i, r) in rects.enumerated() where y < r.maxY { return (i, max(0, y - r.minY)) }
+        return (max(0, rects.count - 1), 0)
+    }
+
     public override func knowsPageRange(_ range: NSRangePointer) -> Bool {
         guard fixedPrintingWidth != nil, let op = NSPrintOperation.current else { return super.knowsPageRange(range) }
         let info = op.printInfo

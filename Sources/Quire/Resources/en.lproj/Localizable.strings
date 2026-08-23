@@ -180,3 +180,10 @@
 "打开" = "Open";
 "选择一个文件夹：打开其中的 README / 第一篇 Markdown，并在侧栏显示整个目录" = "Choose a folder: opens its README / first Markdown file and shows the whole folder in the sidebar";
 "扩展语法（非标准，默认关）" = "Extended syntax (non-standard, off by default)";
+"图片（PNG）…" = "Image (PNG)…";
+"（经 pandoc）" = "(via pandoc)";
+"导入 Word / HTML / EPUB…（经 pandoc）" = "Import Word / HTML / EPUB… (via pandoc)";
+"选择 Word / HTML / RTF / EPUB 文件，pandoc 会把它转成 Markdown 新文档" = "Choose a Word / HTML / RTF / EPUB file; pandoc converts it into a new Markdown document";
+"pandoc 失败" = "pandoc failed";
+"图片已截断" = "Image truncated";
+"文档太长，只导出了前 %d 像素高度。" = "The document is too long; only the first %d pixels were exported.";
