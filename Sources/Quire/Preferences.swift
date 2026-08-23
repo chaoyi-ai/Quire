@@ -16,6 +16,7 @@ final class Preferences: ObservableObject {
         static let autoReload = "reader.autoReload"
         static let editorLineNumbers = "editor.lineNumbers"
         static let largeFileMB = "render.largeFileThresholdMB"
+        static let wordCount = "reader.wordCount"
     }
 
     @Published var codeLineNumbers: Bool { didSet { d.set(codeLineNumbers, forKey: Key.codeLineNumbers); ThemeManager.shared.refresh() } }
@@ -24,17 +25,19 @@ final class Preferences: ObservableObject {
     @Published var autoReload: Bool { didSet { d.set(autoReload, forKey: Key.autoReload); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var editorLineNumbers: Bool { didSet { d.set(editorLineNumbers, forKey: Key.editorLineNumbers); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var largeFileThresholdMB: Int { didSet { d.set(largeFileThresholdMB, forKey: Key.largeFileMB) } }
+    @Published var showWordCount: Bool { didSet { d.set(showWordCount, forKey: Key.wordCount); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
 
     static let didChange = Notification.Name("com.korako.quire.preferencesDidChange")
 
     private init() {
-        d.register(defaults: [Key.codeCopyButton: true, Key.autoReload: true, Key.editorLineNumbers: true, Key.largeFileMB: 8])
+        d.register(defaults: [Key.codeCopyButton: true, Key.autoReload: true, Key.editorLineNumbers: true, Key.largeFileMB: 8, Key.wordCount: true])
         codeLineNumbers = d.bool(forKey: Key.codeLineNumbers)
         codeCopyButton = d.bool(forKey: Key.codeCopyButton)
         linkUnderline = d.bool(forKey: Key.linkUnderline)
         autoReload = d.bool(forKey: Key.autoReload)
         editorLineNumbers = d.bool(forKey: Key.editorLineNumbers)
         largeFileThresholdMB = max(1, d.integer(forKey: Key.largeFileMB))
+        showWordCount = d.bool(forKey: Key.wordCount)
     }
 
     var renderOptions: RenderOptions {
@@ -123,6 +126,7 @@ struct PreferencesView: View {
                 Toggle(L("代码块显示复制按钮"), isOn: $prefs.codeCopyButton)
                 Toggle(L("链接显示下划线"), isOn: $prefs.linkUnderline)
                 Toggle(L("文件被外部修改时自动重新载入"), isOn: $prefs.autoReload)
+                Toggle(L("右下角显示字数统计"), isOn: $prefs.showWordCount)
                 Stepper(String(format: L("大文件模式阈值：%d MB"), prefs.largeFileThresholdMB), value: $prefs.largeFileThresholdMB, in: 1...64)
                     .help(L("超过阈值的文件关闭代码高亮与 Mermaid 渲染"))
             }

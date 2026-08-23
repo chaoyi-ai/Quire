@@ -82,6 +82,7 @@ func runRender() {
         FileHandle.standardError.write("主题缺失，跳过 render\n".data(using: .utf8)!); return
     }
     let doc = parser.parse(large)
+    measure("stats/large-1mb", bytes: large.utf8.count) { _ = TextStats.compute(large) }
     let renderer = DocumentRenderer(theme: light)
     measure("render/large-1mb", bytes: large.utf8.count) { _ = renderer.render(doc) }
     measure("full/large-1mb (parse+render)", bytes: large.utf8.count) { _ = renderer.render(parser.parse(large)) }

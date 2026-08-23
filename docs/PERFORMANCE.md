@@ -17,6 +17,7 @@
 | 编辑回显（击键 → 预览更新，1 MB 文档中段修改一段） | **< 16 ms** 增量路径 | `quire-bench incremental` |
 | 阅读视图整体换内容（主题切换 / 外部重载 / 缩放，1 MB，含首屏布局与附件扫描） | < 60 ms | `quire-bench views`（`view/reader-setRendered-1mb`） |
 | 编辑器单次击键（1 MB：行索引重建 + 段落增量高亮） | < 8 ms | `quire-bench views`（`view/editor-keystroke-1mb`） |
+| 字数统计（1 MB，后台，与解析同一趟） | < 5 ms | `quire-bench render`（`stats/large-1mb`） |
 | 代码高亮吞吐 | > 20 MB/s | `quire-bench highlight` |
 | 滚动 | 60 fps，无掉帧 | Instruments Animation Hitches |
 | 常驻内存（典型 50 KB 文档，打开 1 窗口） | **< 40 MB** | `footprint` / Activity Monitor "内存" |

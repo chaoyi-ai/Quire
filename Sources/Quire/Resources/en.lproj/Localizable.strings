@@ -96,3 +96,14 @@
 "语言" = "Language";
 "界面语言" = "Interface language";
 "重新打开 Quire 后生效" = "Takes effect after reopening Quire";
+"右下角显示字数统计" = "Show word count in the corner";
+"字数统计（点击查看明细）" = "Word count (click for details)";
+"已选 %@ 字" = "%@ words selected";
+"%@ 字 · %d 分钟" = "%@ words · %d min";
+"选区字词" = "Words in selection";
+"字词" = "Words";
+"其中中文字" = "of which CJK characters";
+"字符（不含空格）" = "Characters (no spaces)";
+"行" = "Lines";
+"阅读时间" = "Reading time";
+"约 %d 分钟" = "about %d min";

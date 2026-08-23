@@ -17,6 +17,9 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     private var readerItem: NSSplitViewItem!
     private let session: DocumentSession
     private var modeControl: NSSegmentedControl?
+    private let wordCount = WordCountView(frame: .zero)
+    private var selectionObserver: NSObjectProtocol?
+    private var prefsObserver: NSObjectProtocol?
     private var isSyncingScroll = false
 
     private var markdownDocument: MarkdownDocument? { document as? MarkdownDocument }
@@ -95,6 +98,23 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         }
         document.session.onOutline = { [weak self] outline in
             self?.sidebarViewController.outline = outline
+        }
+        // 字数：全文统计随解析更新；选区统计随选择变化
+        document.session.onStats = { [weak self] st in self?.wordCount.update(stats: st) }
+        wordCount.update(stats: document.session.stats)
+        wordCount.isHidden = !Preferences.shared.showWordCount
+        readerViewController.attachStatusOverlay(wordCount)
+        selectionObserver = NotificationCenter.default.addObserver(forName: NSTextView.didChangeSelectionNotification, object: nil, queue: .main) { [weak self] n in
+            nonisolated(unsafe) let obj = n.object
+            MainActor.assumeIsolated {
+                guard let self, let tv = obj as? NSTextView, tv.window === self.window else { return }
+                let r = tv.selectedRange()
+                guard r.length > 0, let s = tv.textStorage?.string as NSString? else { self.wordCount.update(selection: nil); return }
+                self.wordCount.update(selection: TextStats.compute(s.substring(with: r)))
+            }
+        }
+        prefsObserver = NotificationCenter.default.addObserver(forName: Preferences.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.wordCount.isHidden = !Preferences.shared.showWordCount }
         }
         sidebarViewController.currentURL = document.fileURL
         if !document.session.parsed.blocks.isEmpty { sidebarViewController.outline = document.session.parsed.outline }
@@ -181,6 +201,8 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             readerItem.isCollapsed = (mode == .editor)
         }
         modeControl?.selectedSegment = mode.rawValue
+        // 字数胶囊跟着可见的窗格走（只编辑时阅读窗格折叠）
+        (mode == .editor ? editorViewController : readerViewController).attachStatusOverlay(wordCount)
         if mode != .reader, let w = window, w.isVisible { w.makeFirstResponder(editorViewController.textView) }
     }
 

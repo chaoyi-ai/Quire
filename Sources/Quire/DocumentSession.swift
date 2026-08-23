@@ -24,6 +24,9 @@ final class DocumentSession {
     var onRendered: ((RenderedDocument, RenderStyle, ChangeReason, BlockDiff?) -> Void)?
     private var editDebounce: DispatchWorkItem?
     var onOutline: ((Outline) -> Void)?
+    /// 全文统计（与解析同一趟后台任务里算）
+    var onStats: ((TextStats) -> Void)?
+    private(set) var stats = TextStats()
 
     private let parser = MarkdownParser()
 
@@ -93,6 +96,8 @@ final class DocumentSession {
             LaunchClock.mark("parse+render done (sync)")
             onRendered?(out, renderer.style, reason, nil)
             onOutline?(doc.outline)
+            stats = TextStats.compute(src)
+            onStats?(stats)
             return
         }
         Task.detached(priority: .userInitiated) { [weak self] in
@@ -110,6 +115,7 @@ final class DocumentSession {
                 out = renderer.render(doc)
             }
             os_signpost(.end, log: perfLog, name: "parse+render", signpostID: sp, "%d blocks", doc.blocks.count)
+            let st = TextStats.compute(src)
             let d = diff
             LaunchClock.mark("parse+render done (bg)")
             await MainActor.run { [weak self] in
@@ -119,6 +125,8 @@ final class DocumentSession {
                 self.rendered = out
                 self.onRendered?(out, renderer.style, reason, d)
                 self.onOutline?(doc.outline)
+                self.stats = st
+                self.onStats?(st)
             }
         }
     }
