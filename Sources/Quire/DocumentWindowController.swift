@@ -82,7 +82,8 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             self.readerViewController.scroll(toBlock: entry.blockIndex)
             if self.mode != .reader, let line = entry.line { self.editorViewController.scroll(toLine: line) }
         }
-        sidebarViewController.onOpenFile = { url, line in
+        sidebarViewController.onOpenFile = { [weak self] url, line in
+            NavigationHistory.shared.push(current: self?.markdownDocument?.fileURL)
             NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { doc, _, _ in
                 guard let line, let wc = doc?.windowControllers.first as? DocumentWindowController else { return }
                 // 打开后跳到指定行（大纲里点的是其他文件的标题）
@@ -261,6 +262,8 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         if item.action == #selector(setFocusMode(_:)) { item.state = item.tag == focusMode.rawValue ? .on : .off }
         if item.action == #selector(setPOSMode(_:)) { item.state = item.tag == posMode.rawValue ? .on : .off }
         if item.action == #selector(toggleStyleCheck(_:)) { item.state = styleCheckOn ? .on : .off }
+        if item.action == #selector(navigateBack(_:)) { return NavigationHistory.shared.canGoBack }
+        if item.action == #selector(navigateForward(_:)) { return NavigationHistory.shared.canGoForward }
         if item.action == #selector(toggleImmersive(_:)) { item.title = isImmersive ? L("退出沉浸写作") : L("沉浸写作") }
         return true
     }
@@ -460,6 +463,28 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         if mode == .reader { mode = .editor }
         editorViewController.textView.pasteAsPlainText(sender)
     }
+
+    // MARK: - Wikilink 与导航历史
+
+    /// 解析 `[[name]]`：在侧栏根（无则文档目录）的索引里就近找；找不到提示
+    @discardableResult
+    func openWikiLink(_ name: String) -> Bool {
+        guard let root = sidebarViewController.rootURL ?? markdownDocument?.fileURL?.deletingLastPathComponent() else { return false }
+        let index = FileIndex.index(for: root)
+        let rootPath = root.standardizedFileURL.path
+        var fromDir = markdownDocument?.fileURL?.deletingLastPathComponent().standardizedFileURL.path ?? rootPath
+        fromDir = fromDir.hasPrefix(rootPath) ? String(fromDir.dropFirst(rootPath.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/")) : ""
+        guard let rel = WikiLink.resolve(name, candidates: index.relativePaths, fromDir: fromDir) else {
+            let a = NSAlert(); a.messageText = String(format: L("找不到「%@」"), name); a.informativeText = L("侧栏根目录下没有同名的 Markdown 文件。"); a.runModal()
+            return false
+        }
+        NavigationHistory.shared.push(current: markdownDocument?.fileURL)
+        FileOpener.open([index.url(for: rel)])
+        return true
+    }
+
+    @objc func navigateBack(_ sender: Any?) { NavigationHistory.shared.back(from: markdownDocument?.fileURL) }
+    @objc func navigateForward(_ sender: Any?) { NavigationHistory.shared.forward(from: markdownDocument?.fileURL) }
 
     /// 快速打开 ⌘P：侧栏根目录（没有则文档所在目录）里模糊匹配文件名
     @objc func quickOpen(_ sender: Any?) {

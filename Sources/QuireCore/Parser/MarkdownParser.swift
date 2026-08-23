@@ -22,6 +22,8 @@ public struct MarkdownParser: Sendable {
         public var smartPunctuation = false
         /// 扩展行内语法（默认全关）
         public var extendedInline = ExtendedInlineOptions()
+        /// `[[wikilink]]`（默认开；GFM 里它本来就是字面文本，不冲突）
+        public var wikilinks = true
         /// 自动识别裸 URL（http/https/www.）为链接。自研扫描器：遇到 CJK 标点即停止（比 GFM autolink 更适合中文文本）
         public var autolink = true
         /// 脚注 `[^1]`
@@ -294,15 +296,24 @@ public struct MarkdownParser: Sendable {
             return options.extendedInline.any ? ExtendedInline.apply(out, options: options.extendedInline) : out
         }
 
+        /// 文本节点：行内数学切分 + 自动链接
+        mutating func appendText(_ s: String, into out: inout [Inline]) {
+            if options.math, s.utf8.contains(0x24) {   // 有 $ 才切行内数学（1 MB 文档十万个文本节点，不能每个都走 String.contains）
+                for piece in InlineMath.split(s) {
+                    if case .text(let t) = piece, options.autolink { Autolink.scan(t, into: &out) } else { out.append(piece) }
+                }
+            } else if options.autolink { Autolink.scan(s, into: &out) } else { out.append(.text(s)) }
+        }
+
         mutating func convertInline(_ n: UnsafeMutablePointer<cmark_node>, into out: inout [Inline]) {
             switch cmark_node_get_type(n) {
             case CMARK_NODE_TEXT:
                 let s = literal(n)
-                if options.math, s.utf8.contains(0x24) {   // 有 $ 才切行内数学（1 MB 文档十万个文本节点，不能每个都走 String.contains）
-                    for piece in InlineMath.split(s) {
-                        if case .text(let t) = piece, options.autolink { Autolink.scan(t, into: &out) } else { out.append(piece) }
+                if options.wikilinks, s.utf8.contains(0x5B), s.contains("[[") {
+                    for piece in WikiLink.split(s) {
+                        if case .text(let t) = piece { appendText(t, into: &out) } else { out.append(piece) }
                     }
-                } else if options.autolink { Autolink.scan(s, into: &out) } else { out.append(.text(s)) }
+                } else { appendText(s, into: &out) }
             case CMARK_NODE_EMPH: out.append(.emphasis(convertInlines(n)))
             case CMARK_NODE_STRONG: out.append(.strong(convertInlines(n)))
             case CMARK_NODE_CODE: out.append(.code(literal(n)))

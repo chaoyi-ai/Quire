@@ -57,6 +57,57 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     }
     /// Esc（沉浸模式退出用）
     public var onEscape: (() -> Void)?
+    /// `[[` 补全候选提供者：输入前缀 → 文件名（不带扩展名）列表；nil = 不补全
+    public var wikiLinkCompletions: ((String) -> [String])?
+    private var completingWikiLink = false
+
+    // MARK: - [[wikilink]] 补全（用 NSTextView 原生补全弹窗）
+
+    /// 光标前最近的未闭合 `[[` 到光标的范围（不跨行）
+    private func wikiLinkPrefixRange() -> NSRange? {
+        guard let ns = textStorage?.string as NSString? else { return nil }
+        let sel = selectedRange()
+        guard sel.length == 0 else { return nil }
+        let lineStart = ns.lineRange(for: NSRange(location: sel.location, length: 0)).location
+        let before = ns.substring(with: NSRange(location: lineStart, length: sel.location - lineStart))
+        guard let open = before.range(of: "[[", options: .backwards) else { return nil }
+        let partial = before[open.upperBound...]
+        if partial.contains("]]") || partial.contains("|") { return nil }
+        let start = lineStart + (String(before[..<open.upperBound]) as NSString).length
+        return NSRange(location: start, length: sel.location - start)
+    }
+
+    public override var rangeForUserCompletion: NSRange {
+        wikiLinkPrefixRange() ?? super.rangeForUserCompletion
+    }
+
+    public override func completions(forPartialWordRange charRange: NSRange, indexOfSelectedItem index: UnsafeMutablePointer<Int>) -> [String]? {
+        guard let r = wikiLinkPrefixRange(), r == charRange, let provider = wikiLinkCompletions, let ns = textStorage?.string as NSString? else {
+            return super.completions(forPartialWordRange: charRange, indexOfSelectedItem: index)
+        }
+        index.pointee = 0
+        let list = provider(ns.substring(with: r))
+        return list.isEmpty ? nil : list
+    }
+
+    public override func insertCompletion(_ word: String, forPartialWordRange charRange: NSRange, movement: Int, isFinal flag: Bool) {
+        // wikilink：选定后补上 `]]`
+        if completingWikiLink, flag, movement != NSTextMovement.cancel.rawValue {
+            super.insertCompletion(word + "]]", forPartialWordRange: charRange, movement: movement, isFinal: true)
+            completingWikiLink = false
+            return
+        }
+        super.insertCompletion(word, forPartialWordRange: charRange, movement: movement, isFinal: flag)
+        if flag { completingWikiLink = false }
+    }
+
+    /// 打字时：在 `[[` 之后自动弹补全
+    private func maybeTriggerWikiLinkCompletion() {
+        guard wikiLinkCompletions != nil, let r = wikiLinkPrefixRange() else { completingWikiLink = false; return }
+        _ = r
+        completingWikiLink = true
+        complete(nil)
+    }
     /// 粘贴时若剪贴板有 HTML（来自浏览器 / 富文本 App）自动转成 Markdown
     public var convertsHTMLOnPaste = true
 
@@ -391,6 +442,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         updateFormatToolbar()
         schedulePOSRecolor()
         scheduleStyleCheck()
+        if !completingWikiLink { maybeTriggerWikiLinkCompletion() }
         if focusMode != .off {
             applyFocusDim()
             if focusMode == .typewriter { centerCaretLine() }

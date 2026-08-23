@@ -241,6 +241,7 @@ public struct HTMLRenderer: Sendable {
         case .strikethrough(let c): return "<del>\(inlines(c))</del>"
         case .code(let s): return "<code>\(esc(s))</code>"
         case .link(let dest, let title, let c):
+            if WikiLink.isWikiLink(dest) { return inlines(c) }   // wikilink 导出为纯文本（只在库里有意义）
             return "<a href=\"\(esc(dest ?? ""))\"\(title.map { " title=\"\(esc($0))\"" } ?? "")>\(inlines(c))</a>"
         case .image(let src, let title, let alt):
             return "<img src=\"\(esc(src ?? ""))\" alt=\"\(esc(alt))\"\(title.map { " title=\"\(esc($0))\"" } ?? "")>"

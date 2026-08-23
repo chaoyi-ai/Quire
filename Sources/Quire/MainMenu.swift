@@ -113,6 +113,10 @@ enum MainMenu {
         sidebar.keyEquivalentModifierMask = [.command, .option]
         let reveal = view.addItem(withTitle: L("在侧栏中显示当前文件"), action: #selector(DocumentWindowController.revealInSidebar(_:)), keyEquivalent: "j")
         reveal.keyEquivalentModifierMask = [.command, .shift]
+        let backItem = view.addItem(withTitle: L("后退"), action: #selector(DocumentWindowController.navigateBack(_:)), keyEquivalent: "\u{F702}")
+        backItem.keyEquivalentModifierMask = [.command, .control]
+        let fwdItem = view.addItem(withTitle: L("前进"), action: #selector(DocumentWindowController.navigateForward(_:)), keyEquivalent: "\u{F703}")
+        fwdItem.keyEquivalentModifierMask = [.command, .control]
         let gsearch = view.addItem(withTitle: L("全局搜索…"), action: #selector(DocumentWindowController.showGlobalSearch(_:)), keyEquivalent: "F")
         gsearch.keyEquivalentModifierMask = [.command, .shift]
         view.addItem(.separator())

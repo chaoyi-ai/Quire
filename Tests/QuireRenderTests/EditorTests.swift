@@ -431,3 +431,23 @@ final class StyleCheckViewTests: XCTestCase {
         XCTAssertEqual(e.source, "Basically this is ~~gone~~ fine.\n\n众所周知，好。\n", "不改文本")
     }
 }
+
+@MainActor
+final class WikiCompletionTests: XCTestCase {
+    func testCompletionRangeAndInsertion() {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let e = EditorTextView(style: RenderStyle(theme: theme))
+        e.wikiLinkCompletions = { prefix in ["设计文档", "路线图"].filter { prefix.isEmpty || $0.hasPrefix(prefix) } }
+        e.setSource("见 [[设")
+        e.setSelectedRange(NSRange(location: 5, length: 0))
+        XCTAssertEqual(e.rangeForUserCompletion, NSRange(location: 4, length: 1))
+        var idx = 0
+        let list = e.completions(forPartialWordRange: NSRange(location: 4, length: 1), indexOfSelectedItem: &idx)
+        XCTAssertEqual(list, ["设计文档"])
+        e.insertCompletion("设计文档", forPartialWordRange: NSRange(location: 4, length: 1), movement: NSTextMovement.return.rawValue, isFinal: true)
+        // 不在 [[ 里：不提供候选（回到系统行为）
+        e.setSource("普通 文字")
+        e.setSelectedRange(NSRange(location: 5, length: 0))
+        XCTAssertNotEqual(e.rangeForUserCompletion, NSRange(location: 4, length: 1))
+    }
+}
