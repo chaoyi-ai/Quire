@@ -328,6 +328,74 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         }
     }
 
+    // MARK: - 剪贴板互通
+
+    /// 当前选区对应的 Markdown 源码：编辑器 = 选中文本；阅读视图 = 选区覆盖的整块；无选区 = 全文
+    private func selectedMarkdown() -> String {
+        let src = session.source
+        if mode != .reader, let tv = editorViewController.textView, window?.firstResponder === tv {
+            let r = tv.selectedRange()
+            if r.length > 0, let ns = tv.textStorage?.string as NSString? { return ns.substring(with: r) }
+            return src
+        }
+        let tv = readerViewController.textView!
+        let sel = tv.selectedRange()
+        guard sel.length > 0, let rendered = tv.rendered, let a = rendered.blockIndex(at: sel.location), let b = rendered.blockIndex(at: max(sel.location, sel.location + sel.length - 1)),
+              let startLine = rendered.blocks[a].block.sourceRange?.start.line, let endLine = rendered.blocks[b].block.sourceRange?.end.line else { return src }
+        let lines = src.components(separatedBy: "\n")
+        guard startLine >= 1, endLine <= lines.count else { return src }
+        return lines[(startLine - 1)...(endLine - 1)].joined(separator: "\n") + "\n"
+    }
+
+    /// ⇧⌘C 复制为 Markdown：纯文本 = 源码
+    @objc func copyAsMarkdown(_ sender: Any?) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(selectedMarkdown(), forType: .string)
+    }
+
+    /// 复制为 HTML：`.html` 给富文本 App 粘，`.string` 是 HTML 代码
+    @objc func copyAsHTML(_ sender: Any?) {
+        let md = selectedMarkdown()
+        let doc = MarkdownParser().parse(md)
+        var opts = HTMLRenderer.Options(); opts.includeMermaidScript = false
+        let html = HTMLRenderer(theme: ThemeManager.shared.currentTheme, options: opts).fragment(doc)
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(html, forType: .html)
+        pb.setString(html, forType: .string)
+    }
+
+    /// 复制为纯文本：去掉 Markdown 标记后的文字
+    @objc func copyAsPlainText(_ sender: Any?) {
+        let doc = MarkdownParser().parse(selectedMarkdown())
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(Self.plainText(of: doc), forType: .string)
+    }
+
+    static func plainText(of doc: Document) -> String {
+        func blocks(_ bs: [Block]) -> String { bs.map(block).joined(separator: "\n\n") }
+        func block(_ b: Block) -> String {
+            switch b.kind {
+            case .heading(_, let i, _), .paragraph(let i): return i.plainText
+            case .codeBlock(_, let code), .mermaid(let code), .html(let code), .frontMatter(let code): return code
+            case .blockQuote(let bs), .footnoteDefinition(_, let bs): return blocks(bs)
+            case .list(let ordered, let start, let items):
+                return items.enumerated().map { (k, it) in (ordered ? "\(start + k). " : "• ") + blocks(it.blocks) }.joined(separator: "\n")
+            case .table(let t): return ([t.header] + t.rows).map { $0.map(\.plainText).joined(separator: "\t") }.joined(separator: "\n")
+            case .thematicBreak: return "—"
+            case .image(_, _, let alt): return alt
+            }
+        }
+        return blocks(doc.blocks) + "\n"
+    }
+
+    @objc func pasteAsPlainText(_ sender: Any?) {
+        if mode == .reader { mode = .editor }
+        editorViewController.textView.pasteAsPlainText(sender)
+    }
+
     /// 快速打开 ⌘P：侧栏根目录（没有则文档所在目录）里模糊匹配文件名
     @objc func quickOpen(_ sender: Any?) {
         guard let root = sidebarViewController.rootURL ?? markdownDocument?.fileURL?.deletingLastPathComponent() else { NSSound.beep(); return }

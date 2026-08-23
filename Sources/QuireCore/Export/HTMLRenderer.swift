@@ -18,6 +18,13 @@ public struct HTMLRenderer: Sendable {
         self.options = options
     }
 
+    /// 只要正文片段（剪贴板 / 嵌入用），不带 html/head/css
+    public func fragment(_ doc: Document) -> String {
+        var body = ""
+        for b in doc.blocks { body += block(b) }
+        return body
+    }
+
     public func render(_ doc: Document) -> String {
         var body = ""
         for b in doc.blocks { body += block(b) }

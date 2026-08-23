@@ -28,6 +28,8 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     public var maxContentWidth: CGFloat = 0 { didSet { if maxContentWidth != oldValue { updateContentInset(); needsLayout = true } } }
     /// Esc（沉浸模式退出用）
     public var onEscape: (() -> Void)?
+    /// 粘贴时若剪贴板有 HTML（来自浏览器 / 富文本 App）自动转成 Markdown
+    public var convertsHTMLOnPaste = true
 
     /// 标记出挑（iA Writer 式）：`#` / `-` / `1.` / `>` 出挑到左边距，正文左缘对齐。关掉则普通左对齐。
     public var hangingMarkers = true { didSet { if hangingMarkers != oldValue { applyStyle(style) } } }
@@ -379,6 +381,27 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     public override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         if focusDimActive { dimOverlay?.setNeedsDisplay(dirtyRect) }
+    }
+
+    public override func paste(_ sender: Any?) {
+        let pb = NSPasteboard.general
+        // 有文件 / 图片等非文本内容时走默认；纯文本来源（代码编辑器）也走默认
+        if convertsHTMLOnPaste, let html = pb.string(forType: .html), !html.isEmpty, Self.looksLikeRichHTML(html) {
+            let md = HTMLToMarkdown.convert(html)
+            if !md.isEmpty { insertText(md, replacementRange: selectedRange()); return }
+        }
+        pasteAsPlainText(sender)
+    }
+
+    /// ⇧⌘V：只粘纯文本
+    public override func pasteAsPlainText(_ sender: Any?) {
+        guard let s = NSPasteboard.general.string(forType: .string) else { return super.paste(sender) }
+        insertText(s, replacementRange: selectedRange())
+    }
+
+    /// 浏览器 / Word 复制出来的 HTML 才转；纯文本编辑器有时也塞 HTML 包一层 <pre>，那种不转
+    static func looksLikeRichHTML(_ html: String) -> Bool {
+        html.range(of: "<(p|h[1-6]|ul|ol|table|strong|em|a|img|blockquote|li|b|i)(\\s|>|/)", options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     public override func cancelOperation(_ sender: Any?) {

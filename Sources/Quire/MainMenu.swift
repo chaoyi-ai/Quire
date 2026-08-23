@@ -64,6 +64,12 @@ enum MainMenu {
         edit.addItem(withTitle: L("剪切"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         edit.addItem(withTitle: L("拷贝"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         edit.addItem(withTitle: L("粘贴"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        let pastePlain = edit.addItem(withTitle: L("粘贴为纯文本"), action: #selector(DocumentWindowController.pasteAsPlainText(_:)), keyEquivalent: "V")
+        pastePlain.keyEquivalentModifierMask = [.command, .shift]
+        let copyMD = edit.addItem(withTitle: L("复制为 Markdown"), action: #selector(DocumentWindowController.copyAsMarkdown(_:)), keyEquivalent: "C")
+        copyMD.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(withTitle: L("复制为 HTML"), action: #selector(DocumentWindowController.copyAsHTML(_:)), keyEquivalent: "")
+        edit.addItem(withTitle: L("复制为纯文本"), action: #selector(DocumentWindowController.copyAsPlainText(_:)), keyEquivalent: "")
         edit.addItem(withTitle: L("全选"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         edit.addItem(.separator())
         let find = NSMenu(title: L("查找"))

@@ -15,7 +15,7 @@ final class DocumentSession {
     private(set) var parsed: Document = .empty
     private(set) var rendered: RenderedDocument?
     private(set) var style: RenderStyle
-    private var source: String = ""
+    private(set) var source: String = ""
     private var generation = 0
     private var watcher: FileWatcher?
     nonisolated(unsafe) private var themeObserver: NSObjectProtocol?

@@ -43,6 +43,7 @@ final class EditorViewController: NSViewController {
         scrollView.hasVerticalRuler = true
         scrollView.rulersVisible = Preferences.shared.editorLineNumbers
         textView.hangingMarkers = Preferences.shared.editorHangingMarkers
+        textView.convertsHTMLOnPaste = Preferences.shared.convertHTMLOnPaste
         let container = NSView(frame: scrollView.frame)
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(scrollView)
@@ -57,6 +58,7 @@ final class EditorViewController: NSViewController {
             MainActor.assumeIsolated {
                 self?.scrollView.rulersVisible = Preferences.shared.editorLineNumbers
                 self?.textView.hangingMarkers = Preferences.shared.editorHangingMarkers
+                self?.textView.convertsHTMLOnPaste = Preferences.shared.convertHTMLOnPaste
             }
         }
 

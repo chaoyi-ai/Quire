@@ -253,3 +253,33 @@ final class FocusModeTests: XCTestCase {
         XCTAssertTrue(editor.textStorage!.isEqual(to: before))
     }
 }
+
+@MainActor
+final class ClipboardTests: XCTestCase {
+    func testPasteConvertsRichHTML() {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let editor = EditorTextView(style: RenderStyle(theme: theme))
+        editor.setSource("")
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString("<h2>Hi</h2><p>a <b>b</b></p>", forType: .html)
+        pb.setString("Hi\na b", forType: .string)
+        editor.paste(nil)
+        XCTAssertEqual(editor.source, "## Hi\n\na **b**\n")
+        // ⇧⌘V：纯文本
+        editor.setSource("")
+        editor.pasteAsPlainText(nil)
+        XCTAssertEqual(editor.source, "Hi\na b")
+        // 关掉自动转换：走纯文本
+        editor.setSource("")
+        editor.convertsHTMLOnPaste = false
+        editor.paste(nil)
+        XCTAssertEqual(editor.source, "Hi\na b")
+        pb.clearContents()
+    }
+
+    func testCodeEditorHTMLIsNotConverted() {
+        XCTAssertFalse(EditorTextView.looksLikeRichHTML("<meta charset=\"utf-8\"><pre style=\"x\">let a = 1</pre>"))
+        XCTAssertTrue(EditorTextView.looksLikeRichHTML("<p>hello <a href=\"x\">y</a></p>"))
+    }
+}
