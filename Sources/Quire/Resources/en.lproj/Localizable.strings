@@ -138,7 +138,6 @@
 "%d 字符" = "%d characters";
 "下载 iA Writer 字体…" = "Download iA Writer Fonts…";
 "已安装到 ~/Library/Fonts，可在上面选择 iA Writer Mono / Duo / Quattro" = "Installed to ~/Library/Fonts — pick iA Writer Mono / Duo / Quattro above";
-"下载失败，请检查网络" = "Download failed; check your connection";
 "iA Writer Mono / Duo / Quattro 已安装" = "iA Writer Mono / Duo / Quattro installed";
 "正文字体" = "Body font";
 "代码字体" = "Code font";
@@ -256,3 +255,7 @@
 "文风规则里有 %d 条正则无效（已跳过）：%@" = "%d regex rules in the style rules file are invalid (skipped): %@";
 "文风规则" = "Style Rules";
 "读不了文风规则文件 %@：%@" = "Could not read the style rules file %@: %@";
+"%d 个主题加载失败…" = "%d themes failed to load…";
+"安装失败：%@" = "Install failed: %@";
+"下载失败：%@ 校验不符（上游文件变了，请升级 Quire）" = "Download failed: %@ checksum mismatch (upstream file changed; please update Quire)";
+"下载失败（网络）：%@" = "Download failed (network): %@";

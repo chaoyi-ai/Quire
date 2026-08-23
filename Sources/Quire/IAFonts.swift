@@ -14,32 +14,52 @@ enum IAFonts {
         File(path: "iA Writer Quattro/Variable/iAWriterQuattroV.ttf", sha256: "7e96e359a887bbcaadc71e3ae17e3146fb3a2c901aa5701181f37e9e650462f0"),
         File(path: "iA Writer Quattro/Variable/iAWriterQuattroV-Italic.ttf", sha256: "33c28901b4f0dbfd4be80d7b6c7708c86e75c5d35ac48405c5a168775be9383a"),
     ]
-    static let base = "https://raw.githubusercontent.com/iaolo/iA-Fonts/master/"
+    /// 钉在具体 commit 上：SHA256 是按这个版本算的，跟 master 走的话上游一改字体就永远"下载失败"
+    static let base = "https://raw.githubusercontent.com/iaolo/iA-Fonts/f32c04c3058a75d7ce28919ce70fe8800817491b/"
     static var fontsDir: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Fonts") }
 
+    /// 三个家族都在才算装好（只装了一半时按钮仍可点、可以补齐）
     static var isInstalled: Bool {
-        NSFontManager.shared.availableFontFamilies.contains("iA Writer Mono")
+        let fams = Set(NSFontManager.shared.availableFontFamilies)
+        return ["iA Writer Mono", "iA Writer Duo", "iA Writer Quattro"].allSatisfy { fams.contains($0) }
     }
 
-    static func download(completion: @escaping @MainActor (Bool) -> Void) {
+    enum Failure: Error { case network(String), mismatch(String), write(String) }
+
+    /// 六个文件先全部下到临时目录并校验，再一起搬进 ~/Library/Fonts（不会装到一半）；失败原因给出来而不是一律"检查网络"
+    static func download(completion: @escaping @MainActor (Result<Void, Failure>) -> Void) {
         let files = self.files, base = self.base, dir = fontsDir
         Task.detached(priority: .userInitiated) {
-            var ok = true
-            var urls: [URL] = []
-            for f in files {
-                guard let url = URL(string: base + f.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)!) else { ok = false; break }
-                do {
-                    let (data, resp) = try await URLSession.shared.data(from: url)
-                    guard (resp as? HTTPURLResponse)?.statusCode == 200,
-                          SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == f.sha256 else { ok = false; break }
-                    let dest = dir.appendingPathComponent((f.path as NSString).lastPathComponent)
-                    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                    try data.write(to: dest, options: .atomic)
-                    urls.append(dest)
-                } catch { ok = false; break }
+            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("quire-iafonts-\(getpid())")
+            var staged: [(URL, URL)] = []
+            do {
+                try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+                for f in files {
+                    guard let url = URL(string: base + f.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)!) else { throw Failure.network(f.path) }
+                    let (data, resp): (Data, URLResponse)
+                    do { (data, resp) = try await URLSession.shared.data(from: url) } catch { throw Failure.network(error.localizedDescription) }
+                    guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw Failure.network("HTTP \((resp as? HTTPURLResponse)?.statusCode ?? 0) \(f.path)") }
+                    guard SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == f.sha256 else { throw Failure.mismatch(f.path) }
+                    let name = (f.path as NSString).lastPathComponent
+                    let t = tmp.appendingPathComponent(name)
+                    try data.write(to: t, options: .atomic)
+                    staged.append((t, dir.appendingPathComponent(name)))
+                }
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                for (t, dest) in staged {
+                    if FileManager.default.fileExists(atPath: dest.path) { try FileManager.default.removeItem(at: dest) }
+                    try FileManager.default.moveItem(at: t, to: dest)
+                }
+            } catch let e as Failure {
+                try? FileManager.default.removeItem(at: tmp)
+                await MainActor.run { completion(.failure(e)) }; return
+            } catch {
+                try? FileManager.default.removeItem(at: tmp)
+                await MainActor.run { completion(.failure(.write(error.localizedDescription))) }; return
             }
-            if ok { CTFontManagerRegisterFontURLs(urls as CFArray, .user, true, nil) }
-            await MainActor.run { completion(ok) }
+            try? FileManager.default.removeItem(at: tmp)
+            CTFontManagerRegisterFontURLs(staged.map { $0.1 } as CFArray, .user, true, nil)
+            await MainActor.run { completion(.success(())) }
         }
     }
 }

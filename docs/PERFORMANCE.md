@@ -19,7 +19,8 @@
 | 编辑器单次击键（1 MB：行索引重建 + 段落增量高亮） | < 8 ms | `quire-bench views`（`view/editor-keystroke-1mb`） |
 | 字数统计（1 MB，后台，与解析同一趟） | < 5 ms | `quire-bench render`（`stats/large-1mb`） |
 | 全局搜索（1000 个文件 / 50 MB，子串） | 首批结果 < 300 ms，全扫 < 1 s | `ContentSearchTests.testThroughput50MB` |
-| 数学（200 个公式，解析 + 渲染，缓存命中） | < 120 ms（冷 ≈ 60 ms，热 ≈ 2 ms） | `quire-bench render`（`render/math-200`） |
+| 数学（200 个公式，解析 + 渲染，缓存命中） | < 120 ms（热 ≈ 2 ms） | `quire-bench render`（`render/math-200`） |
+| 数学（200 个**没见过的**公式，缓存不命中） | < 150 ms（实测 ≈ 35 ms） | `render/math-200-cold`——以前只测热路径，公式渲染本身退化门禁抓不到 |
 | 快速打开索引（10k 文件整树扫描，后台） | < 200 ms | 手测（`FileIndex.scan`） |
 | 代码高亮吞吐 | > 20 MB/s | `quire-bench highlight` |
 | 滚动 | 60 fps，无掉帧 | Instruments Animation Hitches |

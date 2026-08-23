@@ -1,4 +1,5 @@
 import AppKit
+import QuireCore
 
 /// 更新检查：比对 GitHub Releases 最新 tag（不用 Sparkle，无第三方依赖）。每天最多一次，启动 8 s 后在后台做；可在设置里关闭。
 /// 只读 GitHub API，不上传任何信息；失败静默。
@@ -21,7 +22,8 @@ enum UpdateChecker {
 
     /// 菜单「检查更新…」：立刻查，没更新也提示
     static func check(userInitiated: Bool) {
-        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: lastCheckKey)
+        // `swift run` / 开发环境没有版本号：别拿 "0" 去比，否则每天一次"有新版本"
+        guard currentVersion != "0" || userInitiated else { return }
         var req = URLRequest(url: releasesAPI)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.timeoutInterval = 10
@@ -29,8 +31,9 @@ enum UpdateChecker {
             guard let (data, resp) = try? await URLSession.shared.data(for: req), (resp as? HTTPURLResponse)?.statusCode == 200,
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let tag = obj["tag_name"] as? String else {
                 if userInitiated { alert(L("无法检查更新"), L("请检查网络，或直接访问 GitHub Releases 页面。"), showPage: true) }
-                return
+                return   // 没查成不记"今天查过"：离线启动不该烧掉当天的机会
             }
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: lastCheckKey)
             let latest = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
             if isNewer(latest, than: currentVersion) {
                 if !userInitiated, UserDefaults.standard.string(forKey: skipKey) == latest { return }
@@ -59,13 +62,5 @@ enum UpdateChecker {
     }
 
     /// 语义版本比较（只看数字段）
-    static func isNewer(_ a: String, than b: String) -> Bool {
-        let pa = a.split(separator: ".").map { Int($0.prefix(while: \.isNumber)) ?? 0 }
-        let pb = b.split(separator: ".").map { Int($0.prefix(while: \.isNumber)) ?? 0 }
-        for i in 0..<max(pa.count, pb.count) {
-            let x = i < pa.count ? pa[i] : 0, y = i < pb.count ? pb[i] : 0
-            if x != y { return x > y }
-        }
-        return false
-    }
+    static func isNewer(_ a: String, than b: String) -> Bool { VersionCompare.isNewer(a, than: b) }
 }

@@ -213,7 +213,7 @@ enum MainMenu {
         section(L("深色"), tm.catalog.themes(for: .dark))
         if !tm.loadErrors.isEmpty {
             menu.addItem(.separator())
-            let e = menu.addItem(withTitle: "\(tm.loadErrors.count) 个主题加载失败…", action: #selector(Handler.showThemeErrors(_:)), keyEquivalent: "")
+            let e = menu.addItem(withTitle: String(format: L("%d 个主题加载失败…"), tm.loadErrors.count), action: #selector(Handler.showThemeErrors(_:)), keyEquivalent: "")
             e.target = Handler.shared
         }
         menu.addItem(.separator())
@@ -310,6 +310,9 @@ enum MainMenu {
             if item.action == #selector(Handler.reload(_:)) || item.action == #selector(Handler.revealInFinder(_:)) {
                 return NSDocumentController.shared.currentDocument?.fileURL != nil
             }
+            // 导出 / 复制类动作没有文档时灰掉（以前启用着、点了没反应）
+            let needsDocument: [Selector] = [#selector(Handler.exportHTML(_:)), #selector(Handler.exportPDF(_:)), #selector(Handler.exportImage(_:)), #selector(Handler.exportPandoc(_:))]
+            if let a = item.action, needsDocument.contains(a) { return NSDocumentController.shared.currentDocument is MarkdownDocument }
             return true
         }
     }

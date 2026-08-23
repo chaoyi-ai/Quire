@@ -12,10 +12,10 @@ ARCH=$(uname -m); [ "$ARCH" = "arm64" ] || ARCH=x86_64
 B=".build/${ARCH}-apple-macosx/$CONFIG"
 WORK=".build/appintents"
 rm -rf "$WORK"; mkdir -p "$WORK"
-TOOLCHAIN=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain
-[ -d "$TOOLCHAIN" ] || TOOLCHAIN="$(dirname "$(dirname "$(xcrun --find swiftc)")")/.."
+# 工具链以 xcode-select 选中的为准（CI 上 /Applications/Xcode.app 可能是另一个版本）
+TOOLCHAIN="$(cd "$(dirname "$(xcrun --find swiftc)")/../.." && pwd)"
 PROTOS_SRC="$TOOLCHAIN/usr/share/swift/SwiftConstantValues/AppIntents.json"
-[ -f "$PROTOS_SRC" ] || { echo "appintents: 找不到 $PROTOS_SRC，跳过"; exit 0 }
+[ -f "$PROTOS_SRC" ] || { echo "appintents: 找不到 $PROTOS_SRC（工具链 $TOOLCHAIN）"; exit 1 }
 # 编译器要的是纯数组格式
 python3 -c "import json,sys; json.dump(json.load(open(sys.argv[1]))['constValueProtocols'], open(sys.argv[2],'w'))" "$PROTOS_SRC" "$WORK/protocols.json"
 
@@ -32,10 +32,16 @@ swiftc -typecheck -wmo -swift-version 6 -module-name Quire -target "${ARCH}-appl
 ls Sources/Quire/*.swift > "$WORK/sources.txt"
 echo "$WORK/Quire.swiftconstvalues" > "$WORK/constvals.txt"
 XCV=$(xcodebuild -version 2>/dev/null | awk '/Build version/{print $3}'); [ -n "$XCV" ] || XCV=16F18
-xcrun appintentsmetadataprocessor --output "$WORK" --toolchain-dir "$TOOLCHAIN" --module-name Quire --sdk-root "$SDK" \
+set +e
+PROC_OUT=$(xcrun appintentsmetadataprocessor --output "$WORK" --toolchain-dir "$TOOLCHAIN" --module-name Quire --sdk-root "$SDK" \
   --xcode-version "$XCV" --platform-family macOS --deployment-target 14.0 --target-triple "${ARCH}-apple-macos14.0" \
-  --source-file-list "$WORK/sources.txt" --swift-const-vals-list "$WORK/constvals.txt" --force --quiet-warnings 2>&1 | grep -v "^20" || true
+  --source-file-list "$WORK/sources.txt" --swift-const-vals-list "$WORK/constvals.txt" --force --quiet-warnings 2>&1)
+PROC_STATUS=$?
+set -e
+echo "$PROC_OUT" | grep -v "^20" || true
+[ "$PROC_STATUS" -eq 0 ] || { echo "appintents: appintentsmetadataprocessor 退出码 $PROC_STATUS"; exit 1 }
 [ -d "$WORK/Metadata.appintents" ] || { echo "appintents: 没生成 Metadata.appintents"; exit 1 }
+grep -q '"OpenInQuireIntent"' "$WORK/Metadata.appintents/extract.actionsdata" || { echo "appintents: 元数据里没有动作"; exit 1 }
 rm -rf "$APP/Contents/Resources/Metadata.appintents"
 cp -R "$WORK/Metadata.appintents" "$APP/Contents/Resources/"
 echo "✓ App Intents 元数据: $(ls "$APP/Contents/Resources/Metadata.appintents" | tr '\n' ' ')"

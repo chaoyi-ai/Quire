@@ -82,14 +82,20 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         sidebarViewController.onSelectHeading = { [weak self] entry in
             guard let self else { return }
             self.readerViewController.scroll(toBlock: entry.blockIndex)
-            if self.mode != .reader, let line = entry.line { self.editorViewController.scroll(toLine: line) }
+            if self.mode != .reader, let line = entry.line {
+                // 编辑器滚动会经 onScroll 反过来同步阅读视图（非动画），和上面的动画滚动打架：这一下不同步
+                self.isSyncingScroll = true
+                self.editorViewController.scroll(toLine: line)
+                DispatchQueue.main.async { [weak self] in self?.isSyncingScroll = false }
+            }
         }
         sidebarViewController.onOpenFile = { [weak self] url, line in
-            NavigationHistory.shared.push(current: self?.markdownDocument?.fileURL)
-            NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { doc, _, _ in
-                guard let line, let wc = doc?.windowControllers.first as? DocumentWindowController else { return }
-                // 打开后跳到指定行（大纲里点的是其他文件的标题）
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { wc.jump(toLine: line) }
+            NavigationHistory.shared.push(current: self?.markdownDocument?.fileURL, to: url)
+            NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { doc, _, error in
+                if let error { NSApp.presentError(error); return }
+                guard let line, let md = doc as? MarkdownDocument, let wc = md.windowControllers.first as? DocumentWindowController else { return }
+                // 打开后跳到指定行（大纲里点的是其他文件的标题）：等首次渲染到位，而不是猜一个 0.2 s
+                md.session.whenRendered { ok in if ok { wc.jump(toLine: line) } }
             }
         }
         // 阅读视图滚动 → 侧栏高亮 + 编辑器同步
@@ -447,7 +453,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     /// 复制为 HTML：`.html` 给富文本 App 粘，`.string` 是 HTML 代码
     @objc func copyAsHTML(_ sender: Any?) {
         let md = selectedMarkdown()
-        let doc = MarkdownParser().parse(md)
+        let doc = MarkdownParser(options: Preferences.shared.parserOptions).parse(md)   // 与阅读视图同一套选项（扩展语法 / 智能标点）
         var opts = HTMLRenderer.Options(); opts.includeMermaidScript = false
         let html = HTMLRenderer(theme: ThemeManager.shared.currentTheme, options: opts).fragment(doc)
         let pb = NSPasteboard.general
@@ -458,7 +464,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
 
     /// 复制为纯文本：去掉 Markdown 标记后的文字
     @objc func copyAsPlainText(_ sender: Any?) {
-        let doc = MarkdownParser().parse(selectedMarkdown())
+        let doc = MarkdownParser(options: Preferences.shared.parserOptions).parse(selectedMarkdown())
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(Self.plainText(of: doc), forType: .string)
@@ -507,7 +513,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             let a = NSAlert(); a.messageText = String(format: L("找不到「%@」"), name); a.informativeText = L("侧栏根目录下没有同名的 Markdown 文件。"); a.runModal()
             return false
         }
-        NavigationHistory.shared.push(current: markdownDocument?.fileURL)
+        NavigationHistory.shared.push(current: markdownDocument?.fileURL, to: index.url(for: rel))
         FileOpener.open([index.url(for: rel)])
         return true
     }

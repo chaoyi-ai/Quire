@@ -20,6 +20,7 @@ budgets_ms = {  # 与 docs/PERFORMANCE.md §1 保持一致
     "view/editor-keystroke-focus-1mb": 8,
     "stats/large-1mb": 5,
     "render/math-200": 120,
+    "render/math-200-cold": 150,
 }
 budgets_mbps = {"highlight/swift": 20, "highlight/javascript": 20, "highlight/python": 20}
 txt = open(path).read()
@@ -35,7 +36,7 @@ for name, budget in budgets_ms.items():
     fail |= not ok
 for name, budget in budgets_mbps.items():
     r = results.get(name)
-    if not r: continue
+    if not r: print(f"?  {name}: 缺失"); fail = True; continue
     ok = r["throughputMBps"] >= budget / factor
     print(f"{'✓' if ok else '✗'}  {name:34s} {r['throughputMBps']:8.1f} MB/s (预算 ≥ {budget} / {factor:g})")
     fail |= not ok

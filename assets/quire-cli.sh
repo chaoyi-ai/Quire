@@ -8,7 +8,10 @@
 #   quire append <file> <text>         追加文本到文件末尾（text 为 - 时读 stdin）
 #   quire export <file> <out.pdf|.html>  导出 PDF / HTML
 # open / new / append / export 走 quire:// URL scheme，Shortcuts 的「打开 URL」动作也可以直接用同样的 URL。
-APP="$(dirname "$(dirname "$(readlink "$0" || echo "$0")")")"
+# 自己在 Quire.app/Contents/Resources/quire（可能经 /usr/local/bin 的符号链接）→ 往上三层是 .app
+SELF="$(readlink "$0" || echo "$0")"
+case "$SELF" in /*) ;; *) SELF="$(dirname "$0")/$SELF" ;; esac
+APP="$(cd "$(dirname "$SELF")/../.." 2>/dev/null && pwd)"
 if [ ! -d "$APP/Contents" ]; then APP="/Applications/Quire.app"; fi
 if [ ! -d "$APP/Contents" ]; then APP="$(mdfind "kMDItemCFBundleIdentifier == 'com.korako.quire'" | head -1)"; fi
 [ -d "$APP/Contents" ] || { echo "quire: 找不到 Quire.app" >&2; exit 1; }
@@ -40,11 +43,6 @@ case "$1" in
 esac
 
 if [ $# -eq 0 ]; then exec open -a "$APP"; fi
-ARGS=""
-for f in "$@"; do
-  if [ -d "$f" ]; then
-    first="$(ls "$f"/*.md "$f"/*.markdown 2>/dev/null | head -1)"
-    if [ -n "$first" ]; then ARGS="$ARGS \"$first\""; else open -a "$APP" --args -QuireOpenFolder "$(cd "$f" && pwd)"; exit 0; fi
-  else ARGS="$ARGS \"$f\""; fi
-done
-eval exec open -a \"\$APP\" $ARGS
+# 文件和文件夹都直接交给 App：文件夹由 App 自己按 README / 第一篇 Markdown 打开并设侧栏根目录
+# （以前脚本自己挑第一个 .md、没有就走 --args，App 已在运行时 --args 根本到不了）
+exec open -a "$APP" "$@"

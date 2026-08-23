@@ -9,9 +9,10 @@ final class NavigationHistory {
     var canGoBack: Bool { !back.isEmpty }
     var canGoForward: Bool { !forward.isEmpty }
 
-    /// 即将离开 `current` 去别处
-    func push(current: URL?) {
+    /// 即将离开 `current` 去 `target`（同一个文件不记：否则"后退"按钮亮着却什么都不发生）
+    func push(current: URL?, to target: URL? = nil) {
         guard let current else { return }
+        if let target, target.standardizedFileURL == current.standardizedFileURL { return }
         if back.last != current { back.append(current) }
         forward.removeAll()
         if back.count > 100 { back.removeFirst() }

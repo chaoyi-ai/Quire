@@ -103,6 +103,8 @@ final class DocumentSession {
                     self.parser = MarkdownParser(options: o)
                     self.transclusionEnabled = t
                     self.sourceDidChange(self.source, reason: .externalChange)
+                } else if (self.source.utf8.count > Preferences.shared.largeFileThresholdBytes) != self.isLargeFile {
+                    self.rerender(reason: .theme)   // 大文件阈值改了，跨过了这份文档的大小：按新模式重渲染
                 }
             }
         }

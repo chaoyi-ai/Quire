@@ -4,17 +4,16 @@ import UniformTypeIdentifiers
 /// pandoc 可选集成：机器上装了 pandoc 才在菜单里出现 docx / epub / LaTeX 导出与 docx / HTML 导入；不内置、不下载。
 @MainActor
 enum PandocBridge {
-    static var executable: URL? {
-        let candidates = ["/opt/homebrew/bin/pandoc", "/usr/local/bin/pandoc", "/usr/bin/pandoc"]
+    /// 启动时查一次（菜单装配要用两回）。不再 spawn `which`：GUI 进程的 PATH 只有 /usr/bin:/bin:/usr/sbin:/sbin，
+    /// `which` 找不到候选之外的任何东西，却每次启动在主线程起一个进程
+    static let executable: URL? = {
+        var candidates = ["/opt/homebrew/bin/pandoc", "/usr/local/bin/pandoc", "/usr/bin/pandoc", "/opt/local/bin/pandoc"]
+        if let path = ProcessInfo.processInfo.environment["PATH"] {   // 从终端启动时 PATH 是完整的
+            candidates += path.split(separator: ":").map { "\($0)/pandoc" }
+        }
         for c in candidates where FileManager.default.isExecutableFile(atPath: c) { return URL(fileURLWithPath: c) }
-        // PATH 里找
-        let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/which"); p.arguments = ["pandoc"]
-        let pipe = Pipe(); p.standardOutput = pipe; p.standardError = FileHandle.nullDevice
-        guard (try? p.run()) != nil else { return nil }
-        p.waitUntilExit()
-        let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        return out.isEmpty ? nil : URL(fileURLWithPath: out)
-    }
+        return nil
+    }()
     static var isAvailable: Bool { executable != nil }
 
     struct Format { let title: String; let ext: String; let to: String; let type: UTType }
@@ -53,11 +52,10 @@ enum PandocBridge {
         run(exe, args: args, stdin: nil) { error in
             if let error { presentError(error); return }
         } output: { md in
-            guard let doc = try? NSDocumentController.shared.openUntitledDocumentAndDisplay(true) as? MarkdownDocument else { return }
-            doc.setSourceFromEditor(md, tracked: false)
-            doc.session.sourceDidChange(md, reason: .externalChange)
-            (doc.windowControllers.first as? DocumentWindowController)?.documentDidReload(md)
-            doc.updateChangeCount(.changeDone)
+            do {
+                guard let doc = try NSDocumentController.shared.openUntitledDocumentAndDisplay(true) as? MarkdownDocument else { return }
+                doc.replaceContents(md)   // 与 URL scheme 的 new 同一条路：程序化内容、无归属
+            } catch { presentError(error.localizedDescription) }
         }
     }
 

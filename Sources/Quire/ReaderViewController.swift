@@ -273,20 +273,22 @@ enum LinkOpener {
         }
         if let url = URL(string: target), let scheme = url.scheme?.lowercased() {
             if scheme == "http" || scheme == "https" || scheme == "mailto" { NSWorkspace.shared.open(url); return true }
-            if scheme == "file" { return openLocal(url) }
+            if scheme == "file" { return openLocal(url, from: base) }
         }
         // 相对路径
         guard let base else { return false }
         let path = target.split(separator: "#", maxSplits: 1).first.map(String.init) ?? target
         let url = URL(fileURLWithPath: path.removingPercentEncoding ?? path, relativeTo: base.deletingLastPathComponent()).standardizedFileURL
-        return openLocal(url)
+        return openLocal(url, from: base)
     }
 
+    /// 本地文件：Markdown 在 Quire 里打开（记进跳转历史，⌃⌘← 能回来），其他交给系统
     @MainActor
-    static func openLocal(_ url: URL) -> Bool {
+    static func openLocal(_ url: URL, from current: URL? = nil) -> Bool {
         guard FileManager.default.fileExists(atPath: url.path) else { return false }
         if QuireDocumentController.markdownExtensions.contains(url.pathExtension.lowercased()) {
-            NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { _, _, _ in }
+            NavigationHistory.shared.push(current: current, to: url)
+            FileOpener.open([url])   // 统一走 FileOpener：打不开会提示，不再 `{ _, _, _ in }` 吞掉
         } else {
             NSWorkspace.shared.open(url)
         }

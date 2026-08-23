@@ -58,7 +58,7 @@ cp assets/quire-cli.sh "$APP/Contents/Resources/quire"   # 命令行工具（设
 chmod +x "$APP/Contents/Resources/quire"
 
 echo "▸ App Intents 元数据（Shortcuts 动作）"
-scripts/appintents_metadata.sh "$CONFIG" "$APP" || echo "⚠︎ App Intents 元数据生成失败（Shortcuts 里看不到动作，其余功能不受影响）"
+scripts/appintents_metadata.sh "$CONFIG" "$APP"   # 失败就让构建失败：否则包里悄悄少了 Shortcuts 动作没人知道
 
 echo "▸ ad-hoc 签名"
 codesign --force --deep --sign - "$APP"

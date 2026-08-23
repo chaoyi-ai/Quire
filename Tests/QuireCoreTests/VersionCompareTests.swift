@@ -1,16 +1,10 @@
+@testable import QuireCore
 import XCTest
 
-/// UpdateChecker.isNewer 在 App 目标里（可执行目标不能被测试导入），这里镜像同一算法做回归
+/// 测的是 QuireCore.VersionCompare 本尊（UpdateChecker 直接调它）
 final class VersionCompareTests: XCTestCase {
-    func isNewer(_ a: String, than b: String) -> Bool {
-        let pa = a.split(separator: ".").map { Int($0.prefix(while: \.isNumber)) ?? 0 }
-        let pb = b.split(separator: ".").map { Int($0.prefix(while: \.isNumber)) ?? 0 }
-        for i in 0..<max(pa.count, pb.count) {
-            let x = i < pa.count ? pa[i] : 0, y = i < pb.count ? pb[i] : 0
-            if x != y { return x > y }
-        }
-        return false
-    }
+    func isNewer(_ a: String, than b: String) -> Bool { VersionCompare.isNewer(a, than: b) }
+
     func testCompare() {
         XCTAssertTrue(isNewer("0.4.1", than: "0.4.0"))
         XCTAssertTrue(isNewer("1.0", than: "0.9.9"))

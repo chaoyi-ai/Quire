@@ -184,13 +184,15 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
 
     // MARK: - 根目录 / 当前文档
 
+    /// 空态 / 树 的显示只由"有没有根目录"决定（以前只在 currentURL 变化时切，未命名文档设了根目录仍显示"存储后显示"）
+    private func updateEmptyState() {
+        let hasRoot = rootURL != nil
+        emptyLabel.isHidden = hasRoot; scrollView.isHidden = !hasRoot; pathControl.isHidden = !hasRoot
+    }
+
     private func currentURLDidChange() {
         guard outlineView != nil else { return }
-        guard let url = currentURL else {
-            if rootURL == nil { emptyLabel.isHidden = false; scrollView.isHidden = true; pathControl.isHidden = true }
-            return
-        }
-        emptyLabel.isHidden = true; scrollView.isHidden = false; pathControl.isHidden = false
+        guard let url = currentURL else { updateEmptyState(); return }
         let folder = url.deletingLastPathComponent()
         // 根目录未设置，或当前文档不在根目录下 → 根 = 文档所在目录
         if rootURL == nil || !url.standardizedFileURL.path.hasPrefix(rootURL!.standardizedFileURL.path + "/") {
@@ -211,8 +213,9 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     }
 
     private func rootDidChange() {
-        guard outlineView != nil, let root = rootURL else { return }
+        guard outlineView != nil, let root = rootURL else { updateEmptyState(); return }
         pathControl.url = root
+        updateEmptyState()
         rootNode = SidebarNode(kind: .folder, url: root, name: root.lastPathComponent, parent: nil)
         currentFileNode = nil
         sectionNodes = [:]; seenSections = []; tagStore = nil; tagToken = nil

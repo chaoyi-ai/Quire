@@ -45,7 +45,7 @@ final class Preferences: ObservableObject {
     @Published var linkUnderline: Bool { didSet { d.set(linkUnderline, forKey: Key.linkUnderline); ThemeManager.shared.refresh() } }
     @Published var autoReload: Bool { didSet { d.set(autoReload, forKey: Key.autoReload); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var editorLineNumbers: Bool { didSet { d.set(editorLineNumbers, forKey: Key.editorLineNumbers); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
-    @Published var largeFileThresholdMB: Int { didSet { d.set(largeFileThresholdMB, forKey: Key.largeFileMB) } }
+    @Published var largeFileThresholdMB: Int { didSet { d.set(largeFileThresholdMB, forKey: Key.largeFileMB); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var showWordCount: Bool { didSet { d.set(showWordCount, forKey: Key.wordCount); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var editorHangingMarkers: Bool { didSet { d.set(editorHangingMarkers, forKey: Key.hangingMarkers); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var convertHTMLOnPaste: Bool { didSet { d.set(convertHTMLOnPaste, forKey: Key.htmlPaste); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
@@ -297,7 +297,16 @@ struct PreferencesView: View {
                     ForEach([60, 72, 80, 100], id: \.self) { Text(String(format: L("%d 字符"), $0)).tag($0) }
                 }
                 HStack {
-                    Button(L("下载 iA Writer 字体…")) { IAFonts.download { installed in fontMessage = installed ? L("已安装到 ~/Library/Fonts，可在上面选择 iA Writer Mono / Duo / Quattro") : L("下载失败，请检查网络") } }
+                    Button(L("下载 iA Writer 字体…")) {
+                        IAFonts.download { result in
+                            switch result {
+                            case .success: fontMessage = L("已安装到 ~/Library/Fonts，可在上面选择 iA Writer Mono / Duo / Quattro")
+                            case .failure(.network(let m)): fontMessage = String(format: L("下载失败（网络）：%@"), m)
+                            case .failure(.mismatch(let f)): fontMessage = String(format: L("下载失败：%@ 校验不符（上游文件变了，请升级 Quire）"), f)
+                            case .failure(.write(let m)): fontMessage = String(format: L("安装失败：%@"), m)
+                            }
+                        }
+                    }
                         .disabled(IAFonts.isInstalled)
                     Text(IAFonts.isInstalled ? L("iA Writer Mono / Duo / Quattro 已安装") : fontMessage).font(.caption).foregroundStyle(.secondary)
                 }
