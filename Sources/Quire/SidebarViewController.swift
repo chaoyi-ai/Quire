@@ -165,8 +165,12 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         outlineView.reloadData()
         loadChildren(of: rootNode!) { [weak self] in self?.revealCurrentFile() }
         watcher = FolderWatcher(url: root) { [weak self] dirs in
-            Task { @MainActor [weak self] in self?.foldersDidChange(dirs) }
+            Task { @MainActor [weak self] in
+                self?.foldersDidChange(dirs)
+                if let r = self?.rootURL { FileIndex.index(for: r).directoriesChanged() }   // 快速打开索引共用这一条 FSEvents 流
+            }
         }
+        _ = FileIndex.index(for: root)   // 预热：打开文件夹时就开始后台扫
     }
 
     @objc private func pathChanged(_ sender: NSPathControl) {

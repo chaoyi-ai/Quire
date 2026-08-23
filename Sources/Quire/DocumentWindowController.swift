@@ -328,6 +328,12 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         }
     }
 
+    /// 快速打开 ⌘P：侧栏根目录（没有则文档所在目录）里模糊匹配文件名
+    @objc func quickOpen(_ sender: Any?) {
+        guard let root = sidebarViewController.rootURL ?? markdownDocument?.fileURL?.deletingLastPathComponent() else { NSSound.beep(); return }
+        QuickOpenPanel.present(for: root, over: window) { url in FileOpener.open([url]) }
+    }
+
     @objc func revealInSidebar(_ sender: Any?) {
         if splitViewController.splitViewItems.first?.isCollapsed == true { toggleSidebar(nil) }
         sidebarViewController.revealCurrent()

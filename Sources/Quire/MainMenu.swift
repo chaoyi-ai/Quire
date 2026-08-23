@@ -33,6 +33,7 @@ enum MainMenu {
         file.addItem(withTitle: L("打开…"), action: #selector(NSDocumentController.openDocument(_:)), keyEquivalent: "o")
         let openFolder = file.addItem(withTitle: L("在侧栏打开文件夹…"), action: #selector(DocumentWindowController.chooseSidebarFolder(_:)), keyEquivalent: "O")
         openFolder.keyEquivalentModifierMask = [.command, .shift]
+        file.addItem(withTitle: L("快速打开…"), action: #selector(DocumentWindowController.quickOpen(_:)), keyEquivalent: "p")
         let recent = NSMenu(title: L("打开最近使用"))
         let recentItem = file.addItem(withTitle: L("打开最近使用"), action: nil, keyEquivalent: "")
         recentItem.submenu = recent
@@ -51,7 +52,8 @@ enum MainMenu {
         file.addItem(withTitle: L("重新载入"), action: #selector(Handler.reload(_:)), keyEquivalent: "r").target = Handler.shared
         file.addItem(withTitle: L("在 Finder 中显示"), action: #selector(Handler.revealInFinder(_:)), keyEquivalent: "").target = Handler.shared
         file.addItem(.separator())
-        file.addItem(withTitle: L("打印…"), action: #selector(NSDocument.printDocument(_:)), keyEquivalent: "p")
+        let print = file.addItem(withTitle: L("打印…"), action: #selector(NSDocument.printDocument(_:)), keyEquivalent: "p")
+        print.keyEquivalentModifierMask = [.command, .option]   // ⌘P 让给快速打开
         main.addItem(withTitle: L("文件"), action: nil, keyEquivalent: "").submenu = file
 
         // Edit
