@@ -86,7 +86,13 @@ public struct MarkdownParser: Sendable {
         }
         cmark_parser_free(parser)
 
-        // 大纲
+        let outline = Self.makeOutline(blocks)
+        if options.toc { Self.expandTOC(&blocks, outline: outline) }
+        return Document(blocks: blocks, outline: outline)
+    }
+
+    /// 大纲：顶层标题 → 条目（块索引 + 行号）
+    public static func makeOutline(_ blocks: [Block]) -> Outline {
         var entries: [Outline.Entry] = []
         for (i, b) in blocks.enumerated() {
             if case .heading(let level, let inlines, let id) = b.kind {
@@ -94,9 +100,7 @@ public struct MarkdownParser: Sendable {
                                      blockIndex: i, line: b.sourceRange?.start.line))
             }
         }
-        let outline = Outline(entries: entries)
-        if options.toc { Self.expandTOC(&blocks, outline: outline) }
-        return Document(blocks: blocks, outline: outline)
+        return Outline(entries: entries)
     }
 
     /// `[TOC]` 段落 → 嵌套的链接列表（只含 `[TOC]` 之外的标题；层级按标题级别相对缩进）

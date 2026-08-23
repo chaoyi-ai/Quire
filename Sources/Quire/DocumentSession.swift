@@ -31,6 +31,31 @@ final class DocumentSession {
     private var parser = MarkdownParser(options: Preferences.shared.parserOptions)
     nonisolated(unsafe) private var prefsObserver: NSObjectProtocol?
 
+    /// 内容块 `![[file]]` 的根目录（窗口把侧栏根目录给进来；没有则文档所在目录）
+    var transclusionRoot: (() -> URL?)?
+    private var transclusionEnabled = Preferences.shared.transclusion
+    /// 被内联的文件：改了就重解析
+    private var includeWatchers: [String: FileWatcher] = [:]
+
+    private func transclusionLoader() -> Transclusion.Loader? {
+        guard transclusionEnabled, source.utf8.contains(0x21), source.contains("![[") else { return nil }
+        guard let root = transclusionRoot?() ?? document?.fileURL?.deletingLastPathComponent() else { return nil }
+        return TransclusionLoader.make(root: root, document: document?.fileURL)
+    }
+
+    private func watchIncludes(_ paths: [String]) {
+        let keep = Set(paths.prefix(32))
+        for k in includeWatchers.keys where !keep.contains(k) { includeWatchers[k] = nil }
+        for p in keep where includeWatchers[p] == nil {
+            includeWatchers[p] = FileWatcher(url: URL(fileURLWithPath: p)) { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.sourceDidChange(self.source, reason: .externalChange)
+                }
+            }
+        }
+    }
+
     init(document: MarkdownDocument) {
         self.document = document
         self.style = ThemeManager.shared.currentStyle
@@ -41,8 +66,10 @@ final class DocumentSession {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 let o = Preferences.shared.parserOptions
-                if o.math != self.parser.options.math || o.toc != self.parser.options.toc || o.smartPunctuation != self.parser.options.smartPunctuation || o.extendedInline != self.parser.options.extendedInline {   // 解析选项变了：重解析
+                let t = Preferences.shared.transclusion
+                if o.math != self.parser.options.math || o.toc != self.parser.options.toc || o.smartPunctuation != self.parser.options.smartPunctuation || o.extendedInline != self.parser.options.extendedInline || t != self.transclusionEnabled {   // 解析选项变了：重解析
                     self.parser = MarkdownParser(options: o)
+                    self.transclusionEnabled = t
                     self.sourceDidChange(self.source, reason: .externalChange)
                 }
             }
@@ -105,9 +132,12 @@ final class DocumentSession {
         let renderer = DocumentRenderer(style: effectiveStyle())
         let previous = rendered
         let src = newSource
+        let loader = transclusionLoader()
+        let docPath = document?.fileURL?.path
         if reason == .opened, src.utf8.count <= Self.syncRenderThreshold {
             // 同步路径：窗口首帧就带内容
-            let doc = parser.parse(src)
+            var doc = parser.parse(src)
+            if let loader { let r = Transclusion.expand(doc, parser: parser, fromPath: docPath, loader: loader); doc = r.document; watchIncludes(r.includedPaths) }
             let out = renderer.render(doc)
             parsed = doc
             rendered = out
@@ -121,7 +151,9 @@ final class DocumentSession {
         Task.detached(priority: .userInitiated) { [weak self] in
             let sp = OSSignpostID(log: perfLog)
             os_signpost(.begin, log: perfLog, name: "parse+render", signpostID: sp, "%d bytes", src.utf8.count)
-            let doc = parser.parse(src)
+            var doc = parser.parse(src)
+            var includes: [String] = []
+            if let loader { let r = Transclusion.expand(doc, parser: parser, fromPath: docPath, loader: loader); doc = r.document; includes = r.includedPaths }
             let out: RenderedDocument
             var diff: BlockDiff? = nil
             if let previous, reason == .externalChange || reason == .edited {
@@ -141,6 +173,7 @@ final class DocumentSession {
                 LaunchClock.mark("publish to UI")
                 self.parsed = doc
                 self.rendered = out
+                self.watchIncludes(includes)
                 self.onRendered?(out, renderer.style, reason, d)
                 self.onOutline?(doc.outline)
                 self.stats = st

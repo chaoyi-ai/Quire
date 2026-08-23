@@ -42,6 +42,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         window.isReleasedWhenClosed = false
         super.init(window: window)
         LaunchClock.mark("  wc: window")
+        session.transclusionRoot = { [weak self] in self?.sidebarViewController.rootURL }
         // 注意：不要在这里 self.document = document —— NSDocument.addWindowController 会因"已关联"而跳过登记
         window.delegate = self
 

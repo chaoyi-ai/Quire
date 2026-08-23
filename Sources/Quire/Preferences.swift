@@ -28,6 +28,7 @@ final class Preferences: ObservableObject {
         static let readerFontSize = "reader.baseFontSize"
         static let math = "parser.math"
         static let toc = "parser.toc"
+        static let transclusion = "parser.transclusion"
         static let smart = "parser.smartPunctuation"
         static let headingNumbers = "render.headingNumbers"
         static let formatToolbar = "editor.formatToolbar"
@@ -58,6 +59,7 @@ final class Preferences: ObservableObject {
 
     @Published var mathEnabled: Bool { didSet { d.set(mathEnabled, forKey: Key.math); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var tocEnabled: Bool { didSet { d.set(tocEnabled, forKey: Key.toc); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    @Published var transclusion: Bool { didSet { d.set(transclusion, forKey: Key.transclusion); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var smartPunctuation: Bool { didSet { d.set(smartPunctuation, forKey: Key.smart); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var headingNumbers: Bool { didSet { d.set(headingNumbers, forKey: Key.headingNumbers); ThemeManager.shared.refresh() } }
     @Published var checkForUpdates: Bool { didSet { d.set(checkForUpdates, forKey: Key.updates) } }
@@ -108,6 +110,7 @@ final class Preferences: ObservableObject {
         readerBaseFontSize = d.integer(forKey: Key.readerFontSize)
         mathEnabled = d.bool(forKey: Key.math)
         tocEnabled = d.bool(forKey: Key.toc)
+        transclusion = d.bool(forKey: Key.transclusion)
         smartPunctuation = d.bool(forKey: Key.smart)
         headingNumbers = d.bool(forKey: Key.headingNumbers)
         formatToolbar = d.bool(forKey: Key.formatToolbar)
@@ -248,6 +251,7 @@ struct PreferencesView: View {
                 }
                 Toggle(L("数学公式（$$…$$ 块与 $…$ 行内，LaTeX）"), isOn: $prefs.mathEnabled)
                 Toggle(L("[TOC] 展开为目录"), isOn: $prefs.tocEnabled)
+                Toggle(L("内容块：独占一行的 ![[文件]] 展开为该文件内容（.md / .csv / 图片）"), isOn: $prefs.transclusion)
                 Toggle(L("标题自动编号（1 / 1.1 / 1.1.1）"), isOn: $prefs.headingNumbers)
                 Toggle(L("智能标点（弯引号、破折号、省略号）"), isOn: $prefs.smartPunctuation)
             }

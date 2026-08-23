@@ -208,3 +208,4 @@
 "标签" = "Tags";
 "从收藏移除" = "Remove from Favorites";
 "加入收藏" = "Add to Favorites";
+"内容块：独占一行的 ![[文件]] 展开为该文件内容（.md / .csv / 图片）" = "Content blocks: a line with only ![[file]] expands to that file (.md / .csv / images)";
