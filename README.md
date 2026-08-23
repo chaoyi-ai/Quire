@@ -91,9 +91,9 @@ open Package.swift             # 用 Xcode 开发
 | ✅ M2 表格 + Mermaid | 原生表格、Mermaid 离屏渲染 + 缓存 |
 | ✅ M3 编辑器 | 源码编辑、分栏同步预览、增量渲染 |
 | ✅ M4 性能与打磨 | 基准门禁、启动优化、大文件模式、设置、导出、0.1 发布 |
-| M5 可视化编辑 | 行内实时预览、数学、本地化、1.0 |
-| M6 写作工作台 | 对标 Typora：表格 / 图片就地编辑、快速打开、全局搜索、字数、剪贴板互通（[调研](docs/research/typora.md)） |
-| M7 写作环境与文本智能 | 对标 iA Writer：沉浸 / Focus、词性高亮、文风检查、著作归属、Wikilinks、内容块（[调研](docs/research/ia-writer.md)） |
+| M5 1.0 发布 | 本地化、数学、可访问性、快速打开 / 全局搜索 / 字数 / 剪贴板、沉浸 / Focus、公证 + Homebrew |
+| M6 混合实时预览与就地编辑 | 对标 Typora：spike 验证 → 行内实时预览、表格 / 图片 / 数学就地编辑、扩展语法、CLI（[调研](docs/research/typora.md)） |
+| M7 文本智能与组织 | 对标 iA Writer：词性高亮、文风检查、著作归属、Wikilinks / 标签、内容块、PDF 排版（[调研](docs/research/ia-writer.md)） |
 
 详见 [docs/ROADMAP.md](docs/ROADMAP.md) 与 [GitHub Milestones](https://github.com/chaoyi-ai/Quire/milestones)。
 

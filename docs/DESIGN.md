@@ -19,7 +19,7 @@
 | G3 | 原生 | AppKit + TextKit 2；系统外观/字体/滚动/辅助功能/查找/打印全部原生 |
 | G4 | 完整 | CommonMark + GFM（表格、任务列表、删除线、自动链接、脚注）+ 代码高亮 + Mermaid + 数学（后期） |
 | G5 | 多主题 | 主题即数据（JSON），内置 8+ 套，支持用户主题、跟随系统明暗、热切换不重解析 |
-| G6 | 可编辑 | 源码编辑 + 分栏实时预览（M3）；行内可视化编辑（M5） |
+| G6 | 可编辑 | 源码编辑 + 分栏实时预览（M3）；行内可视化编辑（M6，先 spike） |
 | G7 | 开源 | MIT；纯 SwiftPM，`swift build` 即可编译；无私有依赖 |
 
 ### 非目标（至少 1.0 之前）
@@ -28,7 +28,7 @@
 - 不做云同步 / 账号
 - 不做插件系统（先把内核做扎实；主题是唯一扩展点）
 - 不做 Windows / Linux（原生是有代价的，我们付这个代价）
-- 不做完整 WYSIWYG（Typora 式）——M5 只做"行内实时预览"，M6 在其上补表格 / 图片 / 数学的就地编辑（见 `docs/research/typora.md`），M7 补 iA Writer 式的写作环境与本地文本智能（见 `docs/research/ia-writer.md`），仍不追求所见即所得的完备性
+- 不做完整 WYSIWYG（Typora 式）——M6 先 spike 验证再做"行内实时预览"与表格 / 图片 / 数学的就地编辑（见 `docs/research/typora.md`），M7 补 iA Writer 式的本地文本智能与组织（见 `docs/research/ia-writer.md`），写作环境（沉浸 / Focus）提前到 M5；仍不追求所见即所得的完备性
 - 不用 WebView 渲染正文（Mermaid 是唯一例外，且被严格隔离）
 
 ## 3. 关键技术决策（ADR 摘要）
@@ -197,7 +197,7 @@ enum Block: Hashable {
 
 原生 `NSTextFinder`（TextKit 2 支持）；附件内文本（表格）不可查找 —— 已知限制，M4 评估把表格文本镜像成隐藏可查找文本。
 
-## 7. 编辑器设计（M3 / M5）
+## 7. 编辑器设计（M3 / M6）
 
 ### M3 源码编辑器
 - `NSTextView`（TextKit 2）+ 增量 Markdown 高亮（按段落重高亮，`QuireCore.MarkdownLexer`）。
@@ -205,7 +205,7 @@ enum Block: Hashable {
 - 同步滚动、保存、自动保存（`NSDocument` 原生）、撤销、行号、当前行高亮、软换行。
 - 输入辅助：列表续行、代码围栏自动闭合、Tab 缩进、粗体/斜体/链接快捷键、表格格式化。
 
-### M5 行内实时预览（"可视化编辑"）
+### M6 行内实时预览（"可视化编辑"，先 spike 后实现）
 - 单栏；光标所在块显示源码，其余块显示渲染结果（Obsidian Live Preview 模式）。
 - 复用 M1 渲染器与 M3 高亮器，用同一份 `Document`；不写第二套渲染。
 
