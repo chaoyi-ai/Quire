@@ -354,3 +354,27 @@ final class TableAssistTests: XCTestCase {
         XCTAssertEqual(e.source, "plain  ")
     }
 }
+
+@MainActor
+final class FormatActionTests: XCTestCase {
+    func testHeadingQuoteListToggles() {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let e = EditorTextView(style: RenderStyle(theme: theme))
+        e.setSource("标题行\n第二行\n")
+        e.setSelectedRange(NSRange(location: 0, length: 0))
+        e.setHeading2(nil)
+        XCTAssertEqual(e.source, "## 标题行\n第二行\n")
+        e.setHeading2(nil)   // 再按一次去掉
+        XCTAssertEqual(e.source, "标题行\n第二行\n")
+        e.setSelectedRange(NSRange(location: 0, length: 7))   // 两行
+        e.toggleQuote(nil)
+        XCTAssertEqual(e.source, "> 标题行\n> 第二行\n")
+        e.toggleQuote(nil)
+        XCTAssertEqual(e.source, "标题行\n第二行\n")
+        e.toggleBulletList(nil)
+        XCTAssertEqual(e.source, "- 标题行\n- 第二行\n")
+        e.setSelectedRange(NSRange(location: 2, length: 3))
+        e.toggleStrikethrough(nil)
+        XCTAssertEqual(e.source, "- ~~标题行~~\n- 第二行\n")
+    }
+}

@@ -45,6 +45,7 @@ final class EditorViewController: NSViewController {
         textView.hangingMarkers = Preferences.shared.editorHangingMarkers
         textView.convertsHTMLOnPaste = Preferences.shared.convertHTMLOnPaste
         textView.typography = Preferences.shared.editorTypography
+        textView.showsFormatToolbar = Preferences.shared.formatToolbar
         let container = NSView(frame: scrollView.frame)
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(scrollView)
@@ -61,6 +62,7 @@ final class EditorViewController: NSViewController {
                 self?.textView.hangingMarkers = Preferences.shared.editorHangingMarkers
                 self?.textView.convertsHTMLOnPaste = Preferences.shared.convertHTMLOnPaste
                 self?.textView.typography = Preferences.shared.editorTypography
+                self?.textView.showsFormatToolbar = Preferences.shared.formatToolbar
             }
         }
 
@@ -77,6 +79,7 @@ final class EditorViewController: NSViewController {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.ruler.needsDisplay = true
+                self.textView.updateFormatToolbar()
                 self.onScroll?(self.textView.topVisibleLine())
             }
         }

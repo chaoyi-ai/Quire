@@ -30,6 +30,7 @@ final class Preferences: ObservableObject {
         static let toc = "parser.toc"
         static let smart = "parser.smartPunctuation"
         static let headingNumbers = "render.headingNumbers"
+        static let formatToolbar = "editor.formatToolbar"
         static let extHighlight = "parser.ext.highlight", extSub = "parser.ext.subscript", extSup = "parser.ext.superscript", extUnderline = "parser.ext.underline", extEmoji = "parser.ext.emoji"
         static let updates = "update.check"
         static let sidebarHidden = "sidebar.showHidden"
@@ -68,6 +69,7 @@ final class Preferences: ObservableObject {
     /// 侧栏过滤规则快照（给后台目录扫描用）
     struct SidebarRules: Sendable, Equatable { var showHidden: Bool; var showOthers: Bool; var extraExtensions: Set<String> }
     var sidebarRules: SidebarRules { SidebarRules(showHidden: sidebarShowHidden, showOthers: sidebarShowOtherFiles, extraExtensions: extraExtensionSet) }
+    @Published var formatToolbar: Bool { didSet { d.set(formatToolbar, forKey: Key.formatToolbar); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var extHighlight: Bool { didSet { d.set(extHighlight, forKey: Key.extHighlight); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var extSubscript: Bool { didSet { d.set(extSubscript, forKey: Key.extSub); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var extSuperscript: Bool { didSet { d.set(extSuperscript, forKey: Key.extSup); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
@@ -87,7 +89,7 @@ final class Preferences: ObservableObject {
     static let didChange = Notification.Name("com.korako.quire.preferencesDidChange")
 
     private init() {
-        d.register(defaults: [Key.codeCopyButton: true, Key.autoReload: true, Key.editorLineNumbers: true, Key.largeFileMB: 8, Key.wordCount: true, Key.hangingMarkers: true, Key.htmlPaste: true, Key.editorLineHeight: 1.35, Key.math: true, Key.updates: true, Key.toc: true])
+        d.register(defaults: [Key.codeCopyButton: true, Key.autoReload: true, Key.editorLineNumbers: true, Key.largeFileMB: 8, Key.wordCount: true, Key.hangingMarkers: true, Key.htmlPaste: true, Key.editorLineHeight: 1.35, Key.math: true, Key.updates: true, Key.toc: true, Key.formatToolbar: true])
         codeLineNumbers = d.bool(forKey: Key.codeLineNumbers)
         codeCopyButton = d.bool(forKey: Key.codeCopyButton)
         linkUnderline = d.bool(forKey: Key.linkUnderline)
@@ -108,6 +110,7 @@ final class Preferences: ObservableObject {
         tocEnabled = d.bool(forKey: Key.toc)
         smartPunctuation = d.bool(forKey: Key.smart)
         headingNumbers = d.bool(forKey: Key.headingNumbers)
+        formatToolbar = d.bool(forKey: Key.formatToolbar)
         extHighlight = d.bool(forKey: Key.extHighlight); extSubscript = d.bool(forKey: Key.extSub); extSuperscript = d.bool(forKey: Key.extSup)
         extUnderline = d.bool(forKey: Key.extUnderline); extEmoji = d.bool(forKey: Key.extEmoji)
         checkForUpdates = d.bool(forKey: Key.updates)
@@ -291,6 +294,7 @@ struct PreferencesView: View {
                 Toggle(L("显示行号"), isOn: $prefs.editorLineNumbers)
                 Toggle(L("标记出挑（# - > 1. 悬挂到左边距，正文左缘对齐）"), isOn: $prefs.editorHangingMarkers)
                 Toggle(L("粘贴网页 / 富文本时自动转成 Markdown（⇧⌘V 粘纯文本）"), isOn: $prefs.convertHTMLOnPaste)
+                Toggle(L("选中文字时显示浮动格式工具条"), isOn: $prefs.formatToolbar)
             }
         }
         .formStyle(.grouped)

@@ -367,6 +367,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     public override func didChangeText() {
         super.didChangeText()
         onTextChange?()
+        updateFormatToolbar()
         if focusMode != .off {
             applyFocusDim()
             if focusMode == .typewriter { centerCaretLine() }
@@ -386,6 +387,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
 
     public override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        if !stillSelecting { updateFormatToolbar() } else { formatToolbar?.isHidden = true }
         guard focusMode != .off, !stillSelecting else { return }
         applyFocusDim()
         if focusMode == .typewriter, selectionFromKeyboard { centerCaretLine() }
@@ -447,6 +449,11 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     /// 浏览器 / Word 复制出来的 HTML 才转；纯文本编辑器有时也塞 HTML 包一层 <pre>，那种不转
     static func looksLikeRichHTML(_ html: String) -> Bool {
         html.range(of: "<(p|h[1-6]|ul|ol|table|strong|em|a|img|blockquote|li|b|i)(\\s|>|/)", options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    public override func resignFirstResponder() -> Bool {
+        formatToolbar?.isHidden = true
+        return super.resignFirstResponder()
     }
 
     public override func cancelOperation(_ sender: Any?) {
@@ -800,6 +807,82 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         setSelectedRange(NSRange(location: sel.location + text.utf16.count + 3, length: 3))
     }
     @objc public func toggleInlineCode(_ sender: Any?) { wrapSelection(prefix: "`", suffix: "`", placeholder: "code") }
+    @objc public func toggleStrikethrough(_ sender: Any?) { wrapSelection(prefix: "~~", suffix: "~~") }
+    @objc public func setHeading1(_ sender: Any?) { setHeadingLevel(1) }
+    @objc public func setHeading2(_ sender: Any?) { setHeadingLevel(2) }
+    @objc public func setHeading3(_ sender: Any?) { setHeadingLevel(3) }
+    @objc public func toggleQuote(_ sender: Any?) { toggleLinePrefix("> ", pattern: "^(\\s*)>\\s?") }
+    @objc public func toggleBulletList(_ sender: Any?) { toggleLinePrefix("- ", pattern: "^(\\s*)[-*+]\\s+") }
+
+    /// 选区所在各行：设为 n 级标题（已是该级 → 去掉标记）
+    public func setHeadingLevel(_ n: Int) {
+        guard let ns = textStorage?.string as NSString? else { return }
+        let lines = ns.lineRange(for: selectedRange())
+        var out: [String] = []
+        let prefix = String(repeating: "#", count: n) + " "
+        ns.substring(with: lines).enumerateLines { line, _ in
+            let stripped = line.replacingOccurrences(of: "^#{1,6}\\s+", with: "", options: .regularExpression)
+            out.append(line.hasPrefix(prefix) ? stripped : prefix + stripped)
+        }
+        let text = out.joined(separator: "\n") + (ns.substring(with: lines).hasSuffix("\n") ? "\n" : "")
+        if shouldChangeText(in: lines, replacementString: text) { insertText(text, replacementRange: lines); didChangeText() }
+        setSelectedRange(NSRange(location: lines.location, length: (text as NSString).length - (text.hasSuffix("\n") ? 1 : 0)))
+    }
+
+    /// 选区所在各行加 / 去行首标记（引用、列表）
+    private func toggleLinePrefix(_ prefix: String, pattern: String) {
+        guard let ns = textStorage?.string as NSString? else { return }
+        let lines = ns.lineRange(for: selectedRange())
+        var src: [String] = []
+        ns.substring(with: lines).enumerateLines { line, _ in src.append(line) }
+        let allHave = !src.isEmpty && src.allSatisfy { $0.range(of: pattern, options: .regularExpression) != nil }
+        let out = src.map { line -> String in
+            allHave ? line.replacingOccurrences(of: pattern, with: "$1", options: .regularExpression) : prefix + line
+        }
+        let text = out.joined(separator: "\n") + (ns.substring(with: lines).hasSuffix("\n") ? "\n" : "")
+        if shouldChangeText(in: lines, replacementString: text) { insertText(text, replacementRange: lines); didChangeText() }
+        setSelectedRange(NSRange(location: lines.location, length: (text as NSString).length - (text.hasSuffix("\n") ? 1 : 0)))
+    }
+
+    /// 选区第一行在本视图坐标里的矩形（浮动工具条定位用）
+    public func firstLineRect(for range: NSRange) -> NSRect? {
+        guard let tlm = textLayoutManager, let cs = textContentStorage,
+              let loc = cs.location(cs.documentRange.location, offsetBy: range.location) else { return nil }
+        var frag: NSTextLayoutFragment?
+        tlm.enumerateTextLayoutFragments(from: loc, options: [.ensuresLayout]) { f in frag = f; return false }
+        guard let frag else { return nil }
+        let rel = range.location - cs.offset(from: cs.documentRange.location, to: frag.rangeInElement.location)
+        var r = frag.layoutFragmentFrame
+        for line in frag.textLineFragments where rel >= line.characterRange.location && rel <= line.characterRange.location + line.characterRange.length {
+            r = CGRect(x: frag.layoutFragmentFrame.minX + line.typographicBounds.minX, y: frag.layoutFragmentFrame.minY + line.typographicBounds.minY, width: line.typographicBounds.width, height: line.typographicBounds.height)
+            break
+        }
+        return r.offsetBy(dx: textContainerInset.width, dy: textContainerInset.height)
+    }
+
+    // MARK: - 浮动格式工具条
+    private var formatToolbar: FormatToolbar?
+    /// 开关（设置）；挂到滚动视图上
+    public var showsFormatToolbar = true { didSet { if !showsFormatToolbar { formatToolbar?.isHidden = true } else { updateFormatToolbar() } } }
+    public func updateFormatToolbar() {
+        guard showsFormatToolbar, let sv = enclosingScrollView else { formatToolbar?.isHidden = true; return }
+        if formatToolbar == nil {
+            let t = FormatToolbar(editor: self)
+            sv.addSubview(t, positioned: .above, relativeTo: nil)
+            formatToolbar = t
+        }
+        formatToolbar?.update()
+    }
+
+    public override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        guard selectedRange().length > 0 else { return menu }
+        menu.insertItem(.separator(), at: 0)
+        let items: [(String, Selector)] = [(RL("列表"), #selector(toggleBulletList(_:))), (RL("引用"), #selector(toggleQuote(_:))), ("H3", #selector(setHeading3(_:))), ("H2", #selector(setHeading2(_:))), ("H1", #selector(setHeading1(_:))),
+                                           (RL("链接"), #selector(insertLink(_:))), (RL("行内代码"), #selector(toggleInlineCode(_:))), (RL("删除线"), #selector(toggleStrikethrough(_:))), (RL("斜体"), #selector(toggleItalic(_:))), (RL("粗体"), #selector(toggleBold(_:)))]
+        for (title, sel) in items { let it = NSMenuItem(title: title, action: sel, keyEquivalent: ""); it.target = self; menu.insertItem(it, at: 0) }
+        return menu
+    }
 
     public override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command, let ch = event.charactersIgnoringModifiers {

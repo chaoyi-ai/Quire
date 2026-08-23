@@ -188,3 +188,4 @@
 "图片已截断" = "Image truncated";
 "文档太长，只导出了前 %d 像素高度。" = "The document is too long; only the first %d pixels were exported.";
 "格式化表格" = "Format Table";
+"选中文字时显示浮动格式工具条" = "Show floating format bar when text is selected";
