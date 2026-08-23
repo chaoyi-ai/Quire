@@ -27,8 +27,12 @@ rm -f "$ZIP"
 (cd dist && ditto -c -k --keepParent Quire.app "Quire-$VERSION.zip")
 shasum -a 256 "$ZIP" | tee "dist/Quire-$VERSION.zip.sha256"
 
+# Homebrew cask：版本号与 sha256 跟着走（放到 tap 仓库后 brew 才能用）
+SHA=$(shasum -a 256 "$ZIP" | cut -d' ' -f1)
+sed -i '' -E "s/^  version \".*\"/  version \"$VERSION\"/; s/^  sha256 .*/  sha256 \"$SHA\"/" Casks/quire.rb
+
 echo "▸ 提交版本号 + 打 tag"
-git add assets/Info.plist
+git add assets/Info.plist Casks/quire.rb
 git commit -qm "release: $VERSION" || true
 git tag -a "v$VERSION" -m "Quire $VERSION"
 git push -q origin main --tags

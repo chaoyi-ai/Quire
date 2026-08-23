@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 命令行里的文件路径由 AppKit 自动转成 open 事件（application(_:open:)），这里不再重复打开
         // 延迟做非关键初始化：用户主题目录监听（首帧之后）
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { ThemeManager.shared.startWatchingUserThemes() }
+        UpdateChecker.checkOnLaunchIfDue()
         if let path = ProcessInfo.processInfo.environment["QUIRE_EXPORT_PDF"] {
             // 调试 / 脚本：首个文档渲染后导出 PDF 并退出
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {

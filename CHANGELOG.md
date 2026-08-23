@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1 — 2026-08-23
+
+- 新增：检查更新（#54）。Quire 菜单「检查更新…」，以及每天一次在启动 8 秒后后台比对 GitHub Releases（只读 API，不上传任何信息）；有新版时提示前往下载 / 跳过此版本 / 以后再说；设置 → 语言 区可关闭。
+- 新增：Homebrew cask 定义 `Casks/quire.rb`，发布脚本自动更新版本与 sha256（建 tap 仓库后即可 `brew install --cask quire`；公证前需去 quarantine）。
+
 ## 0.4.0 — 2026-08-23
 
 - 新增：数学公式（#51，#83 spike → SwiftMath）。`$$ … $$` 块级公式居中渲染，`$…$` 行内公式按基线对齐（Pandoc 规则，`$2 和 $3` 这种钱不算）；也认 GitLab 风格的 ```math 围栏。原生 CoreText 绘制（Latin Modern Math），不用 WebView；渲染失败显示源码与错误；大文件模式不渲染；导出 HTML 交给 MathJax；设置 → 阅读 可关闭。App 体积 7.0 → 8.9 MB（只带一套数学字体）。

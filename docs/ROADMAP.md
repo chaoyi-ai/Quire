@@ -137,8 +137,9 @@
 - [x] 编辑器排版参数：设置 → 编辑：字体（等宽 + 已装 iA Writer）/ 字号 / 行距 / 行宽（60–100 字符，居中成列）；「下载 iA Writer 字体…」从 iaolo/iA-Fonts 取 6 个变量字体到 `~/Library/Fonts`（SHA256 校验、CTFontManager 注册），不随包（#73，0.3.6）
 
 ### 5.4 分发
-- [ ] **公证（Developer ID + notarytool）**：Homebrew cask 的前置，否则 Gatekeeper 直接拦；`scripts/release.sh` 接入（#54）
-- [ ] Homebrew cask、更新检查（可关闭，不用 Sparkle 也可：比对 GitHub Release）（#54）
+- [ ] **公证（Developer ID + notarytool）**：需要 Apple Developer 账号的 Developer ID 证书与 App 专用密码（只有仓库所有者能做）；`scripts/release.sh` 预留接入点（#54，**待所有者提供证书**）
+- [x] 更新检查：Quire 菜单「检查更新…」+ 每天一次启动后 8 s 后台比对 GitHub Releases（只读，不上传；可跳过某版本；设置可关）（#54，0.4.1）
+- [x] Homebrew cask 文件 `Casks/quire.rb`（`release.sh` 自动更新版本与 sha256）；放到 tap 仓库 `chaoyi-ai/homebrew-quire` 后即可 `brew install --cask quire`——未公证前 caveats 提示去 quarantine（#54，0.4.1）
 - [ ] Quick Look 预览扩展（复用 QuireRender；需签名）（#55）
 - [ ] 发布 1.0
 

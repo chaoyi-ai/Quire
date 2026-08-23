@@ -27,6 +27,7 @@ final class Preferences: ObservableObject {
         static let readerCodeFont = "reader.codeFontFamily"
         static let readerFontSize = "reader.baseFontSize"
         static let math = "parser.math"
+        static let updates = "update.check"
     }
 
     @Published var codeLineNumbers: Bool { didSet { d.set(codeLineNumbers, forKey: Key.codeLineNumbers); ThemeManager.shared.refresh() } }
@@ -48,6 +49,7 @@ final class Preferences: ObservableObject {
     @Published var readerBaseFontSize: Int { didSet { d.set(readerBaseFontSize, forKey: Key.readerFontSize); ThemeManager.shared.refresh() } }
 
     @Published var mathEnabled: Bool { didSet { d.set(mathEnabled, forKey: Key.math); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+    @Published var checkForUpdates: Bool { didSet { d.set(checkForUpdates, forKey: Key.updates) } }
     var parserOptions: MarkdownParser.Options { var o = MarkdownParser.Options(); o.math = mathEnabled; return o }
 
     var editorTypography: EditorTypography {
@@ -57,7 +59,7 @@ final class Preferences: ObservableObject {
     static let didChange = Notification.Name("com.korako.quire.preferencesDidChange")
 
     private init() {
-        d.register(defaults: [Key.codeCopyButton: true, Key.autoReload: true, Key.editorLineNumbers: true, Key.largeFileMB: 8, Key.wordCount: true, Key.hangingMarkers: true, Key.htmlPaste: true, Key.editorLineHeight: 1.35, Key.math: true])
+        d.register(defaults: [Key.codeCopyButton: true, Key.autoReload: true, Key.editorLineNumbers: true, Key.largeFileMB: 8, Key.wordCount: true, Key.hangingMarkers: true, Key.htmlPaste: true, Key.editorLineHeight: 1.35, Key.math: true, Key.updates: true])
         codeLineNumbers = d.bool(forKey: Key.codeLineNumbers)
         codeCopyButton = d.bool(forKey: Key.codeCopyButton)
         linkUnderline = d.bool(forKey: Key.linkUnderline)
@@ -75,6 +77,7 @@ final class Preferences: ObservableObject {
         readerCodeFontFamily = d.string(forKey: Key.readerCodeFont) ?? ""
         readerBaseFontSize = d.integer(forKey: Key.readerFontSize)
         mathEnabled = d.bool(forKey: Key.math)
+        checkForUpdates = d.bool(forKey: Key.updates)
     }
 
     var renderOptions: RenderOptions {
@@ -146,6 +149,7 @@ struct PreferencesView: View {
                 if languageChanged {
                     Text(L("重新打开 Quire 后生效")).font(.caption).foregroundStyle(.secondary)
                 }
+                Toggle(L("每天自动检查更新（只读 GitHub Releases，不上传信息）"), isOn: $prefs.checkForUpdates)
             }
             Section(L("外观")) {
                 Picker(L("模式"), selection: $mode) {

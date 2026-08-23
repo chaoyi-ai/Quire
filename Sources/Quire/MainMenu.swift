@@ -11,6 +11,7 @@ enum MainMenu {
         // App
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: L("关于 Quire"), action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: L("检查更新…"), action: #selector(Handler.checkForUpdates(_:)), keyEquivalent: "").target = Handler.shared
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: L("设置…"), action: #selector(Handler.showPreferences(_:)), keyEquivalent: ",").target = Handler.shared
         appMenu.addItem(withTitle: L("打开主题文件夹"), action: #selector(Handler.openThemesFolder(_:)), keyEquivalent: "").target = Handler.shared
@@ -213,7 +214,8 @@ enum MainMenu {
             alert.informativeText = ThemeManager.shared.loadErrors.map { "\(($0.path as NSString).lastPathComponent)：\($0.error)" }.joined(separator: "\n\n")
             alert.runModal()
         }
-        @objc func showPreferences(_ sender: Any?) { PreferencesWindowController.shared.show() }
+        @objc func checkForUpdates(_ sender: Any?) { UpdateChecker.check(userInitiated: true) }
+    @objc func showPreferences(_ sender: Any?) { PreferencesWindowController.shared.show() }
         @objc func exportHTML(_ sender: Any?) {
             guard let doc = NSDocumentController.shared.currentDocument as? MarkdownDocument, let w = doc.windowControllers.first?.window else { return }
             Exporter.exportHTML(document: doc, from: w)
