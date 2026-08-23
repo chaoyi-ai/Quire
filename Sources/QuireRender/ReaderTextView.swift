@@ -92,6 +92,7 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
         lastFittedWidth = contentWidth
         fitAttachmentsToWidth()
         if loadsAttachmentsAutomatically { loadImages() }
+        startProgressiveLayout()
     }
 
     /// 打印 / 导出视图设为 false：不要在 setRendered 里异步起加载，而是 `loadAllAttachmentsForExport()` 等全部就绪
@@ -114,6 +115,7 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
         ts.endEditing()
         self.rendered = doc
         loadImages(blocks: diff.newChanged)
+        startProgressiveLayout()   // 替换过的区域又是估算高度了
     }
 
     public override var isOpaque: Bool { true }
@@ -689,12 +691,70 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
         }
     }
 
-    /// 文档坐标 y 处的顶级块下标
+    /// 文档坐标 y 处的顶级块下标。只信真正排好版的片段：快速滚动时视口里可能还是估算位置，按估算取样会让侧栏高亮跳来跳去——
+    /// 这种情况先把视口排一遍，仍拿不到就返回 nil（调用方保持上一次的值）
     private func blockIndex(atY y: CGFloat) -> Int? {
         guard let rendered, let tlm = textLayoutManager, let cs = textContentStorage else { return nil }
-        guard let frag = tlm.textLayoutFragment(for: CGPoint(x: 0, y: max(0, y - textContainerInset.height))) else { return nil }
+        let point = CGPoint(x: 0, y: max(0, y - textContainerInset.height))
+        var frag = tlm.textLayoutFragment(for: point)
+        if frag?.state != .layoutAvailable {
+            tlm.textViewportLayoutController.layoutViewport()
+            frag = tlm.textLayoutFragment(for: point)
+            guard frag?.state == .layoutAvailable else { return nil }
+        }
+        guard let frag else { return nil }
         let offset = cs.offset(from: cs.documentRange.location, to: frag.rangeInElement.location)
         return rendered.blockIndex(at: offset)
+    }
+
+    // MARK: - 渐进式全文排版
+
+    /// TextKit 2 只排视口附近，其余高度是估算的；快速滚动时估算不断被真实高度替换，文档总高一直变，滚动条就跳来跳去。
+    /// 首帧之后在主线程空闲时按块分批把全文排完（每批几十毫秒，排完滚动条和侧栏取样都稳定）。大文件模式不做。
+    private var progressiveLayoutGeneration = 0
+    public var progressiveLayoutEnabled = true
+    /// 超过这个字符数不做全文排版：排好的片段每 1 MB 文本约占 330 MB 内存（1 MB 文档实测 RSS 90 → 420 MB），
+    /// 200 KB 以内（绝大多数笔记 / 文章）换滚动条稳定值得，再大就只排视口（滚动条会随估算修正而跳）
+    public var progressiveLayoutMaxLength = 200_000
+    public private(set) var isFullyLaidOut = false
+
+    private func startProgressiveLayout() {
+        progressiveLayoutGeneration += 1
+        isFullyLaidOut = false
+        guard progressiveLayoutEnabled, !style.options.largeFile, let rendered, !rendered.blocks.isEmpty, fixedPrintingWidth == nil,
+              rendered.attributed.length <= progressiveLayoutMaxLength else { return }
+        let gen = progressiveLayoutGeneration
+        // 每批的字符数自适应：目标每批 ~12 ms（一帧的一半），不卡输入；排完一批就把 frame 高度推到真实用量
+        // （NSTextView 只在视口排版时自己长高，视口外的 ensureLayout 它不管）
+        var chunk = 16_000
+        var next = 0
+        func step() {
+            guard gen == self.progressiveLayoutGeneration, let tlm = self.textLayoutManager, let cs = self.textContentStorage else { return }
+            let totalLen = cs.offset(from: cs.documentRange.location, to: cs.documentRange.endLocation)
+            guard next < totalLen, let start = cs.location(cs.documentRange.location, offsetBy: next) else { self.finishProgressiveLayout(); return }
+            let endOffset = min(totalLen, next + chunk)
+            let end = cs.location(cs.documentRange.location, offsetBy: endOffset) ?? cs.documentRange.endLocation
+            let t0 = DispatchTime.now().uptimeNanoseconds
+            if let r = NSTextRange(location: start, end: end) { tlm.ensureLayout(for: r) }
+            let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
+            if ms > 20 { chunk = max(2_000, chunk / 2) } else if ms < 6 { chunk = min(128_000, chunk * 2) }
+            next = endOffset
+            self.syncFrameHeightToUsage()
+            if next < totalLen { DispatchQueue.main.async(execute: step) } else { self.finishProgressiveLayout() }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: step)
+    }
+
+    private func finishProgressiveLayout() {
+        isFullyLaidOut = true
+        syncFrameHeightToUsage()
+    }
+
+    /// 把 frame 高度对齐到排版用量（NSTextView 自己的算法：用量高 + 上下 inset）
+    private func syncFrameHeightToUsage() {
+        guard let tlm = textLayoutManager, fixedPrintingWidth == nil else { return }
+        let h = (tlm.usageBoundsForTextContainer.height + textContainerInset.height * 2).rounded(.up)
+        if abs(h - frame.height) > 1 { setFrameSize(NSSize(width: frame.width, height: h)) }
     }
 
     /// 可见区顶部所在的顶级块下标（取样点在留白之下，保证刚滚到的目标块被算作"当前块"）。用于滚动同步 / 位置锚点。

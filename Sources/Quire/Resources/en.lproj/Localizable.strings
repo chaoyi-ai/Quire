@@ -262,3 +262,8 @@
 "（%d 个文件过大或读不了，没有搜）" = "(%d files were too large or unreadable and were not searched)";
 "（文件超过 %d 个，只搜了前面的）" = "(more than %d files; only the first ones were searched)";
 "（命中文件超过 %d 个，只显示前面的）" = "(more than %d matching files; only the first ones are shown)";
+"专注：句子" = "Focus: sentence";
+"专注：段落" = "Focus: paragraph";
+"专注：打字机" = "Focus: typewriter";
+"词性" = "POS";
+"文风" = "Style";

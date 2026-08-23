@@ -20,6 +20,7 @@
 | 字数统计（1 MB，后台，与解析同一趟） | < 5 ms | `quire-bench render`（`stats/large-1mb`） |
 | 全局搜索（1000 个文件 / 50 MB，子串） | 首批结果 < 300 ms，全扫 < 1 s | `ContentSearchTests.testThroughput50MB` |
 | 数学（200 个公式，解析 + 渲染，缓存命中） | < 120 ms（热 ≈ 2 ms） | `quire-bench render`（`render/math-200`） |
+| 渐进式全文排版（滚动条稳定；≤ 200 KB 文档） | 首帧后空闲分批，每批 ≤ 20 ms；200 KB 约 0.5 s；内存 +48 MB（1 MB 文档会 +330 MB，故不做） | `ReaderTextView.startProgressiveLayout` |
 | 数学（200 个**没见过的**公式，缓存不命中） | < 150 ms（实测 ≈ 35 ms） | `render/math-200-cold`——以前只测热路径，公式渲染本身退化门禁抓不到 |
 | 快速打开索引（10k 文件整树扫描，后台） | < 200 ms | 手测（`FileIndex.scan`） |
 | 代码高亮吞吐 | > 20 MB/s | `quire-bench highlight` |

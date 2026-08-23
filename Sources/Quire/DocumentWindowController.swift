@@ -25,7 +25,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     var markdownDocument: MarkdownDocument? { document as? MarkdownDocument }
 
     private(set) var mode: Mode = .reader {
-        didSet { applyMode(); UserDefaults.standard.set(mode.rawValue, forKey: "view.mode") }
+        didSet { applyMode(from: oldValue); UserDefaults.standard.set(mode.rawValue, forKey: "view.mode") }
     }
 
     init(document: MarkdownDocument) {
@@ -51,11 +51,13 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         let sidebar = NSSplitViewItem(sidebarWithViewController: sidebarViewController)
         sidebar.minimumThickness = 180
         sidebar.maximumThickness = 420
+        sidebar.holdingPriority = NSLayoutConstraint.Priority(300)   // 窗口 / 窗格宽度变化都落在正文窗格上，侧栏保持自己的宽度
         sidebar.canCollapse = true
         sidebar.isCollapsed = UserDefaults.standard.bool(forKey: "sidebar.collapsed")
         readerItem = NSSplitViewItem(viewController: readerViewController)
         readerItem.minimumThickness = 280
         readerItem.canCollapse = true
+        readerItem.collapseBehavior = .preferResizingSiblingsWithFixedSplitView   // 折叠本身不碰窗口；窗口宽度由 switchPanes 管
         splitViewController.addSplitViewItem(sidebar)
         splitViewController.addSplitViewItem(readerItem)
         splitViewController.splitView.autosaveName = "QuireSplit3"
@@ -172,6 +174,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         let item = NSSplitViewItem(viewController: editorViewController)
         item.minimumThickness = 280
         item.canCollapse = true
+        item.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
         item.isCollapsed = true
         splitViewController.insertSplitViewItem(item, at: 1)
         editorItem = item
@@ -202,6 +205,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         didSet {
             UserDefaults.standard.set(focusMode.rawValue, forKey: "editor.focus")
             if hasEditorPane { editorViewController.textView.focusMode = focusMode }
+            updateModeIndicator()
         }
     }
 
@@ -209,14 +213,32 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         didSet {
             UserDefaults.standard.set(posMode.rawValue, forKey: "editor.pos")
             if hasEditorPane { editorViewController.textView.posMode = posMode }
+            updateModeIndicator()
         }
     }
     private(set) var styleCheckOn: Bool = UserDefaults.standard.bool(forKey: "editor.styleCheck") {
         didSet {
             UserDefaults.standard.set(styleCheckOn, forKey: "editor.styleCheck")
             if hasEditorPane { editorViewController.textView.styleChecker = styleCheckOn ? StyleRulesStore.checker() : nil }
+            updateModeIndicator()
         }
     }
+    /// 字数胶囊里的模式提示（只在编辑器可见时显示）
+    private func updateModeIndicator() {
+        var modes: [String] = []
+        if mode != .reader && mode != .hybrid {
+            switch focusMode {
+            case .off: break
+            case .sentence: modes.append(L("专注：句子"))
+            case .paragraph: modes.append(L("专注：段落"))
+            case .typewriter: modes.append(L("专注：打字机"))
+            }
+            if posMode != .off { modes.append(L("词性")) }
+            if styleCheckOn { modes.append(L("文风")) }
+        }
+        wordCount.update(modes: modes)
+    }
+
     @objc func toggleStyleCheck(_ sender: Any?) {
         ensureEditorMode()
         styleCheckOn.toggle()
@@ -268,6 +290,8 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     private func exitImmersive(restoreFullScreen: Bool) {
         guard let saved = immersiveSaved, let window else { return }
         immersiveSaved = nil
+        suppressWidthAdjust = true
+        defer { suppressWidthAdjust = false }
         editorViewController.textView.onEscape = nil
         editorViewController.textView.immersiveWidth = 0
         editorViewController.scrollView.rulersVisible = saved.rulers
@@ -317,16 +341,65 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
 
     // MARK: - 模式
 
-    private func applyMode() {
+    /// 沉浸模式进出时恢复模式：不要顺带改窗口宽度
+    private var suppressWidthAdjust = false
+    /// 单栏时的窗口宽度（进双栏前记下，退出时恢复）
+    private var singlePaneWindowWidth: CGFloat?
+
+    /// 切换窗格并调整窗口宽度。设计：**双栏 = 两个正文窗格**，不是把当前宽度一分为二把正文挤窄。
+    /// - 单栏 → 双栏：窗口加宽一个正文窗格（屏幕放不下就顶满并往左挪），两栏等宽
+    /// - 双栏 → 单栏：回到进双栏前的宽度
+    /// - 阅读 ↔ 编辑：等宽替换，窗口不动
+    /// 窗格折叠用 `.preferResizingSiblingsWithFixedSplitView`（折叠本身不碰窗口），窗口宽度在**下一轮 run loop** 再改——
+    /// 同一轮里改会撞上 AppKit 折叠时临时加的"分栏视图宽度固定"约束，内容视图会比窗口还宽。
+    /// 全屏 / 沉浸模式下只切窗格不动窗口。
+    private func switchPanes(from old: Mode, showEditor: Bool, window: NSWindow) {
+        let canResize = !window.styleMask.contains(.fullScreen) && !isImmersive && !suppressWidthAdjust
+        let wasSplit = old == .split, isSplit = mode == .split
+        let divider = splitViewController.splitView.dividerThickness
+        let sidebarItem = splitViewController.splitViewItems.first
+        let sidebarW = (sidebarItem?.isCollapsed ?? true) ? 0 : (sidebarItem?.viewController.view.frame.width ?? 0)
+        let paneW = (max(320, window.contentView!.frame.width - sidebarW - (wasSplit ? divider : 0)) / (wasSplit ? 2 : 1)).rounded()
+        let screen = window.screen ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 10_000, height: 10_000)
+        // 目标窗口宽度：单 → 双 加一个窗格；双 → 单 回到之前；单 ↔ 单 不变（AppKit 展开窗格时可能把窗口撑大，下面会纠回来）
+        var targetWidth = window.frame.width
+        if canResize, isSplit != wasSplit {
+            if isSplit { singlePaneWindowWidth = window.frame.width; targetWidth = min(visible.width, window.frame.width + paneW + divider) }
+            else { targetWidth = min(visible.width, singlePaneWindowWidth ?? max(520, window.frame.width - paneW - divider)); singlePaneWindowWidth = nil }
+        }
+        func apply(width: CGFloat) {
+            var frame = window.frame
+            frame.size.width = width
+            if frame.maxX > visible.maxX { frame.origin.x = max(visible.minX, visible.maxX - frame.width) }
+            if abs(frame.width - window.frame.width) > 0.5 || abs(frame.minX - window.frame.minX) > 0.5 { window.setFrame(frame, display: true) }
+        }
+        // 要变宽：先把窗口撑开（在任何折叠约束出现之前），再展开窗格，留下的窗格会缩回去给新窗格让位
+        if canResize, targetWidth > window.frame.width { apply(width: targetWidth) }
+        // 先展开要显示的（从留下的正文窗格里分空间，分栏视图宽度不变），再折叠要藏的（腾出的空间给刚展开的窗格，侧栏不吃）
+        if showEditor { editorItem?.isCollapsed = false }
+        if mode != .editor { readerItem.isCollapsed = false }
+        if !showEditor { editorItem?.isCollapsed = true }
+        if mode == .editor { readerItem.isCollapsed = true }
+        guard canResize else { return }
+        // 下一轮：AppKit 折叠时临时加的约束已经撤掉，把窗口宽度校正到目标值、双栏分到等宽
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self, let window else { return }
+            apply(width: targetWidth)
+            if isSplit {
+                let content = window.contentView!.frame.width - sidebarW
+                let dividerIndex = (sidebarItem?.isCollapsed ?? true) ? 0 : 1
+                self.splitViewController.splitView.setPosition(sidebarW + (content / 2).rounded(), ofDividerAt: dividerIndex)
+            }
+        }
+    }
+
+    private func applyMode(from old: Mode? = nil) {
         guard readerItem != nil else { return }
         let showEditor = mode == .editor || mode == .split
         if showEditor { ensureEditorPane() }
-        if window?.isVisible == true {
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.15
-                editorItem?.animator().isCollapsed = !showEditor
-                readerItem.animator().isCollapsed = (mode == .editor)
-            }
+        if let window, window.isVisible, let old {
+            switchPanes(from: old, showEditor: showEditor, window: window)
         } else {
             // 启动路径：不动画（runAnimationGroup 在初始化阶段要 40 ms）
             editorItem?.isCollapsed = !showEditor
@@ -335,6 +408,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         modeControl?.selectedSegment = mode.rawValue
         // 字数胶囊跟着可见的窗格走（只编辑时阅读窗格折叠）
         (mode == .editor ? editorViewController : readerViewController).attachStatusOverlay(wordCount)
+        updateModeIndicator()
         // 混合模式：阅读视图可点击进入源码态
         let hybrid = readerViewController.textView as? HybridTextView
         hybrid?.isHybridEnabled = (mode == .hybrid)

@@ -77,7 +77,7 @@ extension EditorTextView {
         path.windingRule = .evenOdd
         NSGraphicsContext.saveGraphicsState()
         path.addClip()
-        style.background.withAlphaComponent(0.72).setFill()
+        style.background.withAlphaComponent(0.62).setFill()   // 留 ~40% 的可读度：上下文还能扫到，又分得清焦点
         dirtyRect.fill()
         NSGraphicsContext.restoreGraphicsState()
     }

@@ -233,6 +233,11 @@ enum Block: Hashable {
 - **打印 / 导出**：`NSPrintOperation.run()` 是同步的，屏幕视图那套"先占位、异步加载"对它没用。打印视图 `loadsAttachmentsAutomatically = false`，`loadAllAttachmentsForExport()` 等图片（含表格单元格里的）、Mermaid 全部就绪再 `layoutAllForPrinting`；`Exporter.writePDF/writeImage` 是 async，⌘P 经 `MarkdownDocument.print(withSettings:…)` 先异步准备视图再调 super。页眉页脚走 AppKit 自带的 `pageHeader / pageFooter`——自己重写 `drawPageBorder` 改 frame 会触发 TextKit 重排、分页错位。
 - **增量渲染的块位置**：`Block` 的相等性不看 `sourceRange`，`render(_:reusing:)` 复用的块必须换成新解析的 `Block`（行号变了），否则混合模式、复制为 Markdown、滚动同步拿旧行号切源码。
 
+### 7.6 滚动稳定与窗口宽度（0.5.10）
+
+- TextKit 2 的文档高度对未排版区域是估算的（1 MB 文档估 307k pt、实际 844k），快速滚动时滚动条随估算修正来回跳。`ReaderTextView.startProgressiveLayout` 在首帧后用主线程空闲分批 `ensureLayout`（每批自适应到 ~12 ms），每批后把 frame 高度推到 `usageBoundsForTextContainer`（NSTextView 只在视口排版时自己长高）。排好的片段很占内存（每 MB 文本 ≈ 330 MB），所以只对 ≤ 200 KB 的文档做；侧栏取样 `blockIndex(atY:)` 只信 `state == .layoutAvailable` 的片段。
+- 切模式的窗口宽度（`switchPanes`）：双栏 = 两个正文窗格。窗格用 `.preferResizingSiblingsWithFixedSplitView`（折叠本身不碰窗口），顺序是"先撑窗口 → 先展开再折叠 → 下一轮 run loop 校正宽度并把分栏分到等宽"——同一轮里改窗口会撞上 AppKit 折叠时临时加的约束（内容视图比窗口还宽）；先折叠再展开会让侧栏吃掉腾出的宽度。侧栏 `holdingPriority` 300，宽度变化落在正文窗格上。
+
 ## 8. 主题系统
 
 见 [THEMES.md](THEMES.md)。核心约束：

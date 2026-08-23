@@ -36,13 +36,18 @@ final class WordCountView: NSView {
 
     func update(stats: TextStats) { self.stats = stats; render() }
     func update(selection: TextStats?) { selectionStats = selection; render() }
+    /// 开着的编辑器模式（专注 / 词性 / 文风）：显示在胶囊里，免得"怎么整页都是灰的"却不知道是专注模式在起作用
+    func update(modes: [String]) { activeModes = modes; render() }
+    private var activeModes: [String] = []
 
     private func render() {
         let s = selectionStats ?? stats
         let n = Self.number(s.words)
-        label.stringValue = selectionStats != nil
+        var text = selectionStats != nil
             ? String(format: L("已选 %@ 字"), n)
             : String(format: L("%@ 字 · %d 分钟"), n, s.readingMinutes)
+        if !activeModes.isEmpty { text += " · " + activeModes.joined(separator: " · ") }
+        label.stringValue = text
         setAccessibilityLabel(label.stringValue)
     }
 
