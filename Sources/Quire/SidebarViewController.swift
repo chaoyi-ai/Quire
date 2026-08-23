@@ -777,6 +777,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         activeSearch = search
         let opts = ContentSearch.Options()
         let maxFiles = 500
+        let truncatedIndex = index.truncated   // 主线程取好再进后台
         searchQueue.async { [weak self] in
             var batch: [ContentSearch.FileResult] = []
             var lastFlush = ProcessInfo.processInfo.systemUptime
@@ -793,7 +794,6 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
                 if batch.count >= 20 || now - lastFlush > 0.05 { flush(); lastFlush = now }
             }
             flush()
-            let truncatedIndex = index.truncated
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.activeSearch === search else { return }
                 var notes: [String] = []
