@@ -183,13 +183,18 @@ struct PreferencesView: View {
                 }
             }
             Section(L("外观")) {
-                Picker(L("模式"), selection: $mode) {
-                    Text(L("跟随系统")).tag(ThemeManager.AppearanceMode.system)
-                    Text(L("浅色")).tag(ThemeManager.AppearanceMode.light)
-                    Text(L("深色")).tag(ThemeManager.AppearanceMode.dark)
+                Toggle(L("深浅色跟随系统切换"), isOn: Binding(
+                    get: { mode == .system },
+                    set: { on in mode = on ? .system : (ThemeManager.shared.effectiveAppearance == .dark ? .dark : .light) }))
+                if mode != .system {
+                    Picker(L("模式"), selection: $mode) {
+                        Text(L("浅色")).tag(ThemeManager.AppearanceMode.light)
+                        Text(L("深色")).tag(ThemeManager.AppearanceMode.dark)
+                    }
+                    .pickerStyle(.segmented)
                 }
-                .pickerStyle(.segmented)
-                .onChange(of: mode) { _, m in ThemeManager.shared.mode = m }
+                Text(L("菜单栏 显示 → 外观 与工具栏的外观按钮也可临时切换；切回「跟随系统」即恢复自动")).font(.caption).foregroundStyle(.secondary)
+                    .onChange(of: mode) { _, m in ThemeManager.shared.mode = m }
                 Picker(L("浅色主题"), selection: $lightTheme) {
                     ForEach(ThemeManager.shared.catalog.themes(for: .light), id: \.id) { Text($0.name).tag($0.id) }
                 }

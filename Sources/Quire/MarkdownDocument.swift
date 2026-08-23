@@ -25,7 +25,43 @@ final class QuireDocumentController: NSDocumentController {
     override func runModalOpenPanel(_ openPanel: NSOpenPanel, forTypes types: [String]?) -> Int {
         openPanel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText, .plainText, UTType("net.daringfireball.markdown") ?? .plainText]
         openPanel.allowsMultipleSelection = true
+        openPanel.canChooseDirectories = true   // 选文件夹 = 以它为侧栏根打开
+        openPanel.message = L("选择 Markdown 文件，或选一个文件夹作为工作目录")
         return super.runModalOpenPanel(openPanel, forTypes: types)
+    }
+
+    /// 文件夹走 `openFolder`，其余照常（打开面板、Dock 拖放、`open -a`、服务菜单都经这里）
+    override func openDocument(withContentsOf url: URL, display displayDocument: Bool, completionHandler: @escaping (NSDocument?, Bool, (any Error)?) -> Void) {
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+            openFolder(url, completionHandler: completionHandler)
+            return
+        }
+        super.openDocument(withContentsOf: url, display: displayDocument, completionHandler: completionHandler)
+    }
+
+    /// 打开文件夹：优先 README.md / index.md，否则第一个 Markdown；都没有就新建一篇并把侧栏根设为该文件夹
+    func openFolder(_ folder: URL, completionHandler: ((NSDocument?, Bool, (any Error)?) -> Void)? = nil) {
+        let fm = FileManager.default
+        let items = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles])) ?? []
+        let mds = items.filter { Self.markdownExtensions.contains($0.pathExtension.lowercased()) && ((try? $0.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile ?? false) }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        let preferred = mds.first { ["readme.md", "index.md", "readme.markdown"].contains($0.lastPathComponent.lowercased()) } ?? mds.first
+        let setRoot: (NSDocument?) -> Void = { doc in
+            (doc?.windowControllers.first as? DocumentWindowController)?.sidebarViewController.setRoot(folder)
+        }
+        if let preferred {
+            super.openDocument(withContentsOf: preferred, display: true) { doc, already, error in
+                setRoot(doc)
+                completionHandler?(doc, already, error)
+            }
+        } else {
+            do {
+                let doc = try openUntitledDocumentAndDisplay(true)
+                setRoot(doc)
+                completionHandler?(doc, false, nil)
+            } catch { completionHandler?(nil, false, error) }
+        }
     }
 }
 

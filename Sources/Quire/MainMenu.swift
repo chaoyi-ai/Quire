@@ -32,6 +32,8 @@ enum MainMenu {
         let file = NSMenu(title: L("文件"))
         file.addItem(withTitle: L("新建"), action: #selector(NSDocumentController.newDocument(_:)), keyEquivalent: "n")
         file.addItem(withTitle: L("打开…"), action: #selector(NSDocumentController.openDocument(_:)), keyEquivalent: "o")
+        let openFolderDoc = file.addItem(withTitle: L("打开文件夹…"), action: #selector(Handler.openFolder(_:)), keyEquivalent: "o")
+        openFolderDoc.keyEquivalentModifierMask = [.command, .option]; openFolderDoc.target = Handler.shared
         let openFolder = file.addItem(withTitle: L("在侧栏打开文件夹…"), action: #selector(DocumentWindowController.chooseSidebarFolder(_:)), keyEquivalent: "O")
         openFolder.keyEquivalentModifierMask = [.command, .shift]
         file.addItem(withTitle: L("快速打开…"), action: #selector(DocumentWindowController.quickOpen(_:)), keyEquivalent: "p")
@@ -216,6 +218,13 @@ enum MainMenu {
             alert.runModal()
         }
         @objc func checkForUpdates(_ sender: Any?) { UpdateChecker.check(userInitiated: true) }
+    @objc func openFolder(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
+        panel.prompt = L("打开"); panel.message = L("选择一个文件夹：打开其中的 README / 第一篇 Markdown，并在侧栏显示整个目录")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        (NSDocumentController.shared as? QuireDocumentController)?.openFolder(url)
+    }
     @objc func showPreferences(_ sender: Any?) { PreferencesWindowController.shared.show() }
         @objc func exportHTML(_ sender: Any?) {
             guard let doc = NSDocumentController.shared.currentDocument as? MarkdownDocument, let w = doc.windowControllers.first?.window else { return }

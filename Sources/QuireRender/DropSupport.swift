@@ -12,6 +12,10 @@ public enum DropSupport {
     }
     public static func isMarkdown(_ url: URL) -> Bool { markdownExtensions.contains(url.pathExtension.lowercased()) }
     public static func isImage(_ url: URL) -> Bool { imageExtensions.contains(url.pathExtension.lowercased()) }
+    public static func isDirectory(_ url: URL) -> Bool {
+        var d: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &d) && d.boolValue
+    }
 
     /// 相对于文档目录的路径（不同卷或无文档时给绝对路径）；空格等做百分号编码
     public static func relativePath(of url: URL, to documentURL: URL?) -> String {

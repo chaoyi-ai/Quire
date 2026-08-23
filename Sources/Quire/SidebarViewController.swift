@@ -498,12 +498,14 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     // MARK: - 拖放（打开 Markdown 文件）
 
     func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo, proposedItem item: Any?, proposedChildIndex index: Int) -> NSDragOperation {
-        guard DropSupport.fileURLs(from: info).contains(where: DropSupport.isMarkdown) else { return [] }
+        guard DropSupport.fileURLs(from: info).contains(where: { DropSupport.isMarkdown($0) || DropSupport.isDirectory($0) }) else { return [] }
         outlineView.setDropItem(nil, dropChildIndex: NSOutlineViewDropOnItemIndex)
         return .copy
     }
     func outlineView(_ outlineView: NSOutlineView, acceptDrop info: NSDraggingInfo, item: Any?, childIndex index: Int) -> Bool {
-        let urls = DropSupport.fileURLs(from: info).filter(DropSupport.isMarkdown)
+        let all = DropSupport.fileURLs(from: info)
+        if let dir = all.first(where: DropSupport.isDirectory) { setRoot(dir) }
+        let urls = all.filter(DropSupport.isMarkdown)
         guard !urls.isEmpty else { return false }
         FileOpener.open(urls)
         return true
