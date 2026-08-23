@@ -27,7 +27,7 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
 
     override func loadView() {
         let style = session.style
-        textView = ReaderTextView(style: style)
+        textView = HybridTextView(style: style)   // 混合模式（实验）是它的子类；关着就是普通阅读视图
         textView.delegate = self
         textView.baseURL = session.document?.fileURL
         textView.onDropFiles = { urls in FileOpener.open(urls) }
@@ -132,6 +132,7 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
         defer { if reason == .opened { reportLaunchIfNeeded() } }
         // 增量路径：编辑时只替换变化块，视口不动
         if reason == .edited, let diff, let previous = textView.rendered, style === textView.style {
+            (textView as? HybridTextView)?.source = session.source
             if diff.isEmpty { textView.updateRendered(doc); return }
             textView.replaceBlocks(with: doc, diff: diff, previous: previous)
             viewportDidScroll()
@@ -144,6 +145,7 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
 
         scrollView.backgroundColor = style.background
         textView.baseURL = session.document?.fileURL
+        (textView as? HybridTextView)?.source = session.source
         textView.setRendered(doc, style: style)
         LaunchClock.mark("setRendered done")
 

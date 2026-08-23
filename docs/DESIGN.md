@@ -207,9 +207,10 @@ enum Block: Hashable {
 - 同步滚动、保存、自动保存（`NSDocument` 原生）、撤销、行号、当前行高亮、软换行。
 - 输入辅助：列表续行、代码围栏自动闭合、Tab 缩进、粗体/斜体/链接快捷键、表格格式化。
 
-### M6 行内实时预览（"可视化编辑"，先 spike 后实现）
-- 单栏；光标所在块显示源码，其余块显示渲染结果（Obsidian Live Preview 模式）。
+### M6 行内实时预览（"可视化编辑"，spike 已 go）
+- 单栏；光标所在块显示源码，其余块显示渲染结果（Obsidian Live Preview 模式）。`HybridTextView` 继承 `ReaderTextView`：激活块 = 用该块 `sourceRange` 覆盖的原始行替换渲染串里的那段；编辑限制在块内；击键只回写源码，离开块才重解析 + 按 diff 重渲染。
 - 复用 M1 渲染器与 M3 高亮器，用同一份 `Document`；不写第二套渲染。
+- 表格 / Mermaid / 图片 / 数学等附件块激活后就是 Markdown 源码——不做渲染态的单元格编辑。
 
 ## 8. 主题系统
 

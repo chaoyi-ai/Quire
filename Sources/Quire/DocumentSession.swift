@@ -90,6 +90,12 @@ final class DocumentSession {
         return derived
     }
 
+    /// 混合模式击键：只更新源码（保存 / 统计用），不解析不渲染；离开块时再 `sourceDidChange`
+    func updateSourceWithoutRendering(_ newSource: String) {
+        source = newSource
+        editDebounce?.cancel()
+    }
+
     func sourceDidChange(_ newSource: String, reason: ChangeReason) {
         source = newSource
         editDebounce?.cancel()

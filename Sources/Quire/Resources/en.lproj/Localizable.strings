@@ -157,3 +157,6 @@
 "好" = "OK";
 "打开 Releases 页面" = "Open Releases Page";
 "每天自动检查更新（只读 GitHub Releases，不上传信息）" = "Check for updates daily (reads GitHub Releases only; sends nothing)";
+"混合" = "Hybrid";
+"混合（实验，⌘4）：点击块进入源码编辑" = "Hybrid (experimental, ⌘4): click a block to edit its source";
+"混合（实验）" = "Hybrid (Experimental)";

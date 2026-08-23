@@ -7,7 +7,7 @@ import QuireCore
 /// - 复制时把代码块内 U+2028 换回换行
 /// - 图片异步加载 + downsample
 @MainActor
-public final class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDelegate {
+public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDelegate {   // 非 final：HybridTextView 继承
     public private(set) var style: RenderStyle
     /// 当前文档路径（相对图片解析）
     public var baseURL: URL?

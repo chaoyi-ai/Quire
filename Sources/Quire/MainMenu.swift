@@ -101,6 +101,7 @@ enum MainMenu {
         view.addItem(withTitle: L("阅读"), action: #selector(DocumentWindowController.setModeReader(_:)), keyEquivalent: "1")
         view.addItem(withTitle: L("编辑"), action: #selector(DocumentWindowController.setModeEditor(_:)), keyEquivalent: "2")
         view.addItem(withTitle: L("分栏"), action: #selector(DocumentWindowController.setModeSplit(_:)), keyEquivalent: "3")
+        view.addItem(withTitle: L("混合（实验）"), action: #selector(DocumentWindowController.setModeHybrid(_:)), keyEquivalent: "4")
         view.addItem(.separator())
         // 专注：⌘D 循环 关闭 → 句子 → 段落 → 打字机；子菜单可直选
         let focus = NSMenu(title: L("专注"))

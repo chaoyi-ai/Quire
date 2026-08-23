@@ -5,7 +5,7 @@ import QuireRender
 /// 文档窗口：侧栏（目录）| 编辑器 | 阅读视图，三态（阅读 / 编辑 / 分栏），滚动同步。
 @MainActor
 final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSWindowDelegate, NSMenuItemValidation {
-    enum Mode: Int { case reader = 0, editor = 1, split = 2 }
+    enum Mode: Int { case reader = 0, editor = 1, split = 2, hybrid = 3 }   // hybrid = 混合实时预览（实验，spike #85）
 
     let readerViewController: ReaderViewController
     /// 编辑器按需创建（阅读模式启动时不构建，省启动时间）
@@ -262,27 +262,61 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
 
     private func applyMode() {
         guard readerItem != nil else { return }
-        if mode != .reader { ensureEditorPane() }
+        let showEditor = mode == .editor || mode == .split
+        if showEditor { ensureEditorPane() }
         if window?.isVisible == true {
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.15
-                editorItem?.animator().isCollapsed = (mode == .reader)
+                editorItem?.animator().isCollapsed = !showEditor
                 readerItem.animator().isCollapsed = (mode == .editor)
             }
         } else {
             // 启动路径：不动画（runAnimationGroup 在初始化阶段要 40 ms）
-            editorItem?.isCollapsed = (mode == .reader)
+            editorItem?.isCollapsed = !showEditor
             readerItem.isCollapsed = (mode == .editor)
         }
         modeControl?.selectedSegment = mode.rawValue
         // 字数胶囊跟着可见的窗格走（只编辑时阅读窗格折叠）
         (mode == .editor ? editorViewController : readerViewController).attachStatusOverlay(wordCount)
-        if mode != .reader, let w = window, w.isVisible { w.makeFirstResponder(editorViewController.textView) }
+        // 混合模式：阅读视图可点击进入源码态
+        let hybrid = readerViewController.textView as? HybridTextView
+        hybrid?.isHybridEnabled = (mode == .hybrid)
+        if mode == .hybrid { wireHybrid() }
+        if showEditor, let w = window, w.isVisible { w.makeFirstResponder(editorViewController.textView) }
+        if mode == .hybrid, let w = window, w.isVisible { w.makeFirstResponder(readerViewController.textView) }
     }
 
     @objc func setModeReader(_ sender: Any?) { mode = .reader }
     @objc func setModeEditor(_ sender: Any?) { mode = .editor }
     @objc func setModeSplit(_ sender: Any?) { mode = .split }
+    @objc func setModeHybrid(_ sender: Any?) { mode = .hybrid }
+
+    private var hybridWired = false
+    /// 混合模式的回写：击键只更新文档源码（不重渲染），离开块时重解析 + 按 diff 重渲染
+    private func wireHybrid() {
+        guard !hybridWired, let hybrid = readerViewController.textView as? HybridTextView else { return }
+        hybridWired = true
+        hybrid.onSourceEdit = { [weak self] _, text, lines in
+            guard let self else { return }
+            var all = self.session.source.components(separatedBy: "\n")
+            // 源码末尾有换行时 components 多出一个空串；块源码自带末尾换行
+            let newLines = text.hasSuffix("\n") ? String(text.dropLast()).components(separatedBy: "\n") : text.components(separatedBy: "\n")
+            guard lines.lowerBound >= 1, lines.upperBound <= all.count else { return }
+            all.replaceSubrange((lines.lowerBound - 1)...(lines.upperBound - 1), with: newLines)
+            let joined = all.joined(separator: "\n")
+            self.markdownDocument?.setSourceFromEditor(joined)
+            self.markdownDocument?.updateChangeCount(.changeDone)
+            self.session.updateSourceWithoutRendering(joined)
+            hybrid.source = joined
+            // 后续块的行号随之平移：由下次重解析修正；本块行范围的变化在 HybridTextView 内部按 activeLines 维护
+            hybrid.activeLinesDidChange(to: lines.lowerBound...(lines.lowerBound + newLines.count - 1))
+        }
+        hybrid.onDeactivate = { [weak self] in
+            guard let self else { return }
+            self.session.sourceDidChange(self.session.source, reason: .edited)
+            if self.editorItem != nil { self.editorViewController.replaceSource(self.session.source) }
+        }
+    }
     @objc private func modeChanged(_ sender: NSSegmentedControl) { mode = Mode(rawValue: sender.selectedSegment) ?? .reader }
 
     // MARK: - 滚动同步
@@ -452,10 +486,12 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
                 NSImage(systemSymbolName: "doc.richtext", accessibilityDescription: L("阅读"))!,
                 NSImage(systemSymbolName: "chevron.left.forwardslash.chevron.right", accessibilityDescription: L("编辑"))!,
                 NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: L("分栏"))!,
+                NSImage(systemSymbolName: "square.and.pencil", accessibilityDescription: L("混合"))!,
             ], trackingMode: .selectOne, target: self, action: #selector(modeChanged(_:)))
             control.setToolTip(L("阅读（⌘1）"), forSegment: 0)
             control.setToolTip(L("编辑（⌘2）"), forSegment: 1)
             control.setToolTip(L("分栏（⌘3）"), forSegment: 2)
+            control.setToolTip(L("混合（实验，⌘4）：点击块进入源码编辑"), forSegment: 3)
             control.selectedSegment = mode.rawValue
             control.segmentStyle = .automatic
             item.view = control
