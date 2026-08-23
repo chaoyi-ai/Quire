@@ -203,3 +203,8 @@
 "侧栏根目录下没有同名的 Markdown 文件。" = "No Markdown file with that name under the sidebar root.";
 "后退" = "Back";
 "前进" = "Forward";
+"收藏" = "Favorites";
+"最近" = "Recents";
+"标签" = "Tags";
+"从收藏移除" = "Remove from Favorites";
+"加入收藏" = "Add to Favorites";

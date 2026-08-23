@@ -6,7 +6,7 @@ import QuireRender
 /// 侧栏节点：文件夹 / 文件 / 标题。子节点懒加载。
 @MainActor
 final class SidebarNode {
-    enum Kind { case folder, file, heading, hit }   // hit = 全局搜索命中行
+    enum Kind { case folder, file, heading, hit, tag, section }   // hit = 全局搜索命中行；tag = 标签；section = 收藏 / 最近 / 标签 的虚拟分组
     let kind: Kind
     let url: URL?                 // folder / file
     var name: String
@@ -69,6 +69,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     override func loadView() {
         outlineView = SidebarOutlineView()
         (outlineView as? SidebarOutlineView)?.onKeyDown = { [weak self] e in self?.outlineViewKeyDown(e) ?? false }
+        (outlineView as? SidebarOutlineView)?.onMenu = { [weak self] row in self?.outlineViewMenu(for: row) }
         outlineView.headerView = nil
         outlineView.style = .sourceList
         outlineView.rowSizeStyle = .default
@@ -214,6 +215,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         pathControl.url = root
         rootNode = SidebarNode(kind: .folder, url: root, name: root.lastPathComponent, parent: nil)
         currentFileNode = nil
+        sectionNodes = [:]; seenSections = []; tagStore = nil
         outlineView.reloadData()
         loadChildren(of: rootNode!) { [weak self] in self?.revealCurrentFile() }
         watcher = FolderWatcher(url: root) { [weak self] dirs in
@@ -336,7 +338,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
                     self.fireLoaded(node)
                 }
             }
-        case .heading, .hit:
+        case .heading, .hit, .tag, .section:
             node.isLoading = false
             node.children = []
             fireLoaded(node)
@@ -351,7 +353,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
 
     /// 根节点不是 outline item（顶层 = nil 的子项），要整体 reload
     private func reload(_ node: SidebarNode) {
-        if node === rootNode { outlineView.reloadData() } else { outlineView.reloadItem(node, reloadChildren: true) }
+        if node === rootNode { outlineView.reloadData(); expandSectionsIfNew() } else { outlineView.reloadItem(node, reloadChildren: true) }
     }
 
     /// 目录列表（后台）：可见项，文件夹优先，自然排序；只列 Markdown 文件与文件夹
@@ -377,10 +379,77 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     /// 合并新列表到已有子节点（按 URL 复用旧节点，保持展开状态与已加载的子树）
     private func mergeChildren(_ node: SidebarNode, entries: [(URL, Bool)]) {
         var existing: [String: SidebarNode] = [:]
-        for c in node.children ?? [] { if let u = c.url { existing[u.standardizedFileURL.path] = c } }
-        node.children = entries.map { url, isDir in
+        for c in node.children ?? [] { if let u = c.url, c.kind != .section { existing[u.standardizedFileURL.path] = c } }
+        var children = entries.map { url, isDir -> SidebarNode in
             if let old = existing[url.standardizedFileURL.path] { return old }
             return SidebarNode(kind: isDir ? .folder : .file, url: url, name: url.lastPathComponent, parent: node)
+        }
+        if node === rootNode { children = virtualSections() + children }   // 收藏 / 最近 / 标签 挂在根的最上面
+        node.children = children
+    }
+
+    // MARK: - 虚拟分组：收藏 / 最近 / 标签
+
+    private var sectionNodes: [String: SidebarNode] = [:]
+    private var tagStore: TagIndexStore?
+    private var favoritesObserver: NSObjectProtocol?
+
+    private func virtualSections() -> [SidebarNode] {
+        func section(_ key: String, _ title: String) -> SidebarNode {
+            if let n = sectionNodes[key] { n.name = title; return n }
+            let n = SidebarNode(kind: .section, url: rootURL, name: title, parent: rootNode)
+            n.children = []
+            sectionNodes[key] = n
+            return n
+        }
+        let fav = section("fav", L("收藏")), recent = section("recent", L("最近")), tags = section("tags", L("标签"))
+        refreshFavorites(fav); refreshRecents(recent); refreshTags(tags)
+        if tagStore == nil, let root = rootURL {
+            tagStore = TagIndexStore.store(for: root)
+            tagStore?.onChange = { [weak self] in self?.reinsertSections() }
+            favoritesObserver = NotificationCenter.default.addObserver(forName: Favorites.didChange, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reinsertSections() }
+            }
+        }
+        return [fav, recent, tags].filter { !($0.children?.isEmpty ?? true) }
+    }
+
+    /// 分组内容变了（标签扫完 / 收藏改了）：重建根的前几个虚拟节点，保留真实目录节点
+    private func reinsertSections() {
+        guard let root = rootNode, !isSearching else { return }
+        let real = (root.children ?? []).filter { $0.kind != .section }
+        root.children = virtualSections() + real
+        outlineView.reloadData()
+        expandSectionsIfNew()
+    }
+
+    /// 分组首次出现时默认展开；用户手动折叠过的不再打开（节点对象复用，reloadData 会保留展开状态）
+    private var seenSections: Set<ObjectIdentifier> = []
+    private func expandSectionsIfNew() {
+        for n in rootNode?.children ?? [] where n.kind == .section {
+            let id = ObjectIdentifier(n)
+            if !seenSections.contains(id) { seenSections.insert(id); outlineView.expandItem(n) }
+        }
+    }
+
+    private func fileNode(_ url: URL, parent: SidebarNode) -> SidebarNode {
+        let n = SidebarNode(kind: .file, url: url, name: url.lastPathComponent, parent: parent)
+        n.children = []   // 虚拟分组里的文件不展开大纲
+        return n
+    }
+    private func refreshFavorites(_ n: SidebarNode) {
+        n.children = Favorites.urls.filter { FileManager.default.fileExists(atPath: $0.path) }.map { fileNode($0, parent: n) }
+    }
+    private func refreshRecents(_ n: SidebarNode) {
+        let recents = NSDocumentController.shared.recentDocumentURLs.prefix(10)
+        n.children = recents.map { fileNode($0, parent: n) }
+    }
+    private func refreshTags(_ n: SidebarNode) {
+        guard let store = tagStore else { n.children = []; return }
+        n.children = store.tags.prefix(200).map { t in
+            let node = SidebarNode(kind: .tag, url: nil, name: "#\(t.tag)", parent: n)
+            node.level = t.files.count
+            return node
         }
     }
 
@@ -433,6 +502,20 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     // MARK: - 交互
 
 
+    func outlineViewMenu(for row: Int) -> NSMenu? {
+        guard row >= 0, let node = outlineView.item(atRow: row) as? SidebarNode, node.kind == .file, let url = node.url else { return nil }
+        let menu = NSMenu()
+        let fav = NSMenuItem(title: Favorites.contains(url) ? L("从收藏移除") : L("加入收藏"), action: #selector(toggleFavorite(_:)), keyEquivalent: "")
+        fav.representedObject = url; fav.target = self
+        menu.addItem(fav)
+        let reveal = NSMenuItem(title: L("在 Finder 中显示"), action: #selector(revealNode(_:)), keyEquivalent: "")
+        reveal.representedObject = url; reveal.target = self
+        menu.addItem(reveal)
+        return menu
+    }
+    @objc private func toggleFavorite(_ sender: NSMenuItem) { if let u = sender.representedObject as? URL { Favorites.toggle(u) } }
+    @objc private func revealNode(_ sender: NSMenuItem) { if let u = sender.representedObject as? URL { NSWorkspace.shared.activateFileViewerSelecting([u]) } }
+
     @objc private func rowClicked(_ sender: Any?) {
         let row = outlineView.clickedRow
         guard row >= 0, let node = outlineView.item(atRow: row) as? SidebarNode else { return }
@@ -452,6 +535,10 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         if let last = lastActivation, last.0 == ObjectIdentifier(node), now - last.1 < 0.1 { return }
         lastActivation = (ObjectIdentifier(node), now)
         switch node.kind {
+        case .section: break
+        case .tag:
+            // 点标签 = 全局搜索该标签
+            showSearch(); searchField.stringValue = node.name; searchChanged(nil)
         case .hit:
             if let url = node.parent?.url { onOpenFile?(url, node.line) }
         case .heading:
@@ -531,7 +618,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         case .folder: return true
         case .file: return n.isMarkdown && (n.children?.isEmpty == false || n.children == nil)
         case .heading: return !(n.children?.isEmpty ?? true)
-        case .hit: return false
+        case .hit, .tag: return false
+        case .section: return !(n.children?.isEmpty ?? true)
         }
     }
 
@@ -586,6 +674,19 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
             cell.imageView?.isHidden = true
             cell.textField?.font = node.level <= 1 ? .systemFont(ofSize: 12, weight: .medium) : .systemFont(ofSize: 12)
             cell.textField?.textColor = node.level >= 4 ? .secondaryLabelColor : .labelColor
+        case .section:
+            cell.imageView?.image = NSImage(systemSymbolName: node.name == L("收藏") ? "star" : (node.name == L("最近") ? "clock" : "number"), accessibilityDescription: node.name)
+            cell.imageView?.isHidden = false
+            cell.imageView?.contentTintColor = .secondaryLabelColor
+            cell.textField?.font = .systemFont(ofSize: 11, weight: .semibold)
+            cell.textField?.textColor = .secondaryLabelColor
+            cell.textField?.stringValue = node.name.uppercased()
+        case .tag:
+            cell.imageView?.image = nil
+            cell.imageView?.isHidden = true
+            cell.textField?.font = .systemFont(ofSize: 12)
+            cell.textField?.textColor = .labelColor
+            cell.textField?.stringValue = "\(node.name)  ·  \(node.level)"
         case .hit:
             cell.imageView?.image = nil
             cell.imageView?.isHidden = true
@@ -743,9 +844,15 @@ extension SidebarViewController: NSSearchFieldDelegate {
 /// 侧栏用的 NSOutlineView：把回车 / 空格交给控制器（方向键、←→ 折叠展开保留系统行为）
 final class SidebarOutlineView: NSOutlineView {
     var onKeyDown: ((NSEvent) -> Bool)?
+    var onMenu: ((Int) -> NSMenu?)?
     override func keyDown(with event: NSEvent) {
         if onKeyDown?(event) == true { return }
         super.keyDown(with: event)
+    }
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let row = self.row(at: convert(event.locationInWindow, from: nil))
+        if row >= 0 { selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
+        return onMenu?(row) ?? super.menu(for: event)
     }
 }
 

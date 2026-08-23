@@ -60,15 +60,13 @@ final class FileIndex {
         guard let e = fm.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey, .isPackageKey],
                                     options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return ([], false) }
         var out: [String] = []
-        let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
         var truncated = false
         for case let u as URL in e {
             let name = u.lastPathComponent
             if name == "node_modules" || name == ".build" || name == "Pods" { e.skipDescendants(); continue }
             guard QuireDocumentController.markdownExtensions.contains(u.pathExtension.lowercased()),
                   (try? u.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
-            let p = u.path
-            out.append(p.hasPrefix(prefix) ? String(p.dropFirst(prefix.count)) : p)
+            out.append(RelativePath.relative(u, to: root))
             if out.count >= maxFiles { truncated = true; break }
         }
         out.sort { $0.localizedStandardCompare($1) == .orderedAscending }
