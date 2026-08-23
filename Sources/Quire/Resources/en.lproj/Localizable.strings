@@ -140,3 +140,6 @@
 "已安装到 ~/Library/Fonts，可在上面选择 iA Writer Mono / Duo / Quattro" = "Installed to ~/Library/Fonts — pick iA Writer Mono / Duo / Quattro above";
 "下载失败，请检查网络" = "Download failed; check your connection";
 "iA Writer Mono / Duo / Quattro 已安装" = "iA Writer Mono / Duo / Quattro installed";
+"正文字体" = "Body font";
+"代码字体" = "Code font";
+"基础字号" = "Base size";

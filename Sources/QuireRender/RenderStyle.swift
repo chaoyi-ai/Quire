@@ -13,8 +13,14 @@ public struct RenderOptions: Hashable, Sendable {
     public var linkUnderline = false
     /// 大文件模式：不高亮、不渲染 Mermaid、图片不加载
     public var largeFile = false
-    public init(codeLineNumbers: Bool = false, linkUnderline: Bool = false, largeFile: Bool = false) {
+    /// 字体覆盖（设置里选的；空 = 跟随主题）：正文 / 代码字体族名，基础字号（0 = 主题）
+    public var bodyFontFamily = ""
+    public var codeFontFamily = ""
+    public var baseFontSize: Int = 0
+    public init(codeLineNumbers: Bool = false, linkUnderline: Bool = false, largeFile: Bool = false,
+                bodyFontFamily: String = "", codeFontFamily: String = "", baseFontSize: Int = 0) {
         self.codeLineNumbers = codeLineNumbers; self.linkUnderline = linkUnderline; self.largeFile = largeFile
+        self.bodyFontFamily = bodyFontFamily; self.codeFontFamily = codeFontFamily; self.baseFontSize = baseFontSize
     }
 }
 
@@ -70,19 +76,23 @@ public final class RenderStyle: @unchecked Sendable {
         self.scale = scale
         self.options = options
         let t = theme.typography
-        baseSize = CGFloat(t.baseSize) * scale
-        codeSize = (CGFloat(t.baseSize) * CGFloat(t.codeSize) * scale).rounded()
+        let themeBase = options.baseFontSize > 0 ? CGFloat(options.baseFontSize) : CGFloat(t.baseSize)
+        baseSize = themeBase * scale
+        codeSize = (themeBase * CGFloat(t.codeSize) * scale).rounded()
+        // 设置里的字体覆盖排在主题字体列表之前；找不到就自然落到主题的
+        let bodyFamilies = options.bodyFontFamily.isEmpty ? t.bodyFont : [options.bodyFontFamily] + t.bodyFont
+        let codeFamilies = options.codeFontFamily.isEmpty ? t.codeFont : [options.codeFontFamily] + t.codeFont
         lineHeight = (baseSize * CGFloat(t.lineHeight)).rounded()
         paragraphSpacing = (baseSize * CGFloat(t.paragraphSpacing)).rounded()
 
-        let body = Self.resolveFont(families: t.bodyFont, size: baseSize, mono: false)
+        let body = Self.resolveFont(families: bodyFamilies, size: baseSize, mono: false)
         bodyFont = body
         bodyBold = Self.variant(body, traits: .boldFontMask)
         bodyItalic = Self.variant(body, traits: .italicFontMask)
         bodyBoldItalic = Self.variant(Self.variant(body, traits: .boldFontMask), traits: .italicFontMask)
-        let code = Self.resolveFont(families: t.codeFont, size: codeSize, mono: true)
+        let code = Self.resolveFont(families: codeFamilies, size: codeSize, mono: true)
         codeFont = code
-        inlineCodeFont = Self.resolveFont(families: t.codeFont, size: (baseSize * CGFloat(t.codeSize)).rounded(), mono: true)
+        inlineCodeFont = Self.resolveFont(families: codeFamilies, size: (baseSize * CGFloat(t.codeSize)).rounded(), mono: true)
 
         let weight: NSFont.Weight = switch t.headingWeight {
         case .regular: .regular; case .medium: .medium; case .semibold: .semibold; case .bold: .bold; case .heavy: .heavy
@@ -92,8 +102,8 @@ public final class RenderStyle: @unchecked Sendable {
         for i in 0..<6 {
             let s = i < t.headingScale.count ? t.headingScale[i] : 1
             let size = (base * CGFloat(s)).rounded()
-            let f = Self.resolveFont(families: t.bodyFont, size: size, mono: false)
-            hf.append(Self.weighted(f, weight: weight, families: t.bodyFont))
+            let f = Self.resolveFont(families: bodyFamilies, size: size, mono: false)
+            hf.append(Self.weighted(f, weight: weight, families: bodyFamilies))
         }
         headingFonts = hf
 

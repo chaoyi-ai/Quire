@@ -23,6 +23,9 @@ final class Preferences: ObservableObject {
         static let editorFontSize = "editor.fontSize"
         static let editorLineHeight = "editor.lineHeight"
         static let editorColumn = "editor.columnChars"
+        static let readerBodyFont = "reader.bodyFontFamily"
+        static let readerCodeFont = "reader.codeFontFamily"
+        static let readerFontSize = "reader.baseFontSize"
     }
 
     @Published var codeLineNumbers: Bool { didSet { d.set(codeLineNumbers, forKey: Key.codeLineNumbers); ThemeManager.shared.refresh() } }
@@ -38,6 +41,10 @@ final class Preferences: ObservableObject {
     @Published var editorFontSize: Int { didSet { d.set(editorFontSize, forKey: Key.editorFontSize); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var editorLineHeight: Double { didSet { d.set(editorLineHeight, forKey: Key.editorLineHeight); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var editorColumnChars: Int { didSet { d.set(editorColumnChars, forKey: Key.editorColumn); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
+
+    @Published var readerBodyFontFamily: String { didSet { d.set(readerBodyFontFamily, forKey: Key.readerBodyFont); ThemeManager.shared.refresh() } }
+    @Published var readerCodeFontFamily: String { didSet { d.set(readerCodeFontFamily, forKey: Key.readerCodeFont); ThemeManager.shared.refresh() } }
+    @Published var readerBaseFontSize: Int { didSet { d.set(readerBaseFontSize, forKey: Key.readerFontSize); ThemeManager.shared.refresh() } }
 
     var editorTypography: EditorTypography {
         EditorTypography(fontFamily: editorFontFamily.isEmpty ? nil : editorFontFamily, fontSize: CGFloat(editorFontSize), lineHeight: CGFloat(editorLineHeight), columnChars: editorColumnChars)
@@ -60,10 +67,14 @@ final class Preferences: ObservableObject {
         editorFontSize = d.integer(forKey: Key.editorFontSize)
         editorLineHeight = d.double(forKey: Key.editorLineHeight)
         editorColumnChars = d.integer(forKey: Key.editorColumn)
+        readerBodyFontFamily = d.string(forKey: Key.readerBodyFont) ?? ""
+        readerCodeFontFamily = d.string(forKey: Key.readerCodeFont) ?? ""
+        readerBaseFontSize = d.integer(forKey: Key.readerFontSize)
     }
 
     var renderOptions: RenderOptions {
-        RenderOptions(codeLineNumbers: codeLineNumbers, linkUnderline: linkUnderline, largeFile: false)
+        RenderOptions(codeLineNumbers: codeLineNumbers, linkUnderline: linkUnderline, largeFile: false,
+                      bodyFontFamily: readerBodyFontFamily, codeFontFamily: readerCodeFontFamily, baseFontSize: readerBaseFontSize)
     }
     var largeFileThresholdBytes: Int { largeFileThresholdMB * 1024 * 1024 }
 }
@@ -102,6 +113,11 @@ struct PreferencesView: View {
     @State private var language = AppLanguage.current
     @State private var languageChanged = false
     @State private var fontMessage = ""
+    private var allFamilies: [String] {
+        var out = NSFontManager.shared.availableFontFamilies.filter { !$0.hasPrefix(".") }.sorted()
+        if !prefs.readerBodyFontFamily.isEmpty, !out.contains(prefs.readerBodyFontFamily) { out.insert(prefs.readerBodyFontFamily, at: 0) }
+        return out
+    }
     private var fontFamilies: [String] {
         // 等宽 + 已装的 iA Writer 三款（Duo / Quattro 不是严格等宽）
         let fm = NSFontManager.shared
@@ -157,6 +173,18 @@ struct PreferencesView: View {
                 }
             }
             Section(L("阅读")) {
+                Picker(L("正文字体"), selection: $prefs.readerBodyFontFamily) {
+                    Text(L("跟随主题")).tag("")
+                    ForEach(allFamilies, id: \.self) { Text($0).tag($0) }
+                }
+                Picker(L("代码字体"), selection: $prefs.readerCodeFontFamily) {
+                    Text(L("跟随主题")).tag("")
+                    ForEach(fontFamilies, id: \.self) { Text($0).tag($0) }
+                }
+                Picker(L("基础字号"), selection: $prefs.readerBaseFontSize) {
+                    Text(L("跟随主题")).tag(0)
+                    ForEach([13, 14, 15, 16, 17, 18, 19, 20, 22, 24], id: \.self) { Text("\($0) pt").tag($0) }
+                }
                 Toggle(L("代码块显示行号"), isOn: $prefs.codeLineNumbers)
                 Toggle(L("代码块显示复制按钮"), isOn: $prefs.codeCopyButton)
                 Toggle(L("链接显示下划线"), isOn: $prefs.linkUnderline)

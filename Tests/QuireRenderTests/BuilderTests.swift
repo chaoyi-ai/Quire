@@ -106,3 +106,19 @@ final class DropSupportTests: XCTestCase {
         XCTAssertTrue(DropSupport.isImage(URL(fileURLWithPath: "/a/b.webp")))
     }
 }
+
+final class FontOverrideTests: XCTestCase {
+    func testRenderOptionsOverrideFonts() {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let base = RenderStyle(theme: theme)
+        var o = RenderOptions(); o.bodyFontFamily = "Georgia"; o.codeFontFamily = "Courier New"; o.baseFontSize = 20
+        let s = RenderStyle(theme: theme, options: o)
+        XCTAssertEqual(s.bodyFont.familyName, "Georgia")
+        XCTAssertEqual(s.codeFont.familyName, "Courier New")
+        XCTAssertEqual(s.baseSize, 20)
+        XCTAssertEqual(s.headingFonts[0].familyName, "Georgia")
+        // 不存在的字体族 → 落回主题
+        var bad = RenderOptions(); bad.bodyFontFamily = "No Such Font Family 123"
+        XCTAssertEqual(RenderStyle(theme: theme, options: bad).bodyFont.familyName, base.bodyFont.familyName)
+    }
+}
