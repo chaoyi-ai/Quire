@@ -620,6 +620,13 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         sidebarViewController.showSearch()
     }
 
+    /// ⌥⌘F：侧栏筛选框（按名字筛树）
+    @objc func focusSidebarFilter(_ sender: Any?) {
+        if isImmersive { exitImmersive(restoreFullScreen: false) }
+        if splitViewController.splitViewItems.first?.isCollapsed == true { toggleSidebar(nil) }
+        sidebarViewController.focusFilter()
+    }
+
     @objc func revealInSidebar(_ sender: Any?) {
         if splitViewController.splitViewItems.first?.isCollapsed == true { toggleSidebar(nil) }
         sidebarViewController.revealCurrent()

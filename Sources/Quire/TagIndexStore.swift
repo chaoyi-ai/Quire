@@ -68,4 +68,10 @@ enum Favorites {
     static let didChange = Notification.Name("com.korako.quire.favoritesDidChange")
     static func contains(_ u: URL) -> Bool { urls.contains { $0.standardizedFileURL == u.standardizedFileURL } }
     static func toggle(_ u: URL) { if contains(u) { urls.removeAll { $0.standardizedFileURL == u.standardizedFileURL } } else { urls.append(u) } }
+    static func remove(_ u: URL) { if contains(u) { urls.removeAll { $0.standardizedFileURL == u.standardizedFileURL } } }
+    /// 文件改名 / 移动后收藏跟着走
+    static func replace(_ old: URL, with new: URL) {
+        guard contains(old) else { return }
+        urls = urls.map { $0.standardizedFileURL == old.standardizedFileURL ? new : $0 }
+    }
 }

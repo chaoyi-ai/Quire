@@ -121,6 +121,8 @@ enum MainMenu {
         backItem.keyEquivalentModifierMask = [.command, .control]
         let fwdItem = view.addItem(withTitle: L("前进"), action: #selector(DocumentWindowController.navigateForward(_:)), keyEquivalent: "\u{F703}")
         fwdItem.keyEquivalentModifierMask = [.command, .control]
+        let filt = view.addItem(withTitle: L("筛选侧栏文件…"), action: #selector(DocumentWindowController.focusSidebarFilter(_:)), keyEquivalent: "f")
+        filt.keyEquivalentModifierMask = [.command, .option]
         let gsearch = view.addItem(withTitle: L("全局搜索…"), action: #selector(DocumentWindowController.showGlobalSearch(_:)), keyEquivalent: "F")
         gsearch.keyEquivalentModifierMask = [.command, .shift]
         view.addItem(.separator())

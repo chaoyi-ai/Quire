@@ -17,7 +17,9 @@ final class LocalizationTests: XCTestCase {
     private func codeKeys(in dir: URL, fn: String) throws -> Set<String> {
         let re = try NSRegularExpression(pattern: "\\b\(fn)\\(\"((?:[^\"\\\\]|\\\\.)*)\"\\)")
         var keys = Set<String>()
-        for file in try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) where file.pathExtension == "swift" {
+        // 递归：子目录（Sources/Quire/Sidebar/…）里的代码也要查
+        let all = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
+        for file in all where file.pathExtension == "swift" {
             let s = try String(contentsOf: file, encoding: .utf8)
             for m in re.matches(in: s, range: NSRange(location: 0, length: (s as NSString).length)) {
                 let raw = (s as NSString).substring(with: m.range(at: 1))

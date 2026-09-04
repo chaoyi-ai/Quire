@@ -33,10 +33,10 @@ swiftc -typecheck -wmo -swift-version 6 -module-name Quire -target "${ARCH}-appl
   -I "$B/Modules" -Xcc -I.build/checkouts/swift-cmark/src/include -Xcc -I.build/checkouts/swift-cmark/extensions/include "${args[@]}" \
   -Xfrontend -const-gather-protocols-file -Xfrontend "$WORK/protocols.json" \
   -emit-const-values-path "$WORK/Quire.swiftconstvalues" \
-  Sources/Quire/*.swift "$B/Quire.build/DerivedSources/resource_bundle_accessor.swift" 2>&1 | grep -E "error:" && { echo "appintents: typecheck 失败"; exit 1 } || true
+  $(find Sources/Quire -name '*.swift') "$B/Quire.build/DerivedSources/resource_bundle_accessor.swift" 2>&1 | grep -E "error:" && { echo "appintents: typecheck 失败"; exit 1 } || true
 [ -f "$WORK/Quire.swiftconstvalues" ] || { echo "appintents: 没有 const values"; exit 1 }
 
-ls Sources/Quire/*.swift > "$WORK/sources.txt"
+find Sources/Quire -name '*.swift' > "$WORK/sources.txt"   # 递归：Sidebar/ 等子目录也算
 echo "$WORK/Quire.swiftconstvalues" > "$WORK/constvals.txt"
 XCV=$(xcodebuild -version 2>/dev/null | awk '/Build version/{print $3}'); [ -n "$XCV" ] || XCV=16F18
 set +e

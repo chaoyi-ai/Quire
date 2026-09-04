@@ -194,6 +194,10 @@
 - [x] 侧栏顶部三个虚拟分组（#79，0.5.3）：收藏（右键文件 加入 / 移除，存 UserDefaults）、最近（系统最近打开里属于本根的）、标签（后台扫根下 Markdown 的 `#标签`，跳过标题 / 代码块 / URL / 纯数字 / 颜色值；按 mtime 缓存，随 FileIndex 变更重扫；点标签 = 侧栏内容搜索）；空分组不显示，首次出现默认展开
 - [x] 内容块（#80，0.5.4）：独占一段的 `![[file]]`（Obsidian 风格，与 wikilinks 同族；不用 iA 的裸行写法——裸行会改变合法 GFM 段落的语义）。解析器不碰文件：`Transclusion.expand` 后处理 + App 给的 Loader（Markdown 走 FileIndex 快照 + `WikiLink.resolve` 就近；csv / 图片按当前目录 → 根目录找；必须落在根目录内；≤ 2 MB）。`.md` 递归内联（深度 ≤ 6，循环包含拦下，front matter 去掉，相对图片按被包含文件目录重定位）、`.csv/.tsv` → 表格（全数字列右对齐）、图片 → 图片块；展开块带指令行的 sourceRange，滚动同步照旧；被包含文件改动即重渲染；导出走展开后的文档；设置 → 阅读 开关，默认关
 
+### 7.3.1 侧栏重做（0.6.0）
+- [x] 按 [research/sidebar.md](research/sidebar.md)：文件 / 大纲两段（可拖分隔、可折叠），收藏 / 标签底部默认折叠，「最近」进位置菜单与 ⌘P；常驻筛选框（按名筛树 / 回车全文搜索，⌥⌘F）；段头悬停动作；右键新建 / 重命名 / 废纸篓；标签扫描去噪 + `#a/b` 嵌套
+- [ ] 侧栏后续：⌘P 空查询列最近打开的文件；编辑模式下大纲跟随光标所在标题；文件拖到文件夹 = 移动
+
 ### 7.4 导出与集成
 - [x] PDF 排版参数（#81，0.5.5）：导出 PDF 的存盘面板带附加视图——纸张（跟随系统 / A4 / Letter）、四边距、页眉 / 页脚模板（`{page} {pages} {title} {file} {date}`，`|` 分左中右）、标题编号、标题不孤行；记在 `pdf.layout`（JSON），⌘P 打印也用同一套。页眉页脚走 AppKit 自带的 `pageHeader / pageFooter`（自己改 frame 画会触发 TextKit 重排、分页失效）；标题不孤行在 `computePageRects` 里把页尾标题带到下一页；打印 / PDF 永远用浅色主题
 - [x] `quire://` URL scheme（#82，0.5.6）：`open?path&line` / `new?text&path` / `append?path&text` / `export?path&to&format`；路径必须绝对（可 `~`）；来自外部的请求，目标不在已打开的侧栏根目录 / 文档目录内时先弹确认（`/tmp` 与 `/private/tmp` 按父目录解析符号链接后比较）。`quire` 命令行加 `open / new / append / export` 子命令（走同一套 URL）。Apple Shortcuts：4 个 App Intents（打开 / 新建 / 追加 / 导出 PDF 返回文件）——纯 SwiftPM 没有 Xcode 的元数据步骤，`scripts/appintents_metadata.sh` 用 `swiftc -typecheck -emit-const-values-path` + `appintentsmetadataprocessor` 手动生成 `Metadata.appintents` 放进 bundle
