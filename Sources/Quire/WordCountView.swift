@@ -33,11 +33,24 @@ final class WordCountView: NSView {
         super.viewDidChangeEffectiveAppearance()
         updateBackground()
     }
-    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); updateBackground() }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow(); updateBackground()
+        if themeObserver == nil {
+            themeObserver = NotificationCenter.default.addObserver(forName: ThemeManager.didChange, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.updateBackground() }
+            }
+        }
+    }
+    nonisolated(unsafe) private var themeObserver: NSObjectProtocol?
+    deinit { if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) } }
     /// 动态颜色转 CGColor 必须在本视图的 effectiveAppearance 下算：App 用「浅色」而系统是深色时，直接取 cgColor 会拿到深色版（浅色界面里一块黑胶囊）
     private func updateBackground() {
+        // 底色跟主题走（和侧栏一样"抬高一级"），不然 Solarized 之类的主题里它是唯一一块系统灰
+        let bg = ThemeManager.shared.currentStyle.background.usingColorSpace(.sRGB) ?? .windowBackgroundColor
+        let lum = 0.2126 * bg.redComponent + 0.7152 * bg.greenComponent + 0.0722 * bg.blueComponent
+        let tint = (lum < 0.5 ? bg.blended(withFraction: 0.08, of: .white) : bg.blended(withFraction: 0.04, of: .black)) ?? bg
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.85).cgColor
+            layer?.backgroundColor = tint.withAlphaComponent(0.9).cgColor
         }
     }
 

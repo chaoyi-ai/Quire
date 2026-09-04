@@ -31,12 +31,33 @@ final class SidebarViewController: NSViewController, NSSearchFieldDelegate, NSMe
     nonisolated(unsafe) private var prefsObserver: NSObjectProtocol?
     nonisolated(unsafe) private var settingsObserver: NSObjectProtocol?
     private var lastRules: Preferences.SidebarRules?
+    private let themeTint = NSView()
+    nonisolated(unsafe) private var themeObserver: NSObjectProtocol?
+
+    /// 侧栏底色跟主题走（见 loadView 里的说明）
+    private func applyThemeTint() {
+        let bg = ThemeManager.shared.currentStyle.background.usingColorSpace(.sRGB) ?? .windowBackgroundColor
+        let luminance = 0.2126 * bg.redComponent + 0.7152 * bg.greenComponent + 0.0722 * bg.blueComponent
+        let isDark = luminance < 0.5
+        let tint = isDark ? bg.blended(withFraction: 0.06, of: .white) : bg.blended(withFraction: 0.03, of: .black)
+        themeTint.layer?.backgroundColor = (tint ?? bg).withAlphaComponent(0.88).cgColor
+    }
 
     override func loadView() {
         let container = NSVisualEffectView()
         container.material = .sidebar
         container.blendingMode = .behindWindow
         container.state = .followsWindowActiveState
+        // 系统的侧栏材质在深色下是中灰（≈#2a2b2f），而深色主题的正文是近黑（GitHub Dark #0d1117）——两边一硬切。
+        // 铺一层从主题背景推出来的"抬高一级"的颜色（深色提亮 6%、浅色压暗 3%），留一点材质的通透感
+        themeTint.wantsLayer = true
+        themeTint.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(themeTint)
+        NSLayoutConstraint.activate([
+            themeTint.topAnchor.constraint(equalTo: container.topAnchor), themeTint.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            themeTint.leadingAnchor.constraint(equalTo: container.leadingAnchor), themeTint.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+        ])
+        applyThemeTint()
 
         // 位置栏：根目录名 + 下拉菜单
         locationButton = NSPopUpButton(frame: .zero, pullsDown: true)
@@ -156,8 +177,12 @@ final class SidebarViewController: NSViewController, NSSearchFieldDelegate, NSMe
             MainActor.assumeIsolated { self?.files.reloadTree(); self?.updateBottomSections(); self?.rebuildLocationMenu() }
         }
         lastRules = Preferences.shared.sidebarRules
+        themeObserver = NotificationCenter.default.addObserver(forName: ThemeManager.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyThemeTint() }
+        }
     }
     deinit {
+        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
         if let prefsObserver { NotificationCenter.default.removeObserver(prefsObserver) }
         if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
     }
