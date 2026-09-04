@@ -40,7 +40,8 @@ final class SidebarViewController: NSViewController, NSSearchFieldDelegate, NSMe
         let luminance = 0.2126 * bg.redComponent + 0.7152 * bg.greenComponent + 0.0722 * bg.blueComponent
         let isDark = luminance < 0.5
         let tint = isDark ? bg.blended(withFraction: 0.06, of: .white) : bg.blended(withFraction: 0.03, of: .black)
-        themeTint.layer?.backgroundColor = (tint ?? bg).withAlphaComponent(0.88).cgColor
+        // 完全不透明：透窗材质会把后面的亮窗口（Finder、通知）透出来，在深色主题里像一条条发白的带子
+        themeTint.layer?.backgroundColor = (tint ?? bg).cgColor
     }
 
     override func loadView() {
@@ -49,7 +50,7 @@ final class SidebarViewController: NSViewController, NSSearchFieldDelegate, NSMe
         container.blendingMode = .behindWindow
         container.state = .followsWindowActiveState
         // 系统的侧栏材质在深色下是中灰（≈#2a2b2f），而深色主题的正文是近黑（GitHub Dark #0d1117）——两边一硬切。
-        // 铺一层从主题背景推出来的"抬高一级"的颜色（深色提亮 6%、浅色压暗 3%），留一点材质的通透感
+        // 铺一层从主题背景推出来的"抬高一级"的颜色（深色提亮 6%、浅色压暗 3%）
         themeTint.wantsLayer = true
         themeTint.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(themeTint)

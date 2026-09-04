@@ -719,6 +719,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = L("目录"); item.toolTip = L("显示/隐藏目录（⌘⌥S）")
             item.image = Self.toolbarSymbol("sidebar.left", L("目录"))
+            item.isBordered = false   // 深色主题的标题栏近黑，标准的圆形底座会像一颗悬浮的灰豆
             item.target = self; item.action = #selector(toggleSidebar(_:))
             item.isNavigational = true
             return item
@@ -746,6 +747,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             item.label = L("主题"); item.toolTip = L("选择主题")
             item.image = Self.toolbarSymbol("paintpalette", L("主题"))
             item.showsIndicator = true
+            item.isBordered = false   // 与旁边的图标按钮一致（都不带底座）
             let menu = MainMenu.buildThemeMenu()
             menu.delegate = MainMenu.Handler.shared
             item.menu = menu
@@ -754,6 +756,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = L("外观"); item.toolTip = L("切换亮 / 暗")
             item.image = Self.toolbarSymbol("circle.lefthalf.filled", L("外观"))
+            item.isBordered = false
             item.target = MainMenu.Handler.shared; item.action = #selector(MainMenu.Handler.toggleAppearance(_:))
             return item
         default: return nil
