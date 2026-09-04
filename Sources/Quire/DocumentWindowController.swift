@@ -87,6 +87,10 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         toolbar.allowsUserCustomization = false
         window.toolbar = toolbar
         window.toolbarStyle = .unified
+        // 标题栏透明、不画分隔线：工具栏直接浮在正文上（macOS 26 的做法）。否则标题栏是一条比正文亮的材质带，
+        // 在侧栏浮板的右缘被硬生生切断，看起来像侧栏压着标题栏
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
         LaunchClock.mark("  wc: toolbar")
 
         // 侧栏：标题 → 跳转（阅读视图 + 编辑器）；文件 → 打开
