@@ -16,6 +16,8 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     /// 字符级编辑（含撤销 / 重做 / 程序插入；setSource 整体替换除外）：editedRange 是新内容范围，delta 是长度变化，isPaste 表示来自粘贴
     public var onCharactersEdited: ((_ editedRange: NSRange, _ delta: Int, _ isPaste: Bool) -> Void)?
     var isPasting = false
+    /// 上下留白：向阅读视图看齐（它是 40），第一行别贴着工具栏；打字机模式下由 updateTypewriterInset 换成半屏
+    static let verticalInset: CGFloat = 28
     var authorshipRepaintWork: DispatchWorkItem?
 
     public var posMode: POSMode = .off {
@@ -61,7 +63,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     }
     /// 沉浸模式要求的列宽（0 = 无）；与行宽设置取其一
     public var immersiveWidth: CGFloat = 0 {
-        didSet { maxContentWidth = typography.columnChars > 0 ? CGFloat(typography.columnChars) * charWidth : immersiveWidth }
+        didSet { maxContentWidth = typography.columnChars > 0 ? CGFloat(typography.columnChars) * charWidth : immersiveWidth; updateTypewriterInset() }
     }
     /// Esc（沉浸模式退出用）
     public var onEscape: (() -> Void)?
@@ -175,7 +177,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         isContinuousSpellCheckingEnabled = false
         isGrammarCheckingEnabled = false
         smartInsertDeleteEnabled = false
-        textContainerInset = CGSize(width: 12, height: 16)
+        textContainerInset = CGSize(width: 12, height: Self.verticalInset)
         textStorage?.delegate = self
         // 文件拖放（图片 / Markdown 链接）：显式登记 fileURL，别指望纯文本视图的默认类型里有它
         registerForDraggedTypes(Array(Set(registeredDraggedTypes + [.fileURL])))
@@ -625,7 +627,9 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
     /// 视口顶部所在行（1-based）
     public var isScrolledToTop: Bool {
         guard let sv = enclosingScrollView else { return false }
-        return sv.contentView.bounds.minY + sv.contentInsets.top <= 1
+        let clip = sv.contentView
+        let minOrigin = clip.constrainBoundsRect(NSRect(origin: CGPoint(x: clip.bounds.minX, y: -1e9), size: clip.bounds.size)).origin
+        return clip.bounds.minY <= minOrigin.y + 1
     }
     /// 已经滚不动了（以 NSClipView 自己的夹紧规则为准，别自己算 frame / inset）
     public var isScrolledToBottom: Bool {

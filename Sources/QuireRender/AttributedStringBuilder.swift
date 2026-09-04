@@ -34,6 +34,8 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         var marker: NSAttributedString?   // 列表项首段的标记（• / 1. / 复选框）
         var markerWidth: CGFloat = 0
         var isFirstInItem = false
+        /// 最外层列表的最后一段：段后留整段间距，两个相邻列表 / 列表与后文才分得开（列表内部项与项之间只留 1/4）
+        var isLastInList = false
     }
 
     /// 段级上下文：一段内所有 run 共享的属性 + 缓存键
@@ -188,10 +190,10 @@ public final class AttributedStringBuilder: @unchecked Sendable {
 
     private func bodyParagraphStyle(ctx: BlockContext) -> (String, NSParagraphStyle) {
         let hasMarker = ctx.marker != nil && ctx.isFirstInItem
-        let key = "p-\(ctx.indent)-\(ctx.quoteDepth)-\(ctx.listDepth)-\(hasMarker ? ctx.markerWidth : 0)"
+        let key = "p-\(ctx.indent)-\(ctx.quoteDepth)-\(ctx.listDepth)-\(hasMarker ? ctx.markerWidth : 0)-\(ctx.isLastInList ? 1 : 0)"
         let ps = paragraphStyle(key: key) { p in
             p.minimumLineHeight = style.lineHeight; p.maximumLineHeight = style.lineHeight
-            p.paragraphSpacing = ctx.listDepth > 0 ? (style.paragraphSpacing * 0.25).rounded() : style.paragraphSpacing
+            p.paragraphSpacing = ctx.listDepth > 0 && !ctx.isLastInList ? (style.paragraphSpacing * 0.25).rounded() : style.paragraphSpacing
             p.headIndent = ctx.indent
             p.firstLineHeadIndent = hasMarker ? ctx.indent - ctx.markerWidth : ctx.indent
             if hasMarker { p.tabStops = [NSTextTab(textAlignment: .left, location: ctx.indent)]; p.defaultTabInterval = ctx.indent }
@@ -223,6 +225,8 @@ public final class AttributedStringBuilder: @unchecked Sendable {
                 var cc = c
                 cc.isFirstInItem = (j == 0)
                 if j > 0 { cc.marker = nil }
+                // 整个列表的最后一段（嵌套时沿着"最后一项的最后一块"一路传下去）
+                cc.isLastInList = i == items.count - 1 && j == blocks.count - 1 && (ctx.listDepth == 0 || ctx.isLastInList)
                 append(b, into: out, ctx: cc)
             }
         }
@@ -547,9 +551,20 @@ public final class AttributedStringBuilder: @unchecked Sendable {
                 if !rest.isEmpty { appendRun(rest, into: out, ctx: ctx) }
                 k += 2; continue
             }
+            // 中文之间的软换行不加空格（浏览器会加，但中文排版里那是个多余的空隙）
+            if case .softBreak = inlines[k], k + 1 < inlines.count, let prev = out.string.last, Self.isCJK(prev),
+               case .text(let next) = inlines[k + 1], let first = next.first, Self.isCJK(first) {
+                k += 1; continue
+            }
             appendInline(inlines[k], into: out, ctx: ctx)
             k += 1
         }
+    }
+
+    static func isCJK(_ c: Character) -> Bool {
+        guard let u = c.unicodeScalars.first?.value else { return false }
+        return (0x4E00...0x9FFF).contains(u) || (0x3400...0x4DBF).contains(u) || (0x3000...0x303F).contains(u) || (0xFF00...0xFFEF).contains(u)
+            || (0x3040...0x30FF).contains(u) || (0xAC00...0xD7AF).contains(u)
     }
 
     /// `{width=50%}` / `{width=300}` / `{width=300px}` 开头 → (宽度, 其后的文本)

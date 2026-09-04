@@ -92,7 +92,6 @@
 "隐藏 Quire" = "Hide Quire";
 "隐藏其他" = "Hide Others";
 "（无标题）" = "(Untitled)";
-"语言" = "Language";
 "界面语言" = "Interface language";
 "重新打开 Quire 后生效" = "Takes effect after reopening Quire";
 "右下角显示字数统计" = "Show word count in the corner";
@@ -295,3 +294,4 @@
 "筛选侧栏文件…" = "Filter Sidebar Files…";
 "排序" = "Sort";
 "标题" = "Heading";
+"通用" = "General";

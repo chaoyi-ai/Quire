@@ -14,6 +14,7 @@ final class EditorViewController: NSViewController {
     nonisolated(unsafe) private var prefsObserver: NSObjectProtocol?
     /// 编辑器滚动回调（顶部行号）
     var onScroll: ((Int) -> Void)?
+    private var lastSyncedScrollY: CGFloat = .nan
     /// 文本变化（由控制器已经转发给 session 后再调用）
     var onEdit: (() -> Void)?
 
@@ -100,7 +101,9 @@ final class EditorViewController: NSViewController {
                 self.textView.schedulePOSRecolor(delay: 0.12)
                 self.textView.scheduleStyleCheck(delay: 0.15)
                 self.textView.scheduleAuthorshipRepaint()
-                self.onScroll?(self.textView.topVisibleLine())
+                // 只有真的滚动了才同步阅读视图：窗口布局改的是 bounds 尺寸不是原点，启动时那几下会把阅读视图带到莫名其妙的位置
+                let y = self.scrollView.contentView.bounds.minY
+                if y != self.lastSyncedScrollY { self.lastSyncedScrollY = y; self.onScroll?(self.textView.topVisibleLine()) }
             }
         }
         themeObserver = NotificationCenter.default.addObserver(forName: ThemeManager.didChange, object: nil, queue: .main) { [weak self] _ in

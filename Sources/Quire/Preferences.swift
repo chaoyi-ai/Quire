@@ -96,7 +96,7 @@ final class Preferences: ObservableObject {
     static let didChange = Notification.Name("com.korako.quire.preferencesDidChange")
 
     private init() {
-        d.register(defaults: [Key.codeCopyButton: true, Key.autoReload: true, Key.editorLineNumbers: true, Key.largeFileMB: 8, Key.wordCount: true, Key.hangingMarkers: true, Key.htmlPaste: true, Key.editorLineHeight: 1.35, Key.math: true, Key.updates: true, Key.toc: true, Key.formatToolbar: true])
+        d.register(defaults: [Key.codeCopyButton: true, Key.autoReload: true, Key.editorLineNumbers: true, Key.largeFileMB: 8, Key.wordCount: true, Key.hangingMarkers: true, Key.htmlPaste: true, Key.editorLineHeight: 1.35, Key.editorColumn: 100, Key.math: true, Key.updates: true, Key.toc: true, Key.formatToolbar: true])
         codeLineNumbers = d.bool(forKey: Key.codeLineNumbers)
         codeCopyButton = d.bool(forKey: Key.codeCopyButton)
         linkUnderline = d.bool(forKey: Key.linkUnderline)
@@ -191,7 +191,7 @@ struct PreferencesView: View {
 
     var body: some View {
         Form {
-            Section(L("语言")) {
+            Section(L("通用")) {
                 Picker(L("界面语言"), selection: $language) {
                     Text(L("跟随系统")).tag(AppLanguage.system)
                     Text("简体中文").tag(AppLanguage.zhHans)

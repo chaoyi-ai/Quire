@@ -107,7 +107,8 @@ extension EditorTextView {
     /// 打字机模式需要上下各半屏留白，文首 / 文末的行才能到中线
     func updateTypewriterInset() {
         guard let sv = enclosingScrollView else { return }
-        let h = focusMode == .typewriter ? ((sv.contentView.bounds.height - sv.contentInsets.top) / 2).rounded() : 16
+        // 打字机：半屏；沉浸（没有工具栏压着）：多留一些，第一行别顶着屏幕上沿；平时 28
+        let h = focusMode == .typewriter ? ((sv.contentView.bounds.height - sv.contentInsets.top) / 2).rounded() : (immersiveWidth > 0 ? 72 : EditorTextView.verticalInset)
         if abs(textContainerInset.height - h) > 0.5 { textContainerInset = CGSize(width: textContainerInset.width, height: h) }
     }
 }

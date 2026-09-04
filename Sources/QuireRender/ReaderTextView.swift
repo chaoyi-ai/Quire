@@ -781,7 +781,9 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
 
     public var isScrolledToTop: Bool {
         guard let sv = enclosingScrollView else { return false }
-        return sv.contentView.bounds.minY <= -topInset + 1
+        let clip = sv.contentView
+        let minOrigin = clip.constrainBoundsRect(NSRect(origin: CGPoint(x: clip.bounds.minX, y: -1e9), size: clip.bounds.size)).origin
+        return clip.bounds.minY <= minOrigin.y + 1
     }
     /// 已经滚不动了（以 NSClipView 自己的夹紧规则为准，别自己算 frame / inset）
     public var isScrolledToBottom: Bool {

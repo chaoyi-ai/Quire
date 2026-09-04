@@ -4,7 +4,7 @@ import QuireRender
 
 /// 文档窗口：侧栏（目录）| 编辑器 | 阅读视图，三态（阅读 / 编辑 / 分栏），滚动同步。
 @MainActor
-final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSWindowDelegate, NSMenuItemValidation {
+final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSWindowDelegate, NSMenuItemValidation, NSSplitViewDelegate {
     enum Mode: Int { case reader = 0, editor = 1, split = 2, hybrid = 3 }   // hybrid = 混合实时预览（实验，spike #85）
 
     let readerViewController: ReaderViewController
@@ -13,8 +13,11 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     let sidebarViewController: SidebarViewController
     private var fileURLObserver: NSKeyValueObservation?
     private let splitViewController = NSSplitViewController()
-    private var editorItem: NSSplitViewItem?
-    private var readerItem: NSSplitViewItem!
+    /// 正文区：编辑器 + 阅读视图放在一个经典 NSSplitView 里（不用 NSSplitViewController：那套用约束握着窗格宽度，
+    /// setPosition 不生效、给窗格加宽度约束会把窗口撑大，每种启动模式分出来的宽度都不一样）。折叠 = 隐藏子视图
+    private let contentSplit = NSSplitView()
+    private let paneHost = NSViewController()
+    private var editorAdded = false
     let session: DocumentSession
     private var modeControl: NSSegmentedControl?
     private let wordCount = WordCountView(frame: .zero)
@@ -54,13 +57,19 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         sidebar.holdingPriority = NSLayoutConstraint.Priority(300)   // 窗口 / 窗格宽度变化都落在正文窗格上，侧栏保持自己的宽度
         sidebar.canCollapse = true
         sidebar.isCollapsed = UserDefaults.standard.bool(forKey: "sidebar.collapsed")
-        readerItem = NSSplitViewItem(viewController: readerViewController)
-        readerItem.minimumThickness = 280
-        readerItem.canCollapse = true
-        readerItem.collapseBehavior = .preferResizingSiblingsWithFixedSplitView   // 折叠本身不碰窗口；窗口宽度由 switchPanes 管
+        contentSplit.isVertical = true
+        contentSplit.dividerStyle = .thin
+        contentSplit.delegate = self
+        paneHost.view = contentSplit
+        paneHost.addChild(readerViewController)
+        readerViewController.view.autoresizingMask = [.width, .height]
+        contentSplit.addArrangedSubview(readerViewController.view)
+        let contentItem = NSSplitViewItem(viewController: paneHost)
+        contentItem.minimumThickness = 280
         splitViewController.addSplitViewItem(sidebar)
-        splitViewController.addSplitViewItem(readerItem)
-        splitViewController.splitView.autosaveName = "QuireSplit3"
+        splitViewController.addSplitViewItem(contentItem)
+        // 不用 NSSplitView 的 autosave：它会把某个模式下（有窗格折叠着）的三栏宽度原样复原到别的模式，每次启动都不一样；
+        // 侧栏宽度自己记（sidebar.width），双栏在 showWindow / 切模式时按等宽分
         splitViewController.splitView.dividerStyle = .thin
         window.contentViewController = splitViewController   // 注意：这会按子视图初始 frame 改窗口大小
         // 恢复上次窗口位置/大小；没有则用默认尺寸并居中
@@ -138,7 +147,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.sidebarViewController.currentURL = doc.fileURL
-                if self.editorItem != nil { self.editorViewController.documentURLDidChange(doc.fileURL) }
+                if self.editorAdded { self.editorViewController.documentURLDidChange(doc.fileURL) }
                 // 未命名文档首次存储 / 存储为：监视新路径、相对图片按新目录解析（以前只在 showWindow 时设过一次）
                 self.readerViewController.textView.baseURL = doc.fileURL
                 if self.window?.isVisible == true { self.session.startWatching() }
@@ -158,7 +167,16 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         super.showWindow(sender)
         LaunchClock.mark("window shown")
         markdownDocument?.session.startWatching()
-        if mode != .reader { window?.makeFirstResponder(editorViewController.textView) }
+        // 焦点给正文，不给侧栏筛选框（否则一打开光标就在筛选框里、方向键滚不了文档）
+        if mode == .editor || mode == .split { window?.makeFirstResponder(editorViewController.textView) }
+        else { window?.makeFirstResponder(readerViewController.textView) }
+        restoreSidebarWidth()
+        // 启动那几百毫秒里窗口还在布局（分栏 autosave 复原、inset 到位）：这期间不做滚动同步，也等它们完了再把双栏分成等宽
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self else { return }
+            self.readyForScrollSync = true
+            if self.mode == .split { self.equalizePanes() }
+        }
     }
 
     private func makeEditor() -> EditorViewController {
@@ -169,15 +187,16 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
 
     /// 首次进入编辑/分栏时把编辑器插入 split view（sidebar 之后、reader 之前）
     private func ensureEditorPane() {
-        guard editorItem == nil else { return }
-        editorViewController.loadViewIfNeeded()   // 折叠插入不会触发 loadView；后面要直接碰 textView / scrollView
-        let item = NSSplitViewItem(viewController: editorViewController)
-        item.minimumThickness = 280
-        item.canCollapse = true
-        item.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
-        item.isCollapsed = true
-        splitViewController.insertSplitViewItem(item, at: 1)
-        editorItem = item
+        guard !editorAdded else { return }
+        editorAdded = true
+        editorViewController.loadViewIfNeeded()   // 隐藏着插入不会触发 loadView；后面要直接碰 textView / scrollView
+        paneHost.addChild(editorViewController)
+        let half = max(280, (contentSplit.bounds.width / 2).rounded())
+        editorViewController.view.frame = NSRect(x: 0, y: 0, width: half, height: max(100, contentSplit.bounds.height))
+        editorViewController.view.autoresizingMask = [.width, .height]
+        editorViewController.view.isHidden = !(mode == .editor || mode == .split)
+        contentSplit.insertArrangedSubview(editorViewController.view, at: 0)
+        contentSplit.adjustSubviews()
         // 编辑器可能晚于文档打开创建：同步当前源码
         if let doc = markdownDocument { editorViewController.replaceSource(doc.source) }
         editorViewController.textView.focusMode = focusMode
@@ -194,8 +213,28 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         if let selectionObserver { NotificationCenter.default.removeObserver(selectionObserver) }
     }
 
+    // MARK: - 侧栏宽度（自己记：NSSplitView 的 autosave 在窗格折叠 / 展开时会把侧栏一起重新分配，每种启动模式宽度都不一样）
+    private static let sidebarWidthKey = "sidebar.width"
+    private var sidebarResizeObserver: NSObjectProtocol?
+    private func restoreSidebarWidth() {
+        guard let sidebar = splitViewController.splitViewItems.first, !sidebar.isCollapsed else { return }
+        let w = CGFloat(UserDefaults.standard.double(forKey: Self.sidebarWidthKey))
+        let target = w > 0 ? min(max(w, sidebar.minimumThickness), sidebar.maximumThickness) : 240
+        window?.layoutIfNeeded()
+        if abs(sidebar.viewController.view.frame.width - target) > 0.5 { splitViewController.splitView.setPosition(target, ofDividerAt: 0) }
+        if sidebarResizeObserver == nil {
+            sidebarResizeObserver = NotificationCenter.default.addObserver(forName: NSSplitView.didResizeSubviewsNotification, object: splitViewController.splitView, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let sb = self.splitViewController.splitViewItems.first, !sb.isCollapsed, self.window?.inLiveResize == false else { return }
+                    let cur = sb.viewController.view.frame.width
+                    if cur >= sb.minimumThickness { UserDefaults.standard.set(Double(cur), forKey: Self.sidebarWidthKey) }
+                }
+            }
+        }
+    }
+
     /// 编辑器面板已经建好（阅读 / 混合模式下没有：此时 `editorViewController.textView` 还是 nil，碰它就崩）
-    var hasEditorPane: Bool { editorItem != nil && editorViewController.isViewLoaded }
+    var hasEditorPane: Bool { editorAdded && editorViewController.isViewLoaded }
     /// 需要源码编辑器的动作：阅读 / 混合模式先切到编辑模式
     func ensureEditorMode() { if mode == .reader || mode == .hybrid { mode = .editor } }
 
@@ -273,7 +312,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         let wasFull = window.styleMask.contains(.fullScreen)
         let tabBarVisible = window.tabGroup?.isTabBarVisible ?? false
         immersiveSaved = ImmersiveSaved(mode: mode, sidebarCollapsed: sidebarCollapsed, toolbarVisible: window.toolbar?.isVisible ?? true,
-                                        rulers: editorItem != nil ? editorViewController.scrollView.rulersVisible : Preferences.shared.editorLineNumbers,
+                                        rulers: editorAdded ? editorViewController.scrollView.rulersVisible : Preferences.shared.editorLineNumbers,
                                         wordCountHidden: wordCount.isHidden, enteredFullScreen: !wasFull, hidTabBar: tabBarVisible)
         mode = .editor
         if !sidebarCollapsed { splitViewController.toggleSidebar(nil) }
@@ -335,7 +374,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
 
     /// 文档从磁盘（重新）读入：同步编辑器文本
     func documentDidReload(_ source: String) {
-        guard editorItem != nil, editorViewController.isViewLoaded else { return }
+        guard hasEditorPane else { return }
         editorViewController.replaceSource(source)
     }
 
@@ -377,33 +416,53 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         // 要变宽：先把窗口撑开（在任何折叠约束出现之前），再展开窗格，留下的窗格会缩回去给新窗格让位
         if canResize, targetWidth > window.frame.width { apply(width: targetWidth) }
         // 先展开要显示的（从留下的正文窗格里分空间，分栏视图宽度不变），再折叠要藏的（腾出的空间给刚展开的窗格，侧栏不吃）
-        if showEditor { editorItem?.isCollapsed = false }
-        if mode != .editor { readerItem.isCollapsed = false }
-        if !showEditor { editorItem?.isCollapsed = true }
-        if mode == .editor { readerItem.isCollapsed = true }
+        setPaneVisibility(showEditor: showEditor)
         guard canResize else { return }
         // 下一轮：AppKit 折叠时临时加的约束已经撤掉，把窗口宽度校正到目标值、双栏分到等宽
         DispatchQueue.main.async { [weak self, weak window] in
             guard let self, let window else { return }
             apply(width: targetWidth)
-            if isSplit {
-                let content = window.contentView!.frame.width - sidebarW
-                let dividerIndex = (sidebarItem?.isCollapsed ?? true) ? 0 : 1
-                self.splitViewController.splitView.setPosition(sidebarW + (content / 2).rounded(), ofDividerAt: dividerIndex)
+            if isSplit { self.equalizePanes() }
+        }
+    }
+
+    /// 显示 / 隐藏正文窗格（隐藏 = NSSplitView 的折叠）；双栏时分成等宽
+    private func setPaneVisibility(showEditor: Bool) {
+        if editorAdded { editorViewController.view.isHidden = !showEditor }
+        readerViewController.view.isHidden = (mode == .editor)
+        contentSplit.adjustSubviews()
+        if mode == .split { equalizePanes() }
+        if ProcessInfo.processInfo.environment["QUIRE_DEBUG_PANES"] != nil, mode != .split {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                guard let self else { return }
+                let f = self.contentSplit.arrangedSubviews.map { "\(Int($0.frame.width))\($0.isHidden ? "h" : "")" }
+                FileHandle.standardError.write("PANES: sidebar=\(Int(self.sidebarViewController.view.frame.width)) content=\(f) window=\(Int(self.window?.frame.width ?? 0))\n".data(using: .utf8)!)
+            }
+        }
+    }
+
+    /// 双栏：编辑器与阅读视图等宽
+    private func equalizePanes() {
+        guard mode == .split, editorAdded else { return }
+        let w = contentSplit.bounds.width
+        guard w > 0 else { return }
+        contentSplit.setPosition(((w - contentSplit.dividerThickness) / 2).rounded(), ofDividerAt: 0)
+        if ProcessInfo.processInfo.environment["QUIRE_DEBUG_PANES"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                guard let self else { return }
+                let f = self.contentSplit.arrangedSubviews.map { "\(Int($0.frame.width))\($0.isHidden ? "h" : "")" }
+                FileHandle.standardError.write("PANES: sidebar=\(Int(self.sidebarViewController.view.frame.width)) content=\(f) window=\(Int(self.window?.frame.width ?? 0))\n".data(using: .utf8)!)
             }
         }
     }
 
     private func applyMode(from old: Mode? = nil) {
-        guard readerItem != nil else { return }
         let showEditor = mode == .editor || mode == .split
         if showEditor { ensureEditorPane() }
         if let window, window.isVisible, let old {
             switchPanes(from: old, showEditor: showEditor, window: window)
         } else {
-            // 启动路径：不动画（runAnimationGroup 在初始化阶段要 40 ms）
-            editorItem?.isCollapsed = !showEditor
-            readerItem.isCollapsed = (mode == .editor)
+            setPaneVisibility(showEditor: showEditor)   // 启动路径
         }
         modeControl?.selectedSegment = mode.rawValue
         // 字数胶囊跟着可见的窗格走（只编辑时阅读窗格折叠）
@@ -450,7 +509,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         hybrid.onDeactivate = { [weak self] in
             guard let self else { return }
             self.session.sourceDidChange(self.session.source, reason: .edited)
-            if self.editorItem != nil { self.editorViewController.replaceSource(self.session.source) }
+            if self.editorAdded { self.editorViewController.replaceSource(self.session.source) }
         }
     }
     @objc private func modeChanged(_ sender: NSSegmentedControl) { mode = Mode(rawValue: sender.selectedSegment) ?? .reader }
@@ -459,8 +518,9 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
 
     /// 编辑器滚动 → 阅读视图跟随。按"顶部可见行所在的块 + 行在块内的比例"定位（渲染后的块比源码行高得多，
     /// 只对齐块顶会让阅读视图在文末怎么都到不了底）；编辑器滚到顶 / 底时阅读视图也贴顶 / 底
+    private var readyForScrollSync = false
     private func syncReaderToEditor(line: Int) {
-        guard mode == .split, !isSyncingScroll else { return }
+        guard mode == .split, !isSyncingScroll, readyForScrollSync else { return }
         let reader = readerViewController.textView!
         guard let rendered = reader.rendered, let idx = rendered.blockIndex(forLine: line) else { return }
         isSyncingScroll = true
@@ -477,7 +537,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     }
 
     private func syncEditorToReader(blockIndex: Int) {
-        guard mode == .split, !isSyncingScroll else { return }
+        guard mode == .split, !isSyncingScroll, readyForScrollSync else { return }
         guard let rendered = readerViewController.textView.rendered, blockIndex < rendered.blocks.count,
               let line = rendered.blocks[blockIndex].block.sourceRange?.start.line else { return }
         // 只有阅读视图是第一响应者（用户在滚它）时才反向同步，避免编辑输入引起的抖动
@@ -632,6 +692,11 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         sidebarViewController.revealCurrent()
     }
 
+    /// 工具栏图标统一字号 / 字重（否则实心的外观图标比线条图标重一圈）
+    private static func toolbarSymbol(_ name: String, _ label: String) -> NSImage {
+        (NSImage(systemSymbolName: name, accessibilityDescription: label) ?? NSImage()).withSymbolConfiguration(.init(pointSize: 14, weight: .regular)) ?? NSImage()
+    }
+
     // MARK: - NSToolbarDelegate
 
     private enum Item {
@@ -653,7 +718,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         case Item.sidebar:
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = L("目录"); item.toolTip = L("显示/隐藏目录（⌘⌥S）")
-            item.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: L("目录"))
+            item.image = Self.toolbarSymbol("sidebar.left", L("目录"))
             item.target = self; item.action = #selector(toggleSidebar(_:))
             item.isNavigational = true
             return item
@@ -661,10 +726,10 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = L("视图")
             let control = NSSegmentedControl(images: [
-                NSImage(systemSymbolName: "doc.richtext", accessibilityDescription: L("阅读"))!,
-                NSImage(systemSymbolName: "chevron.left.forwardslash.chevron.right", accessibilityDescription: L("编辑"))!,
-                NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: L("分栏"))!,
-                NSImage(systemSymbolName: "square.and.pencil", accessibilityDescription: L("混合"))!,
+                Self.toolbarSymbol("doc.richtext", L("阅读")),
+                Self.toolbarSymbol("chevron.left.forwardslash.chevron.right", L("编辑")),
+                Self.toolbarSymbol("rectangle.split.2x1", L("分栏")),
+                Self.toolbarSymbol("square.and.pencil", L("混合")),
             ], trackingMode: .selectOne, target: self, action: #selector(modeChanged(_:)))
             control.setToolTip(L("阅读（⌘1）"), forSegment: 0)
             control.setToolTip(L("编辑（⌘2）"), forSegment: 1)
@@ -679,7 +744,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             // 下拉菜单式工具栏项：点一下弹主题列表（菜单内容每次打开时由 Handler.menuNeedsUpdate 重建）
             let item = NSMenuToolbarItem(itemIdentifier: id)
             item.label = L("主题"); item.toolTip = L("选择主题")
-            item.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: L("主题"))
+            item.image = Self.toolbarSymbol("paintpalette", L("主题"))
             item.showsIndicator = true
             let menu = MainMenu.buildThemeMenu()
             menu.delegate = MainMenu.Handler.shared
@@ -688,10 +753,21 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         case Item.appearance:
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = L("外观"); item.toolTip = L("切换亮 / 暗")
-            item.image = NSImage(systemSymbolName: "circle.lefthalf.filled", accessibilityDescription: L("外观"))
+            item.image = Self.toolbarSymbol("circle.lefthalf.filled", L("外观"))
             item.target = MainMenu.Handler.shared; item.action = #selector(MainMenu.Handler.toggleAppearance(_:))
             return item
         default: return nil
         }
+    }
+}
+
+
+// MARK: - 正文区分栏（编辑器 | 阅读）
+extension DocumentWindowController {
+    func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool { false }
+    func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat { max(proposedMinimumPosition, 280) }
+    func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat { min(proposedMaximumPosition, splitView.bounds.width - 280) }
+    func splitView(_ splitView: NSSplitView, shouldHideDividerAt dividerIndex: Int) -> Bool {
+        splitView.arrangedSubviews.contains { $0.isHidden }   // 单栏时不画分隔线
     }
 }

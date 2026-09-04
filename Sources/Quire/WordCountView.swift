@@ -13,7 +13,7 @@ final class WordCountView: NSView {
         super.init(frame: frame)
         wantsLayer = true
         layer?.cornerRadius = 6
-        layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.85).cgColor
+        updateBackground()
         label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         label.textColor = .secondaryLabelColor
         label.translatesAutoresizingMaskIntoConstraints = false
@@ -31,7 +31,14 @@ final class WordCountView: NSView {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.85).cgColor
+        updateBackground()
+    }
+    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); updateBackground() }
+    /// 动态颜色转 CGColor 必须在本视图的 effectiveAppearance 下算：App 用「浅色」而系统是深色时，直接取 cgColor 会拿到深色版（浅色界面里一块黑胶囊）
+    private func updateBackground() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.85).cgColor
+        }
     }
 
     func update(stats: TextStats) { self.stats = stats; render() }
