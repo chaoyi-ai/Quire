@@ -279,16 +279,13 @@
 "显示「收藏」" = "Show Favorites";
 "筛选或搜索…" = "Filter or search…";
 "显示「标签」" = "Show Tags";
-"大纲" = "Outline";
 "重命名" = "Rename";
 "未命名" = "Untitled";
 "最近打开的文件夹" = "Recent Folders";
 "复制路径" = "Copy Path";
 "移到废纸篓" = "Move to Trash";
-"平铺 / 层级" = "Flat / Nested";
 "新建文件" = "New File";
 "先存储或关闭它，再移到废纸篓。" = "Save or close it first, then move it to the Trash.";
-"展开全部" = "Expand All";
 "折叠 / 展开" = "Collapse / Expand";
 "名称" = "Name";
 "没有匹配的文件" = "No matching files";
@@ -297,3 +294,4 @@
 "自然顺序" = "Natural Order";
 "筛选侧栏文件…" = "Filter Sidebar Files…";
 "排序" = "Sort";
+"标题" = "Heading";

@@ -6,7 +6,7 @@ import QuireRender
 /// 侧栏容器：位置栏 + 筛选框 + 上下堆叠的分段（文件 / 大纲 可拖分隔；收藏 / 标签 在底部默认折叠）。
 /// 设计见 docs/research/sidebar.md：树是树、大纲是大纲；默认安静；以当前文档为中心；动作就在手边。
 @MainActor
-final class SidebarViewController: NSViewController, NSSplitViewDelegate, NSSearchFieldDelegate, NSMenuDelegate {
+final class SidebarViewController: NSViewController, NSSearchFieldDelegate, NSMenuDelegate {
     // 输入
     var currentURL: URL? { didSet { if currentURL != oldValue { currentURLDidChange() } } }
     var outline: Outline = Outline(entries: []) { didSet { if outline != oldValue { outlineDidChange() } } }
@@ -16,19 +16,16 @@ final class SidebarViewController: NSViewController, NSSplitViewDelegate, NSSear
     private(set) var rootURL: URL? { didSet { if rootURL?.standardizedFileURL != oldValue?.standardizedFileURL { rootDidChange() } } }
 
     let files = FileTreeController()
-    let outlineController = OutlineController()
     let favorites = FavoritesController()
     let tags = TagsController()
 
     private var locationButton: NSPopUpButton!
     private var filterField: NSSearchField!
     private var filesSection: SidebarSectionView!
-    private var outlineSection: SidebarSectionView!
     private var favoritesSection: SidebarSectionView!
     private var tagsSection: SidebarSectionView!
     private var favoritesHeight: NSLayoutConstraint!
     private var tagsHeight: NSLayoutConstraint!
-    private var split: NSSplitView!
     private var emptyLabel: NSTextField!
     private var filterWork: DispatchWorkItem?
     nonisolated(unsafe) private var prefsObserver: NSObjectProtocol?
@@ -73,26 +70,10 @@ final class SidebarViewController: NSViewController, NSSplitViewDelegate, NSSear
             .init(symbol: "arrow.down.right.and.arrow.up.left", tooltip: L("折叠全部")) { [weak self] in self?.files.collapseAll() },
             .init(symbol: "scope", tooltip: L("定位当前文件 ⌘⇧J")) { [weak self] in self?.revealCurrent() },
         ])
-        outlineSection = SidebarSectionView(title: L("大纲"))
-        outlineSection.setContentView(outlineController.scrollView)
-        outlineSection.setActions([
-            .init(symbol: "arrow.down.right.and.arrow.up.left", tooltip: L("折叠全部")) { [weak self] in self?.outlineController.collapseAll() },
-            .init(symbol: "arrow.up.left.and.arrow.down.right", tooltip: L("展开全部")) { [weak self] in self?.outlineController.expandAll() },
-            .init(symbol: "list.bullet.indent", tooltip: L("平铺 / 层级")) { [weak self] in self?.outlineController.isFlat.toggle() },
-        ])
         favoritesSection = SidebarSectionView(title: L("收藏"))
         favoritesSection.setContentView(favorites.scrollView)
         tagsSection = SidebarSectionView(title: L("标签"))
         tagsSection.setContentView(tags.scrollView)
-
-        split = NSSplitView()
-        split.isVertical = false
-        split.dividerStyle = .thin
-        split.delegate = self
-        split.translatesAutoresizingMaskIntoConstraints = false
-        split.addArrangedSubview(filesSection)
-        split.addArrangedSubview(outlineSection)
-        split.autosaveName = "QuireSidebarSplit"
 
         let bottom = NSStackView(views: [favoritesSection, tagsSection])
         bottom.orientation = .vertical
@@ -110,7 +91,7 @@ final class SidebarViewController: NSViewController, NSSplitViewDelegate, NSSear
         emptyLabel.alignment = .center
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        container.addSubview(locationButton); container.addSubview(filterField); container.addSubview(split)
+        container.addSubview(locationButton); container.addSubview(filterField); container.addSubview(filesSection)
         container.addSubview(separator); container.addSubview(bottom); container.addSubview(emptyLabel)
         NSLayoutConstraint.activate([
             locationButton.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
@@ -120,10 +101,10 @@ final class SidebarViewController: NSViewController, NSSplitViewDelegate, NSSear
             filterField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
             filterField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
             filterField.topAnchor.constraint(equalTo: locationButton.bottomAnchor, constant: 4),
-            split.topAnchor.constraint(equalTo: filterField.bottomAnchor, constant: 6),
-            split.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            split.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            separator.topAnchor.constraint(equalTo: split.bottomAnchor),
+            filesSection.topAnchor.constraint(equalTo: filterField.bottomAnchor, constant: 6),
+            filesSection.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            filesSection.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            separator.topAnchor.constraint(equalTo: filesSection.bottomAnchor),
             separator.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             bottom.topAnchor.constraint(equalTo: separator.bottomAnchor),
@@ -146,7 +127,7 @@ final class SidebarViewController: NSViewController, NSSplitViewDelegate, NSSear
         files.onOpenFile = { [weak self] url, line in self?.onOpenFile?(url, line) }
         files.onDropFolder = { [weak self] dir in self?.setRoot(dir) }
         files.onStateChange = { [weak self] in self?.updateFilesHeader() }
-        outlineController.onSelect = { [weak self] e in self?.onSelectHeading?(e) }
+        files.onSelectHeading = { [weak self] e in self?.onSelectHeading?(e) }
         favorites.onOpenFile = { [weak self] url in self?.onOpenFile?(url, nil) }
         favorites.onChange = { [weak self] in self?.updateBottomSections() }
         tags.onSearchTag = { [weak self] tag in
@@ -157,7 +138,7 @@ final class SidebarViewController: NSViewController, NSSplitViewDelegate, NSSear
         }
         tags.onChange = { [weak self] in self?.updateBottomSections() }
         // 折叠状态记住
-        for (sec, key) in [(filesSection!, "files"), (outlineSection!, "outline"), (favoritesSection!, "favorites"), (tagsSection!, "tags")] {
+        for (sec, key) in [(favoritesSection!, "favorites"), (tagsSection!, "tags")] {
             let def = key == "favorites" || key == "tags"   // 收藏 / 标签默认折叠
             sec.setCollapsed(SidebarSettings.isCollapsed(key) ?? def)
             sec.onToggle = { [weak self] c in SidebarSettings.setCollapsed(key, c); self?.sectionsDidChange() }
@@ -187,14 +168,6 @@ final class SidebarViewController: NSViewController, NSSplitViewDelegate, NSSear
         updateEmptyState()
     }
 
-    /// 分栏第一次有了高度才能摆分隔线（loadView 时 bounds 还是 0）
-    private var didInitialSplitLayout = false
-    override func viewDidLayout() {
-        super.viewDidLayout()
-        guard !didInitialSplitLayout, split.bounds.height > 100 else { return }
-        didInitialSplitLayout = true
-        sectionsDidChange()
-    }
 
     // MARK: - 根目录 / 当前文档（对外 API 与旧版一致）
 
@@ -216,7 +189,6 @@ final class SidebarViewController: NSViewController, NSSplitViewDelegate, NSSear
             rootURL = url.deletingLastPathComponent()
         }
         files.currentURL = url
-        updateOutlineHeader()
     }
 
     private func rootDidChange() {
@@ -225,6 +197,7 @@ final class SidebarViewController: NSViewController, NSSplitViewDelegate, NSSear
         files.currentURL = currentURL
         tags.root = rootURL
         if let rootURL { SidebarSettings.noteRoot(rootURL) }
+        files.outline = outline
         rebuildLocationMenu()
         updateEmptyState()
         updateFilesHeader()
@@ -232,16 +205,15 @@ final class SidebarViewController: NSViewController, NSSplitViewDelegate, NSSear
 
     private func outlineDidChange() {
         guard isViewLoaded else { return }
-        outlineController.outline = outline
-        updateOutlineHeader()
+        files.outline = outline
     }
 
-    func highlight(blockIndex: Int) { outlineController.highlight(blockIndex: blockIndex) }
+    func highlight(blockIndex: Int) { files.highlight(blockIndex: blockIndex) }
 
     private func updateEmptyState() {
         let hasRoot = rootURL != nil
         emptyLabel.isHidden = hasRoot
-        split.isHidden = !hasRoot
+        filesSection.isHidden = !hasRoot
         filterField.isHidden = !hasRoot
         favoritesSection.isHidden = !hasRoot || !SidebarSettings.showFavorites || favorites.count == 0
         tagsSection.isHidden = !hasRoot || !SidebarSettings.showTags || tags.count == 0
@@ -257,11 +229,6 @@ final class SidebarViewController: NSViewController, NSSplitViewDelegate, NSSear
         case .search: filesSection.title = L("搜索结果"); filesSection.count = "\(files.resultCount)"
         }
     }
-    private func updateOutlineHeader() {
-        outlineSection.title = L("大纲")
-        let name = currentURL.map { FileTreeController.displayName($0, ambiguous: false) } ?? ""
-        outlineSection.count = name.isEmpty ? "" : "· " + name
-    }
     private func updateBottomSections() {
         favoritesSection.count = "\(favorites.count)"
         tagsSection.count = "\(tags.count)"
@@ -269,31 +236,7 @@ final class SidebarViewController: NSViewController, NSSplitViewDelegate, NSSear
         tagsHeight.constant = tagsSection.isCollapsed ? SidebarSectionView.headerHeight : SidebarSectionView.headerHeight + tags.preferredHeight
         updateEmptyState()
     }
-    private func sectionsDidChange() {
-        updateBottomSections()
-        // 文件 / 大纲 折叠：分隔线贴到段头
-        let h = split.bounds.height
-        if outlineSection.isCollapsed { split.setPosition(max(0, h - SidebarSectionView.headerHeight - split.dividerThickness), ofDividerAt: 0) }
-        else if filesSection.isCollapsed { split.setPosition(SidebarSectionView.headerHeight, ofDividerAt: 0) }
-        else if split.bounds.height > 0, outlineSection.frame.height <= SidebarSectionView.headerHeight + 1 || filesSection.frame.height <= SidebarSectionView.headerHeight + 1 {
-            split.setPosition((h * 0.6).rounded(), ofDividerAt: 0)
-        }
-    }
-
-    // NSSplitViewDelegate：折叠的段固定为段头高度；两段各自最少留几行
-    func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
-        filesSection.isCollapsed ? SidebarSectionView.headerHeight : max(proposedMinimumPosition, SidebarSectionView.headerHeight + 60)
-    }
-    func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
-        let h = splitView.bounds.height
-        return outlineSection.isCollapsed ? h - SidebarSectionView.headerHeight - splitView.dividerThickness : min(proposedMaximumPosition, h - SidebarSectionView.headerHeight - 60)
-    }
-    func splitView(_ splitView: NSSplitView, shouldAdjustSizeOfSubview view: NSView) -> Bool {
-        // 窗口拉伸时折叠着的段不变；两段都展开时只动文件段
-        if view === outlineSection { return !outlineSection.isCollapsed && filesSection.isCollapsed }
-        return !filesSection.isCollapsed
-    }
-    func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool { false }
+    private func sectionsDidChange() { updateBottomSections() }
 
     // MARK: - 位置菜单
 

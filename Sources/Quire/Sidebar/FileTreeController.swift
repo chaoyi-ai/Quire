@@ -6,11 +6,13 @@ import QuireRender
 /// 文件树节点：文件夹 / 文件 / 搜索命中行 / 提示行。子节点懒加载。
 @MainActor
 final class SidebarNode {
-    enum Kind { case folder, file, hit, note }
+    enum Kind { case folder, file, heading, hit, note }
     let kind: Kind
     let url: URL?
     var name: String              // 显示名（Markdown 文件不带扩展名）
-    var line: Int?                // hit：行号
+    var level = 0                 // heading：级别
+    var blockIndex: Int?          // heading（当前文档）：块下标
+    var line: Int?                // hit / heading：行号
     var hitRange: NSRange?        // hit：命中在 name 里的范围
     var matchRange: NSRange?      // 筛选模式：名字里匹配的片段
     var children: [SidebarNode]?  // nil = 未加载
@@ -61,8 +63,14 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     var root: URL? { didSet { if root?.standardizedFileURL != oldValue?.standardizedFileURL { rootDidChange() } } }
     var currentURL: URL? { didSet { if currentURL != oldValue { currentDidChange() } } }
-    /// 打开文件（行号：搜索命中）
+    /// 打开文件（行号：搜索命中 / 其他文件的标题）
     var onOpenFile: ((URL, Int?) -> Void)?
+    /// 当前文档的标题被点：跳转
+    var onSelectHeading: ((Outline.Entry) -> Void)?
+    /// 当前文档的大纲（解析结果）：挂在它的文件节点下面——文件树里能直接看到并跳转章节，这是 Quire 的特色
+    var outline = Outline(entries: []) { didSet { if outline != oldValue { outlineDidChange() } } }
+    private var headingCache: [URL: (mtime: Date, headings: [HeadingScanner.Heading])] = [:]
+    nonisolated private static let maxScanBytes = 4 * 1024 * 1024
     /// 态变了（树 / 筛选 / 搜索、结果数）：容器刷新段头
     var onStateChange: (() -> Void)?
 
@@ -90,6 +98,7 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
     private static let folderIcon = SidebarRowStyle.symbol("folder.fill", L("文件夹"))
     private static let fileIcon = SidebarRowStyle.symbol("doc.text", L("文档"))
     private static let otherIcon = SidebarRowStyle.symbol("doc", L("文件"))
+    private static let headingIcon = NSImage(systemSymbolName: "text.alignleft", accessibilityDescription: L("标题"))?.withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
 
     override init() {
         super.init()
@@ -158,13 +167,73 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
     }
 
     private func setCurrentFileNode(_ node: SidebarNode) {
+        let previous = currentFileNode
         currentFileNode = node
+        applyOutline(to: node)
+        if let previous, previous !== node { outlineView.reloadItem(previous, reloadChildren: false) }
+        outlineView.reloadItem(node, reloadChildren: true)
+        outlineView.expandItem(node, expandChildren: true)
         let row = outlineView.row(forItem: node)
         guard row >= 0 else { return }
         suppressSelection = true
         outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         outlineView.scrollRowToVisible(row)
         suppressSelection = false
+    }
+
+    private func outlineDidChange() {
+        guard let node = currentFileNode else { return }
+        applyOutline(to: node)
+        outlineView.reloadItem(node, reloadChildren: true)
+        outlineView.expandItem(node, expandChildren: true)
+        if let b = lastBlockIndex { highlight(blockIndex: b) }
+    }
+
+    /// 当前文档：用完整解析的大纲建标题树
+    private func applyOutline(to fileNode: SidebarNode) {
+        fileNode.children = buildHeadingTree(fileNode: fileNode, entries: outline.entries.map { ($0.level, $0.title, $0.line, $0.blockIndex) })
+    }
+
+    private func buildHeadingTree(fileNode: SidebarNode, entries: [(Int, String, Int?, Int?)]) -> [SidebarNode] {
+        var roots: [SidebarNode] = []
+        var stack: [SidebarNode] = []
+        for (level, title, line, blockIndex) in entries {
+            while let last = stack.last, last.level >= level { stack.removeLast() }
+            let parent = stack.last ?? fileNode
+            let n = SidebarNode(kind: .heading, url: fileNode.url, name: title.isEmpty ? L("（无标题）") : title, parent: parent)
+            n.level = level; n.line = line; n.blockIndex = blockIndex
+            n.children = []
+            if let p = stack.last { p.children!.append(n) } else { roots.append(n) }
+            stack.append(n)
+        }
+        return roots
+    }
+
+    /// 阅读视图当前章节 → 高亮当前文档树下对应的标题
+    private var lastBlockIndex: Int?
+    func highlight(blockIndex: Int) {
+        lastBlockIndex = blockIndex
+        guard mode == .tree, let file = currentFileNode, let children = file.children, !children.isEmpty else { return }
+        var flat: [SidebarNode] = []
+        func walk(_ n: SidebarNode) { for c in n.children ?? [] { flat.append(c); walk(c) } }
+        walk(file)
+        var target: SidebarNode?
+        for n in flat { if let b = n.blockIndex, b <= blockIndex { target = n } else if n.blockIndex != nil { break } }
+        guard let target else { return }
+        var p = target.parent
+        while let x = p, x.kind == .heading { if !outlineView.isItemExpanded(x) { outlineView.expandItem(x) }; p = x.parent }
+        let row = outlineView.row(forItem: target)
+        guard row >= 0, outlineView.selectedRow != row else { return }
+        suppressSelection = true
+        outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        outlineView.scrollRowToVisible(row)
+        suppressSelection = false
+    }
+
+    private func fileNode(of heading: SidebarNode) -> SidebarNode? {
+        var n: SidebarNode? = heading
+        while let cur = n, cur.kind == .heading { n = cur.parent }
+        return n
     }
 
     /// 不展开、不滚动：只把选中态对到当前文件（它在视图里的话）
@@ -186,6 +255,30 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
     private func loadChildren(of node: SidebarNode, completion: (@MainActor @Sendable () -> Void)? = nil) {
         if let completion { node.onLoaded.append(completion) }
         guard !node.isLoading else { return }
+        if node.kind == .file, node.isMarkdown, mode == .tree, let url = node.url {
+            // 其他文件展开：快速扫标题（当前文档用解析结果，见 applyOutline）
+            node.isLoading = true
+            let cached = headingCache[url]
+            ioQueue.async {
+                var result: [HeadingScanner.Heading] = []
+                var mtime = Date.distantPast
+                if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path), let m = attrs[.modificationDate] as? Date, let size = attrs[.size] as? Int {
+                    mtime = m
+                    if let cached, cached.mtime == m { result = cached.headings }
+                    else if size <= Self.maxScanBytes, let data = try? Data(contentsOf: url, options: .mappedIfSafe) { result = HeadingScanner.scan(data, maxHeadings: 500) }
+                }
+                let headings = result
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    node.isLoading = false
+                    self.headingCache[url] = (mtime, headings)
+                    if node !== self.currentFileNode { node.children = self.buildHeadingTree(fileNode: node, entries: headings.map { ($0.level, $0.title, $0.line, nil) }) }
+                    self.outlineView.reloadItem(node, reloadChildren: true)
+                    self.fireLoaded(node)
+                }
+            }
+            return
+        }
         guard node.kind == .folder, let url = node.url else { node.children = node.children ?? []; node.isLoading = false; fireLoaded(node); return }
         node.isLoading = true
         let rules = Preferences.shared.sidebarRules
@@ -268,6 +361,11 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         for d in dirs {
             let p = d.standardizedFileURL.path
             guard seen.insert(p).inserted, let node = findFolderNode(path: p, from: root), node.children != nil else { continue }
+            // 该目录下的文件可能变了：标题缓存失效；已展开的重扫
+            for c in node.children ?? [] where c.kind == .file && c !== currentFileNode {
+                if let u = c.url { headingCache.removeValue(forKey: u) }
+                if c.children != nil, outlineView.isItemExpanded(c) { c.children = nil; loadChildren(of: c) }
+            }
             loadChildren(of: node) { [weak self] in
                 guard let self else { return }
                 if let pending = self.pendingRename, let n = node.children?.first(where: { $0.url?.standardizedFileURL == pending.standardizedFileURL }) {
@@ -289,7 +387,7 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     func collapseAll() {
         guard mode == .tree, let rootNode else { return }
-        for c in rootNode.children ?? [] where c.kind == .folder { outlineView.collapseItem(c, collapseChildren: true) }
+        for c in rootNode.children ?? [] where c.kind == .folder || c.kind == .file { outlineView.collapseItem(c, collapseChildren: true) }
         updateCurrentHighlight()
     }
 
@@ -321,6 +419,7 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
             let p = folder((rel as NSString).deletingLastPathComponent)
             let url = index.url(for: rel)
             let n = SidebarNode(kind: .file, url: url, name: Self.displayName(url, ambiguous: false), parent: p)
+            n.children = []   // 筛选态不挂大纲
             let opts: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
             if let r = n.name.range(of: q, options: opts) { n.matchRange = NSRange(r, in: n.name) }
             p.children!.append(n)
@@ -552,6 +651,10 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         lastActivation = (ObjectIdentifier(node), now)
         switch node.kind {
         case .hit: if let url = node.parent?.url { onOpenFile?(url, node.line) }
+        case .heading:
+            if let file = fileNode(of: node), file === currentFileNode, let bi = node.blockIndex {
+                onSelectHeading?(Outline.Entry(id: "", level: node.level, title: node.name, blockIndex: bi, line: node.line))
+            } else if let url = node.url { onOpenFile?(url, node.line) }
         case .file:
             guard let url = node.url else { return }
             if !node.isMarkdown { NSWorkspace.shared.open(url); return }   // 非 Markdown：交给默认 App
@@ -589,6 +692,8 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
             return menu.items.isEmpty ? nil : menu
         }
         switch node?.kind {
+        case .heading:
+            if let u = node?.url { add(L("在 Finder 中显示"), #selector(revealItem(_:)), u) }
         case .file:
             let url = node!.url!
             add(L("打开"), #selector(openItem(_:)), node)
@@ -673,11 +778,12 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         guard let n = item as? SidebarNode else { return false }
         switch n.kind {
         case .folder: return true
-        case .file: return !(n.children?.isEmpty ?? true)   // 搜索态：文件下面是命中行
+        case .file: return n.children == nil ? (n.isMarkdown && mode == .tree) : !(n.children!.isEmpty)   // 树：大纲；搜索态：命中行
+        case .heading: return !(n.children?.isEmpty ?? true)
         case .hit, .note: return false
         }
     }
-    func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat { SidebarRowStyle.rowHeight }
+    func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat { (item as? SidebarNode)?.kind == .heading ? SidebarRowStyle.outlineRowHeight : SidebarRowStyle.rowHeight }
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         guard let node = item as? SidebarNode else { return nil }
@@ -703,6 +809,14 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
                 s.addAttribute(.font, value: NSFont.systemFont(ofSize: 13, weight: .bold), range: r)
                 tf.attributedStringValue = s
             } else { tf.stringValue = node.name }
+        case .heading:
+            // 标题行：小段落图标 + 稍小的字，和文件行分得开；H1 用 medium
+            cell.imageView?.image = Self.headingIcon
+            cell.imageView?.contentTintColor = .secondaryLabelColor
+            tf.stringValue = node.name
+            tf.font = node.level <= 1 ? .systemFont(ofSize: 12.5, weight: .medium) : .systemFont(ofSize: 12.5)
+            tf.textColor = node.level >= 4 ? .secondaryLabelColor : .labelColor
+            tf.toolTip = node.name
         case .note:
             cell.imageView?.isHidden = true
             tf.stringValue = node.name
@@ -730,8 +844,8 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
     func outlineViewSelectionDidChange(_ notification: Notification) {
         guard !suppressSelection else { return }
         let row = outlineView.selectedRow
-        guard row >= 0, let node = outlineView.item(atRow: row) as? SidebarNode, node.kind == .hit else { return }
-        activate(node)   // 键盘走到命中行也跳转
+        guard row >= 0, let node = outlineView.item(atRow: row) as? SidebarNode, node.kind == .hit || node.kind == .heading else { return }
+        activate(node)   // 键盘走到标题 / 命中行也跳转
     }
 }
 
