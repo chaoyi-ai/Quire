@@ -171,6 +171,12 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         if mode == .editor || mode == .split { window?.makeFirstResponder(editorViewController.textView) }
         else { window?.makeFirstResponder(readerViewController.textView) }
         restoreSidebarWidth()
+        applyWindowBackground()
+        if themeObserver == nil {
+            themeObserver = NotificationCenter.default.addObserver(forName: ThemeManager.didChange, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.applyWindowBackground() }
+            }
+        }
         // 启动那几百毫秒里窗口还在布局（分栏 autosave 复原、inset 到位）：这期间不做滚动同步，也等它们完了再把双栏分成等宽
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self else { return }
@@ -209,8 +215,16 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     }
 
     deinit {
+        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
         if let prefsObserver { NotificationCenter.default.removeObserver(prefsObserver) }
         if let selectionObserver { NotificationCenter.default.removeObserver(selectionObserver) }
+    }
+
+    /// 窗口自己的背景也用主题色：macOS 26 的侧栏是一块带圆角、向内缩进的浮板，浮板外面那圈（圆角外侧、左边和底部的缝）
+    /// 露的是窗口背景——不设的话是系统灰，和主题色的正文一比就是一圈灰边
+    nonisolated(unsafe) private var themeObserver: NSObjectProtocol?
+    private func applyWindowBackground() {
+        window?.backgroundColor = ThemeManager.shared.currentStyle.background
     }
 
     // MARK: - 侧栏宽度（自己记：NSSplitView 的 autosave 在窗格折叠 / 展开时会把侧栏一起重新分配，每种启动模式宽度都不一样）
