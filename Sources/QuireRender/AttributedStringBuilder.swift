@@ -552,8 +552,9 @@ public final class AttributedStringBuilder: @unchecked Sendable {
                 k += 2; continue
             }
             // 中文之间的软换行不加空格（浏览器会加，但中文排版里那是个多余的空隙）
-            if case .softBreak = inlines[k], k + 1 < inlines.count, let prev = out.string.last, Self.isCJK(prev),
-               case .text(let next) = inlines[k + 1], let first = next.first, Self.isCJK(first) {
+            // （不能用 out.string.last：每次都把整个属性串桥接成 String，1 MB 文档上是 O(n²)，实测渲染慢 35%）
+            if case .softBreak = inlines[k], k + 1 < inlines.count, out.length > 0, Self.isCJK(out.mutableString.character(at: out.length - 1)),
+               case .text(let next) = inlines[k + 1], let first = next.utf16.first, Self.isCJK(first) {
                 k += 1; continue
             }
             appendInline(inlines[k], into: out, ctx: ctx)
@@ -561,9 +562,9 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         }
     }
 
-    static func isCJK(_ c: Character) -> Bool {
-        guard let u = c.unicodeScalars.first?.value else { return false }
-        return (0x4E00...0x9FFF).contains(u) || (0x3400...0x4DBF).contains(u) || (0x3000...0x303F).contains(u) || (0xFF00...0xFFEF).contains(u)
+    /// BMP 内的 CJK（汉字 / 假名 / 谚文 / CJK 标点 / 全角）；按 UTF-16 单元判断，O(1)
+    static func isCJK(_ u: UInt16) -> Bool {
+        (0x4E00...0x9FFF).contains(u) || (0x3400...0x4DBF).contains(u) || (0x3000...0x303F).contains(u) || (0xFF00...0xFFEF).contains(u)
             || (0x3040...0x30FF).contains(u) || (0xAC00...0xD7AF).contains(u)
     }
 
