@@ -46,7 +46,7 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
         scrollView.documentView = textView
         scrollView.contentView.postsBoundsChangedNotifications = true
         scrollView.scrollerStyle = .overlay
-        scrollView.automaticallyAdjustsContentInsets = true
+        scrollView.automaticallyAdjustsContentInsets = false   // 正文从安全区（标题栏 / 工具栏 / 标签栏之下）开始，不滑到透明标题栏底下——那会让文字穿过标题
         textView.showsCodeCopyButtons = Preferences.shared.codeCopyButton
 
         // 容器：顶部可选横幅（大文件模式）+ 滚动视图
@@ -59,12 +59,12 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
         NSLayoutConstraint.activate([
             banner.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             banner.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            banner.topAnchor.constraint(equalTo: container.topAnchor),
+            banner.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
-        bannerTop = scrollView.topAnchor.constraint(equalTo: container.topAnchor)
+        bannerTop = scrollView.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor)
         bannerTop.isActive = true
         view = container
         session.onLargeFileModeChanged = { [weak self] on in self?.setBanner(visible: on) }
@@ -112,7 +112,7 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
     private func setBanner(visible: Bool) {
         banner.isHidden = !visible
         bannerTop.isActive = false
-        bannerTop = visible ? scrollView.topAnchor.constraint(equalTo: banner.bottomAnchor) : scrollView.topAnchor.constraint(equalTo: view.topAnchor)
+        bannerTop = visible ? scrollView.topAnchor.constraint(equalTo: banner.bottomAnchor) : scrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor)
         bannerTop.isActive = true
     }
 

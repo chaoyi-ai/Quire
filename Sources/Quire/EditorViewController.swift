@@ -37,7 +37,7 @@ final class EditorViewController: NSViewController {
         scrollView.documentView = textView
         scrollView.contentView.postsBoundsChangedNotifications = true
         scrollView.scrollerStyle = .overlay
-        scrollView.automaticallyAdjustsContentInsets = true
+        scrollView.automaticallyAdjustsContentInsets = false
         ruler = LineNumberRulerView(editor: textView, scrollView: scrollView)
         ruler.style = style
         scrollView.verticalRulerView = ruler
@@ -60,7 +60,7 @@ final class EditorViewController: NSViewController {
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: container.topAnchor),
+            scrollView.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
         view = container
