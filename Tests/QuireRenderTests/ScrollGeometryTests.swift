@@ -32,7 +32,8 @@ final class ScrollGeometryTests: XCTestCase {
         let expectedMinY = frag.layoutFragmentFrame.minY + reader.textContainerInset.height - ReaderTextView.scrollTopMargin - 88
         XCTAssertEqual(sv.contentView.bounds.minY, expectedMinY, accuracy: 1)
         XCTAssertEqual(reader.topVisibleBlockIndex(), target)
-        XCTAssertEqual(reader.sectionBlockIndex(), target, "顶上刚好是标题 → 以它为当前章节")
+        // 0.7.1：不再有"顶上是标题就以它为准"（慢滚时 A/B 来回切）；跳转后的锚定由 ReaderViewController 做。这里只要求不早于目标
+        XCTAssertGreaterThanOrEqual(reader.sectionBlockIndex()!, target)
         // 回到块 0：bounds.minY 应是 -insetTop（内容顶贴在工具栏下方，而不是被盖住 88pt）
         reader.scroll(toBlock: 0, animated: false)
         XCTAssertEqual(sv.contentView.bounds.minY, -88, accuracy: 0.5)

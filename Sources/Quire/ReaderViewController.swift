@@ -183,11 +183,28 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
         textView.revalidateProgressiveLayout()
         guard !isNavigating else { return }
         if let idx = textView.topVisibleBlockIndex(), idx != lastTopBlock { lastTopBlock = idx; onTopBlockChanged?(idx) }
-        if let s = textView.sectionBlockIndex(), s != lastSectionBlock { lastSectionBlock = s; onSectionChanged?(s) }
+        // 刚从侧栏跳到的标题还贴着顶边：高亮锚定在它上（40% 取样点可能已经是下一章），它离开顶边后才恢复跟随
+        if let a = anchoredSection { if textView.topVisibleBlockIndex() == a { return } else { anchoredSection = nil } }
+        // 章节高亮：候选章节要在 80 ms 后再算一次仍是它才提交——快速滚动 / 惯性滚动时取样点掠过一串标题，
+        // 每帧都改高亮就是"跳来跳去"；稳定后再改，眼睛看到的是一次跟随
+        guard let s = textView.sectionBlockIndex(), s != lastSectionBlock else { pendingSection?.cancel(); pendingSection = nil; return }
+        if pendingSectionBlock == s, pendingSection != nil { return }
+        pendingSectionBlock = s
+        pendingSection?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.isNavigating, let now = self.textView.sectionBlockIndex(), now == self.pendingSectionBlock, now != self.lastSectionBlock else { return }
+            self.lastSectionBlock = now
+            self.onSectionChanged?(now)
+        }
+        pendingSection = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: work)
     }
+    private var pendingSection: DispatchWorkItem?
+    private var pendingSectionBlock: Int?
 
     /// 侧栏点击：动画滚到块，结束后把"当前块"明确设为目标块（哪怕它滚不到顶部，如文末章节）
     func scroll(toBlock index: Int) {
+        pendingSection?.cancel(); pendingSection = nil
         isNavigating = true
         textView.scroll(toBlock: index, animated: true) { [weak self] in
             guard let self else { return }
@@ -195,9 +212,11 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
             self.lastTopBlock = index
             self.onTopBlockChanged?(index)
             self.lastSectionBlock = index
+            self.anchoredSection = index
             self.onSectionChanged?(index)
         }
     }
+    private var anchoredSection: Int?
 
     // MARK: - 链接
 

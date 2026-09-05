@@ -228,8 +228,16 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         guard row >= 0, outlineView.selectedRow != row else { return }
         suppressSelection = true
         outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-        outlineView.scrollRowToVisible(row)
         suppressSelection = false
+        // 树自己只在高亮行跑出可视区时才滚（滚到刚好露出来，不居中），鼠标在树里时不动——用户正准备点别的
+        guard let clip = outlineView.enclosingScrollView?.contentView else { return }
+        let rowRect = outlineView.rect(ofRow: row)
+        let visible = clip.documentVisibleRect
+        if let win = outlineView.window {
+            let p = outlineView.convert(win.mouseLocationOutsideOfEventStream, from: nil)
+            if outlineView.bounds.contains(p), win.isKeyWindow || win.isMainWindow { return }
+        }
+        if rowRect.minY < visible.minY || rowRect.maxY > visible.maxY { outlineView.scrollRowToVisible(row) }
     }
 
     private func fileNode(of heading: SidebarNode) -> SidebarNode? {

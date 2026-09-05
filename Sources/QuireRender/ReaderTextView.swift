@@ -697,13 +697,26 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
     private func blockIndex(atY y: CGFloat) -> Int? {
         guard let rendered, let tlm = textLayoutManager, let cs = textContentStorage else { return nil }
         let point = CGPoint(x: 0, y: max(0, y - textContainerInset.height))
+        // 先按视口范围里**真正排好**的片段找：`textLayoutFragment(for: point)` 在估算区会给出错误片段（估算高度和实际差几倍），
+        // 侧栏高亮就会跳到八竿子打不着的章节；视口内的片段都是排好的，逐个看谁的框包含取样点
+        if let vr = tlm.textViewportLayoutController.viewportRange {
+            var hit: NSTextLayoutFragment?
+            tlm.enumerateTextLayoutFragments(from: vr.location, options: []) { f in
+                guard f.state == .layoutAvailable else { return false }
+                if f.layoutFragmentFrame.maxY > point.y { hit = f.layoutFragmentFrame.minY <= point.y ? f : nil; return false }
+                return f.rangeInElement.location.compare(vr.endLocation) == .orderedAscending
+            }
+            if let hit {
+                return rendered.blockIndex(at: cs.offset(from: cs.documentRange.location, to: hit.rangeInElement.location))
+            }
+        }
         var frag = tlm.textLayoutFragment(for: point)
         if frag?.state != .layoutAvailable {
             tlm.textViewportLayoutController.layoutViewport()
             frag = tlm.textLayoutFragment(for: point)
-            guard frag?.state == .layoutAvailable else { return nil }
         }
-        guard let frag else { return nil }
+        // 估算片段的框不包含取样点 → 不知道，宁可不答（调用方保持上次的值）
+        guard let frag, frag.state == .layoutAvailable, frag.layoutFragmentFrame.minY <= point.y, frag.layoutFragmentFrame.maxY > point.y else { return nil }
         let offset = cs.offset(from: cs.documentRange.location, to: frag.rangeInElement.location)
         return rendered.blockIndex(at: offset)
     }
@@ -732,13 +745,13 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
     }
 
     /// 侧栏"当前章节"用的块下标：读者的注意力在可见区上部，不是最顶上一行——
-    /// 取样点在可见区顶部往下 40%，下一标题升到屏幕中线以上就算读到它了；
-    /// 顶上刚好是标题（如刚从侧栏跳过来）时以它为准；滚到底时取最后一块，让末章也能高亮。
+    /// 取样点在可见区顶部往下 40%，下一标题升到屏幕中线以上就算读到它了；滚到底时取最后一块，让末章也能高亮。
+    /// 以前还有一条"顶上刚好是标题就以它为准"：慢速下滚时 40% 处已经是下一章 B，标题 A 一到顶边又退回 A，A 滚过去再回 B——
+    /// 这就是高亮来回跳的一个来源。刚从侧栏跳到某标题的场景改由 ReaderViewController 的锚定处理。
     public func sectionBlockIndex() -> Int? {
         guard let rendered, let sv = enclosingScrollView else { return nil }
         let clip = sv.contentView
         if clip.bounds.maxY >= frame.height + sv.contentInsets.bottom - 1, !rendered.blocks.isEmpty { return rendered.blocks.count - 1 }
-        if let top = topVisibleBlockIndex(), case .heading = rendered.blocks[top].block.kind { return top }
         let visibleH = clip.bounds.height - topInset - sv.contentInsets.bottom
         return blockIndex(atY: visibleTop + visibleH * 0.4)
     }
