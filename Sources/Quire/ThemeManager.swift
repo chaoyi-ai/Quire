@@ -62,7 +62,8 @@ final class ThemeManager {
         applyAppAppearance()
         currentStyle = RenderStyle(theme: resolveTheme(), scale: zoom, options: Preferences.shared.renderOptions)
         appearanceObserver = NSApp.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
-            Task { @MainActor in self?.refresh() }
+            // 同步刷：系统自动切深浅色时，窗口已经按新外观重画了，主题若晚一帧跟上，标题栏 / 侧栏就闪一下旧色
+            MainActor.assumeIsolated { self?.refresh() }
         }
     }
 

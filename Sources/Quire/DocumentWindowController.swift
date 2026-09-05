@@ -91,6 +91,12 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         // 在侧栏浮板的右缘被硬生生切断，看起来像侧栏压着标题栏
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
+        // 窗口底色 = 主题背景（标题栏 / 工具栏区透出来的就是它），主题一变就跟。放在这里而不是 showWindow：
+        // 状态恢复 / 标签页合并出来的窗口不一定走 showWindow，那样窗口会一直是系统灰，切主题也不跟
+        applyWindowBackground()
+        themeObserver = NotificationCenter.default.addObserver(forName: ThemeManager.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyWindowBackground() }
+        }
         LaunchClock.mark("  wc: toolbar")
 
         // 侧栏：标题 → 跳转（阅读视图 + 编辑器）；文件 → 打开
@@ -175,12 +181,6 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         if mode == .editor || mode == .split { window?.makeFirstResponder(editorViewController.textView) }
         else { window?.makeFirstResponder(readerViewController.textView) }
         restoreSidebarWidth()
-        applyWindowBackground()
-        if themeObserver == nil {
-            themeObserver = NotificationCenter.default.addObserver(forName: ThemeManager.didChange, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.applyWindowBackground() }
-            }
-        }
         // 启动那几百毫秒里窗口还在布局（分栏 autosave 复原、inset 到位）：这期间不做滚动同步，也等它们完了再把双栏分成等宽
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self else { return }

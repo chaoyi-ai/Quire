@@ -246,6 +246,20 @@ enum Block: Hashable {
 - 内置主题打入 bundle；用户主题在 `~/Library/Application Support/Quire/Themes/*.json`，目录监听热加载。
 - 明暗对：主题声明 `appearance: light | dark`，"跟随系统"模式按用户选定的一对切换。
 
+### 8.1 窗口铬（chrome）的颜色规则（0.6.3–0.6.9 收敛）
+
+**一切铬色都从主题背景推导，不用任何系统材质色。** 这样切主题时铬和正文永远同步，不会出现灰带、硬缝或"侧栏压标题"。
+
+| 部件 | 颜色 | 说明 |
+|---|---|---|
+| 窗口背景（`window.backgroundColor`） | = 主题 `background` | 透明标题栏 / 工具栏区、侧栏浮板外那圈圆角缝露出的都是它 |
+| 侧栏浮板 | 主题背景 深色提亮 6% / 浅色压暗 3%，**不透明** | 盖在 `.sidebar` 材质上（材质只借圆角，不借颜色；透窗会把后面的亮窗透进来） |
+| 标题栏 / 工具栏 | 透明（`titlebarAppearsTransparent`，无分隔线） | 所以看到的就是窗口背景；图标按钮不带底座，只保留模式分段控件的胶囊 |
+| 字数胶囊 | 主题背景 深色提亮 8% / 浅色压暗 4%，alpha 0.9 | 在 `effectiveAppearance` 下解 cgColor |
+| 正文 | 从安全区之下开始 | 铬坐在实心主题色上，正文不钻到铬底下 |
+
+时序约束：窗口背景与观察者在 `DocumentWindowController.init` 里就位（状态恢复 / 合并标签出来的窗口不一定走 `showWindow`）；`ThemeManager` 对 `NSApp.effectiveAppearance` 的响应必须**同步**刷新——系统自动切深浅色时窗口先按新外观重画，主题晚一帧就闪旧色。
+
 ## 9. 文件监控与重载
 
 - `DispatchSource.makeFileSystemObjectSource`（`.write .rename .delete`）；编辑器保存时用 atomic write 触发 rename，要重新 open fd。

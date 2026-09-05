@@ -487,6 +487,8 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
 
     public override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        needsDisplay = true   // 当前行高亮：鼠标点选走的是这条（不是 setSelectedRange），不标脏就不会重画
+        enclosingScrollView?.verticalRulerView?.needsDisplay = true
         if !stillSelecting { updateFormatToolbar() } else { formatToolbar?.isHidden = true }
         guard focusMode != .off, !stillSelecting else { return }
         applyFocusDim()
@@ -559,7 +561,13 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
 
     public override func resignFirstResponder() -> Bool {
         formatToolbar?.isHidden = true
+        needsDisplay = true   // 当前行高亮只在有焦点时画
         return super.resignFirstResponder()
+    }
+
+    public override func becomeFirstResponder() -> Bool {
+        needsDisplay = true
+        return super.becomeFirstResponder()
     }
 
     public override func cancelOperation(_ sender: Any?) {
@@ -588,14 +596,30 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
 
     // MARK: - 当前行高亮
 
+    /// 光标所在的**视觉行**（软换行后的一行，不是整个段落）的矩形，视图坐标。段落片段没排好版时先排（否则拿到的是估算位置，会画到别处）
+    func currentLineRect() -> NSRect? {
+        guard let tlm = textLayoutManager, let cs = textContentStorage else { return nil }
+        let sel = selectedRange()
+        guard let loc = cs.location(cs.documentRange.location, offsetBy: sel.location) else { return nil }
+        var frag: NSTextLayoutFragment?
+        tlm.enumerateTextLayoutFragments(from: loc, options: [.ensuresLayout]) { f in frag = f; return false }
+        guard let frag else { return nil }
+        let fragStart = cs.offset(from: cs.documentRange.location, to: frag.rangeInElement.location)
+        let rel = sel.location - fragStart
+        var lineRect = frag.layoutFragmentFrame
+        // 找到包含光标的那一行；光标正好在段尾换行之后时归到最后一行
+        let lines = frag.textLineFragments
+        if let line = lines.first(where: { rel >= $0.characterRange.location && rel < $0.characterRange.location + $0.characterRange.length }) ?? lines.last {
+            lineRect = CGRect(x: frag.layoutFragmentFrame.minX, y: frag.layoutFragmentFrame.minY + line.typographicBounds.minY, width: frag.layoutFragmentFrame.width, height: line.typographicBounds.height)
+        }
+        lineRect.origin.y += textContainerInset.height
+        lineRect.origin.x = 0; lineRect.size.width = bounds.width
+        return lineRect
+    }
+
     public override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
-        guard window?.firstResponder === self, let tlm = textLayoutManager, let cs = textContentStorage else { return }
-        let sel = selectedRange()
-        guard let loc = cs.location(cs.documentRange.location, offsetBy: sel.location), let frag = tlm.textLayoutFragment(for: loc) else { return }
-        var f = frag.layoutFragmentFrame
-        f.origin.y += textContainerInset.height
-        f.origin.x = 0; f.size.width = bounds.width
+        guard window?.firstResponder === self, let f = currentLineRect() else { return }
         style.theme.colors.editor.currentLine.nsColor.setFill()
         f.intersection(rect).fill()
     }
