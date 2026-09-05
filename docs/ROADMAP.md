@@ -14,9 +14,9 @@
 | M2 | 表格 + Mermaid | 原生表格视图，Mermaid 离屏渲染 + 缓存，更多语言，代码块工具 | ✅ 完成（行号/超长行滚动移入 M4） |
 | M3 | 编辑器 | 源码编辑器 + 高亮，分栏同步预览，增量渲染，保存/撤销/自动保存 | ✅ 完成 |
 | M4 | 性能与打磨 | 基准门禁，内存 / 启动优化，大文件模式，导出 HTML/PDF，偏好设置，发布 0.1 | ✅ 完成（表格可查找 → M5） |
-| M5 | 1.0 发布（基础补全 + 速赢） | 本地化、数学（先 spike）、字体覆盖、可访问性、快速打开、全局搜索、字数、剪贴板互通、沉浸 / Focus / 标记出挑、公证 + Homebrew、Quick Look | 2026-08 复审重排 |
-| M6 | 混合实时预览与就地编辑（对标 Typora） | Spike go/no-go → 行内实时预览、表格架构决策与就地编辑、图片粘贴、数学块、悬浮工具栏、扩展语法、导出补全、CLI | 调研见 [research/typora.md](research/typora.md) |
-| M7 | 文本智能与组织（对标 iA Writer） | 词性高亮、文风检查、著作归属、Wikilinks / 标签 / 收藏、内容块 `![[file]]`、PDF 排版参数、URL scheme | 调研见 [research/ia-writer.md](research/ia-writer.md) |
+| M5 | 1.0 发布（基础补全 + 速赢） | 本地化、数学（先 spike）、字体覆盖、可访问性、快速打开、全局搜索、字数、剪贴板互通、沉浸 / Focus / 标记出挑、公证 + Homebrew、Quick Look | ✅ 功能完成；剩 #54 公证（待证书）、#55 Quick Look（spike 未通过）、发布 1.0 |
+| M6 | 混合实时预览与就地编辑（对标 Typora） | Spike go/no-go → 行内实时预览、表格架构决策与就地编辑、图片粘贴、数学块、悬浮工具栏、扩展语法、导出补全、CLI | ✅ 完成（0.4.x）；调研见 [research/typora.md](research/typora.md) |
+| M7 | 文本智能与组织（对标 iA Writer） | 词性高亮、文风检查、著作归属、Wikilinks / 标签 / 收藏、内容块 `![[file]]`、PDF 排版参数、URL scheme | ✅ 完成（0.5.x）；侧栏重做 0.6.x（[research/sidebar.md](research/sidebar.md)）；调研见 [research/ia-writer.md](research/ia-writer.md) |
 
 ---
 
@@ -196,8 +196,9 @@
 
 ### 7.3.1 侧栏重做（0.6.0）
 - [x] 按 [research/sidebar.md](research/sidebar.md)：文件 / 大纲两段（可拖分隔、可折叠），收藏 / 标签底部默认折叠，「最近」进位置菜单与 ⌘P；常驻筛选框（按名筛树 / 回车全文搜索，⌥⌘F）；段头悬停动作；右键新建 / 重命名 / 废纸篓；标签扫描去噪 + `#a/b` 嵌套
-- [ ] 性能：render/large-1mb 从 110 ms 漂到 ~140 ms（M6/M7 各项每项几毫秒累加），用 Instruments 分摊后拉回 120 以内，再把预算收紧回 140
-- [ ] 侧栏后续：⌘P 空查询列最近打开的文件；编辑模式下大纲跟随光标所在标题；文件拖到文件夹 = 移动
+- [x] 性能：render/large-1mb 从 110 ms 漂到 ~140 ms → 0.7.0 用 `sample` 分摊后修掉三处与文档无关的浪费（Mermaid 可用性每块查一次文件系统、缓存键 `String(format:)` 十六进制 + 未命中读盘、链接 URL 桥接），回到 116 ms，预算收回 140 / 150（见 PERFORMANCE.md）
+- [x] 0.6.1：大纲合回文件树（用户决定：这是 Quire 的特色——当前文档的标题挂在文件节点下、其他文件展开也扫标题，标题行用 `text.alignleft` 图标区分），不再是独立段
+- [x] 侧栏后续（0.7.0）：⌘P 空查询列最近打开（本根内）的文件；编辑模式下大纲跟随光标所在的块；树内拖文件 / 文件夹到文件夹 = 移动（同名冲突提示，打开着的文档与收藏跟着走；拖到 Finder 是复制）
 
 ### 7.4 导出与集成
 - [x] PDF 排版参数（#81，0.5.5）：导出 PDF 的存盘面板带附加视图——纸张（跟随系统 / A4 / Letter）、四边距、页眉 / 页脚模板（`{page} {pages} {title} {file} {date}`，`|` 分左中右）、标题编号、标题不孤行；记在 `pdf.layout`（JSON），⌘P 打印也用同一套。页眉页脚走 AppKit 自带的 `pageHeader / pageFooter`（自己改 frame 画会触发 TextKit 重排、分页失效）；标题不孤行在 `computePageRects` 里把页尾标题带到下一页；打印 / PDF 永远用浅色主题

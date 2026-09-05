@@ -107,6 +107,8 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         outlineView.onKeyDown = { [weak self] e in self?.keyDown(e) ?? false }
         outlineView.onMenu = { [weak self] row in self?.menu(forRow: row) }
         outlineView.registerForDraggedTypes([.fileURL])
+        outlineView.setDraggingSourceOperationMask(.move, forLocal: true)     // 树内拖 = 移动
+        outlineView.setDraggingSourceOperationMask(.copy, forLocal: false)    // 拖到 Finder / 别的 App = 复制
         outlineView.target = self
         outlineView.action = #selector(rowClicked(_:))
         outlineView.doubleAction = #selector(rowDoubleClicked(_:))
@@ -607,6 +609,24 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         Favorites.replace(url, with: dest)
     }
 
+    /// 把文件 / 文件夹移到 dir（拖拽 / 菜单）。同名冲突跳过并提示；打开着的文档与收藏跟着走；树由目录监听重列
+    @discardableResult
+    func move(_ urls: [URL], to dir: URL) -> Bool {
+        var moved = false
+        for u in urls {
+            let dest = dir.appendingPathComponent(u.lastPathComponent)
+            guard dest.standardizedFileURL != u.standardizedFileURL else { continue }
+            if FileManager.default.fileExists(atPath: dest.path) {
+                let a = NSAlert(); a.messageText = String(format: L("已经有一个叫「%@」的项目"), u.lastPathComponent); a.runModal(); continue
+            }
+            do { try FileManager.default.moveItem(at: u, to: dest) } catch { NSApp.presentError(error); continue }
+            Self.documentsMoved(from: u, to: dest)
+            Favorites.replace(u, with: dest)
+            moved = true
+        }
+        return moved
+    }
+
     /// 打开着的文档跟着改名 / 移动（NSDocument 允许直接改 fileURL）
     nonisolated static func documentsMoved(from: URL, to: URL) {
         Task { @MainActor in
@@ -745,16 +765,51 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         if row >= 0 { outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
     }
 
-    // MARK: - 拖放（打开 Markdown 文件 / 把文件夹设为根）
+    // MARK: - 拖放（树内拖 = 移动；外来 Markdown 文件 = 打开 / 文件夹 = 设为根）
 
     var onDropFolder: ((URL) -> Void)?
+    func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
+        guard mode == .tree, let n = item as? SidebarNode, n.kind == .file || n.kind == .folder, let u = n.url else { return nil }
+        return u as NSURL
+    }
+
+    private func isInternalDrag(_ info: NSDraggingInfo) -> Bool { (info.draggingSource as? NSOutlineView) === outlineView }
+
+    /// 树内拖动的目标文件夹：落在文件夹上 = 该文件夹；落在文件上 = 它所在文件夹；落在空白处 = 根
+    private func dropFolder(for item: Any?) -> (node: SidebarNode?, url: URL)? {
+        guard let root else { return nil }
+        guard let n = item as? SidebarNode else { return (nil, root) }
+        switch n.kind {
+        case .folder: return n.url.map { (n, $0) }
+        case .file: if let u = n.url { return (n.parent?.kind == .folder ? n.parent : nil, u.deletingLastPathComponent()) }; return nil
+        default: return nil
+        }
+    }
+
     func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo, proposedItem item: Any?, proposedChildIndex index: Int) -> NSDragOperation {
-        guard DropSupport.fileURLs(from: info).contains(where: { DropSupport.isMarkdown($0) || DropSupport.isDirectory($0) }) else { return [] }
+        let urls = DropSupport.fileURLs(from: info)
+        if isInternalDrag(info) {
+            guard let (node, dir) = dropFolder(for: item) else { return [] }
+            let dirPath = dir.standardizedFileURL.path
+            // 不能移到原地、移进自己或自己的子目录
+            for u in urls {
+                let p = u.standardizedFileURL.path
+                if u.deletingLastPathComponent().standardizedFileURL.path == dirPath || dirPath == p || dirPath.hasPrefix(p + "/") { return [] }
+            }
+            outlineView.setDropItem(node, dropChildIndex: NSOutlineViewDropOnItemIndex)
+            return .move
+        }
+        guard urls.contains(where: { DropSupport.isMarkdown($0) || DropSupport.isDirectory($0) }) else { return [] }
         outlineView.setDropItem(nil, dropChildIndex: NSOutlineViewDropOnItemIndex)
         return .copy
     }
+
     func outlineView(_ outlineView: NSOutlineView, acceptDrop info: NSDraggingInfo, item: Any?, childIndex index: Int) -> Bool {
         let all = DropSupport.fileURLs(from: info)
+        if isInternalDrag(info) {
+            guard let (_, dir) = dropFolder(for: item) else { return false }
+            return move(all, to: dir)
+        }
         if let dir = all.first(where: DropSupport.isDirectory) { onDropFolder?(dir) }
         let urls = all.filter(DropSupport.isMarkdown)
         guard !urls.isEmpty else { return false }

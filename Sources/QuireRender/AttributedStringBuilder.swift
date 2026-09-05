@@ -674,7 +674,8 @@ public final class AttributedStringBuilder: @unchecked Sendable {
     private func appendRun(_ s: String, into out: NSMutableAttributedString, ctx: InlineContext, inlineCode: Bool = false, muted: Bool = false, codePad: Bool = false) {
         let attrs = runAttributes(ctx, inlineCode: inlineCode, muted: muted, codePad: codePad)
         if let link = ctx.link {
-            let value: Any = URL(string: link) ?? link
+            // 直接建 NSURL：Swift URL 存进属性串时要桥接成 NSURL（再解析一遍 CFURL），1 MB 基准里占渲染的 2%
+            let value: Any = NSURL(string: link) ?? (link as NSString)
             let start = out.length
             QAAppendRunWithExtra(out, s as NSString, attrs, .link, value)
             if let tip = ctx.tooltip { out.addAttribute(.toolTip, value: tip, range: NSRange(location: start, length: out.length - start)) }

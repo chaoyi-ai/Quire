@@ -31,7 +31,11 @@ public final class TableAttachment: NSTextAttachment {
 
     static func accessibilityText(header: [NSAttributedString], rows: [[NSAttributedString]]) -> String {
         let lines = ([header] + rows).map { $0.map(\.string).joined(separator: "\t") }
-        return String(format: RL("表格，%d 行 %d 列"), rows.count + 1, header.count) + "\n" + lines.joined(separator: "\n")
+        // 不用 String(format:)（每张表走一遍 CFString 格式化）；模板里两个 %d 依次替换
+        var head = RL("表格，%d 行 %d 列")
+        if let r = head.range(of: "%d") { head.replaceSubrange(r, with: String(rows.count + 1)) }
+        if let r = head.range(of: "%d") { head.replaceSubrange(r, with: String(header.count)) }
+        return head + "\n" + lines.joined(separator: "\n")
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }

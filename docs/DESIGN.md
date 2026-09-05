@@ -270,22 +270,28 @@ enum Block: Hashable {
 
 ```
 Quire/
-├── Package.swift
+├── Package.swift             # QuireCore · CQuireAttr · QuireRender · Quire · quire-bench（依赖 cmark-gfm pin、Vendor/SwiftMath）
 ├── Sources/
-│   ├── QuireCore/        # 解析 · 块模型 · 增量 · 主题模型 · 高亮 · 大纲
-│   ├── QuireRender/      # AttributedString 生成 · ReaderTextView · 附件 · Mermaid · 图片
-│   ├── Quire/            # App 壳（NSDocument、窗口、菜单、偏好）
-│   └── quire-bench/      # 基准 CLI
-├── Tests/
-│   ├── QuireCoreTests/
-│   ├── QuireRenderTests/
-│   └── Fixtures/         # 测试与基准用 Markdown（含 1 MB 大文件）
-├── Themes/               # 内置主题 JSON（Package resource）
-├── Vendor/mermaid/       # 构建时拉取
-├── assets/               # Info.plist · 图标
-├── scripts/              # build_app.sh · fetch_mermaid.sh · bench.sh · make_icon.swift
-├── docs/                 # 本文档、性能、主题、路线图
-└── .github/workflows/    # CI：build + test + bench 门禁
+│   ├── QuireCore/            # Foundation only
+│   │   ├── Parser/           #   cmark-gfm 桥接、扩展行内、行内数学、wikilink、内容块
+│   │   ├── Model/            #   Block / Outline / 文本统计 / 全文搜索 / 标签 / 著作归属 / 文风规则
+│   │   ├── Incremental/      #   块级 diff
+│   │   ├── Highlight/        #   Markdown 与代码词法器
+│   │   ├── Theme/ Themes/    #   主题模型、加载器；内置主题 JSON（资源）
+│   │   ├── Export/           #   HTML 导出、HTML → Markdown
+│   │   └── Watch/            #   文件监听
+│   ├── CQuireAttr/           # ObjC 直通：批量 append 属性 run（避开 Swift 字典桥接）
+│   ├── QuireRender/          # AppKit：AttributedStringBuilder · ReaderTextView / EditorTextView / HybridTextView · 表格 / 数学 / Mermaid 附件 · 渐进排版
+│   ├── Quire/                # App 壳：NSDocument · 窗口 · 菜单 · 偏好 · 主题管理 · URL scheme / Intents
+│   │   └── Sidebar/          #   侧栏（容器、段视图、文件树 + 大纲、收藏 / 标签、设置）
+│   └── quire-bench/          # 基准 CLI（fixture 由 FixtureGenerator 生成）
+├── Tests/QuireCoreTests · QuireRenderTests（含本地化键一致性、几何、混合模式）
+├── Vendor/SwiftMath/         # vendored（改了资源定位、字体只留 Latin Modern）；Vendor/mermaid/ 构建时拉取
+├── Casks/quire.rb            # Homebrew cask（release.sh 更新）
+├── assets/                   # Info.plist · 图标 · 权限
+├── scripts/                  # build_app.sh · smoke_app.sh · release.sh · bench.sh / bench_gate.sh · bench_launch.sh · appintents_metadata.sh · fetch_mermaid.sh · make_icon.swift
+├── docs/                     # 本文档、PERFORMANCE、THEMES、ROADMAP、research/（typora · ia-writer · sidebar）
+└── .github/workflows/        # CI：build + test + bench 门禁 + 冒烟
 ```
 
 ## 11. 并发模型

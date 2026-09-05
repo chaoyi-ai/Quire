@@ -3,6 +3,7 @@
 > "性能"和"资源"是 Quire 的第一功能，不是优化项。任何 PR 若使下表指标退化超过 10%，CI 应当拒绝。
 
 > **2026-09-04 预算重校**：render/large-1mb 的实测从 0.2.x 的 110 ms 漂到 137–141 ms（数学门控、扩展语法、wikilink、内容块、标题编号、列表间距键……每项几毫秒），140 的预算只剩 1–2% 余量，门禁开始被机器负载噪声触发（A/B 证明最近的中文软换行判断本身为 0 开销）。预算放宽到 160 / 170，并把"渲染管线回到 120 ms 以内"记入路线图——这是记账，不是掩盖。
+> **2026-09-05（0.7.0）已拉回**：`sample` 采样发现三处与文档大小无关的浪费——每个 Mermaid 块渲染时都查一次文件系统判断 mermaid.min.js 是否存在（5%）、缓存键 SHA256 用 `String(format: "%02x")` 逐字节转十六进制 + 未命中每次 stat/读盘（7%）、链接先建 Swift `URL` 再桥接成 NSURL（2%）。修后 render 137 → 116 ms、theme 139 → 117 ms，预算收回 140 / 150。
 
 ## 1. 预算（硬指标）
 
@@ -13,7 +14,7 @@
 | 冷启动到首屏（打开一个 20 KB 文档） | **< 300 ms**（目标） | `scripts/bench_launch.sh`：进程启动 → 首帧（`QUIRE_MEASURE_LAUNCH`） |
 | 热启动到首屏 | < 400 ms | 同上，第二次起 |
 | 解析 1 MB Markdown（`Tests/Fixtures/large-1mb.md`） | **< 60 ms** | `quire-bench parse` |
-| 渲染 1 MB 文档为 attributed string（不含布局） | **< 160 ms** | `quire-bench render` |
+| 渲染 1 MB 文档为 attributed string（不含布局） | **< 140 ms** | `quire-bench render` |
 | 解析 + 渲染合计 | **< 200 ms** | `quire-bench full` |
 | 主题热切换（1 MB 文档，不重解析、全量重建属性） | < 150 ms | `quire-bench theme` |
 | 编辑回显（击键 → 预览更新，1 MB 文档中段修改一段） | **< 16 ms** 增量路径 | `quire-bench incremental` |
@@ -54,23 +55,23 @@
 - 禁止把 highlight.js / prism 之类跑在 JavaScriptCore 里做高亮。
 - 禁止在已构建的 NSMutableAttributedString 范围上回头 `addAttribute(range:)`（O(runs) 字典合并）；run 属性在创建时一次写全，走 `CQuireAttr`。
 
-## 2.1 当前基线（Apple M-series，2026-08，`quire-bench all`）
+## 2.1 当前基线（Apple M-series，2026-09，`quire-bench all`）
 
 | 指标 | 结果 | 预算 |
 |------|------|------|
-| parse/large-1mb | 42 ms | 60 |
-| render/large-1mb | 110 ms（0.2.x）→ 137–141 ms（0.6.6，M6/M7 之后） | 160 |
-| full/large-1mb | 160 ms | 200 |
-| theme/switch-large-1mb | 114 ms（0.2.x）→ 139–143 ms（0.6.6） | 170 |
+| parse/large-1mb | 42 ms（0.2.x）→ 47 ms（0.7.0） | 60 |
+| render/large-1mb | 110 ms（0.2.x）→ 137–141 ms（0.6.6，M6/M7 之后）→ 116–118 ms（0.7.0） | 140 |
+| full/large-1mb | 160 ms（0.2.x）→ 166 ms（0.7.0） | 200 |
+| theme/switch-large-1mb | 114 ms（0.2.x）→ 139–143 ms（0.6.6）→ 116–118 ms（0.7.0） | 150 |
 | incremental/edit-middle-1mb | 1.3 ms | 16 |
-| view/reader-setRendered-1mb | 30 ms（修复前 4300 ms） | 60 |
+| view/reader-setRendered-1mb | 30 ms（修复前 4300 ms）→ 38 ms（0.7.0） | 60 |
 | view/editor-keystroke-1mb | 0.8 ms（修复前 ≈ 10 ms） | 8 |
 | App 内主题切换 apply（1 MB 文档，主线程） | 44 ms（修复前 4073 ms） | — |
 | highlight/swift | 61 MB/s | > 20 |
 | 热启动到首帧（small.md，阅读模式） | 350–400 ms | < 400 |
 | 常驻内存 small.md / large-1mb.md | 40 MB / 90 MB | 40 / 120 |
 | 空闲 CPU | 0.0% | 0 |
-| App 体积（含 mermaid） | 6.5 MB | < 15 |
+| App 体积（含 mermaid + SwiftMath 字体） | 6.5 MB（0.2.x）→ 10 MB（0.5.9 起 vendored SwiftMath） | < 15 |
 
 历史：swift-markdown 封装时 parse 136 ms；纯 Swift 属性字符串构建时 render 527 ms；启动优化前热启动 540 ms。
 

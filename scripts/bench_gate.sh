@@ -11,9 +11,9 @@ import json, sys
 path, factor = sys.argv[1], float(sys.argv[2])
 budgets_ms = {  # 与 docs/PERFORMANCE.md §1 保持一致
     "parse/large-1mb": 60,
-    "render/large-1mb": 160,
+    "render/large-1mb": 140,
     "full/large-1mb (parse+render)": 200,
-    "theme/switch-large-1mb": 170,
+    "theme/switch-large-1mb": 150,
     "incremental/edit-middle-1mb": 16,
     "view/reader-setRendered-1mb": 60,
     "view/editor-keystroke-1mb": 8,

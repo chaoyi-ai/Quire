@@ -139,6 +139,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             MainActor.assumeIsolated {
                 guard let self, let tv = obj as? NSTextView, tv.window === self.window else { return }
                 let r = tv.selectedRange()
+                if self.mode == .editor, self.hasEditorPane, tv === self.editorViewController.textView { self.followCaretInSidebar(location: r.location) }
                 guard r.length > 0, let s = tv.textStorage?.string as NSString? else { self.wordCount.update(selection: nil); return }
                 self.wordCount.update(selection: TextStats.compute(s.substring(with: r)))
             }
@@ -382,6 +383,18 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         document?.undoManager
     }
 
+    /// 编辑模式：侧栏大纲跟随光标所在的块（阅读 / 双栏由阅读视图的章节回调驱动）
+    private var lastCaretBlock: Int?
+    private func followCaretInSidebar(location: Int) {
+        let line = editorViewController.textView.lineNumber(at: location)
+        let idx: Int?
+        if let rendered = readerViewController.textView.rendered { idx = rendered.blockIndex(forLine: line) }
+        else { idx = session.parsed.blocks.lastIndex { ($0.sourceRange?.start.line ?? Int.max) <= line } }
+        guard let idx, idx != lastCaretBlock else { return }
+        lastCaretBlock = idx
+        sidebarViewController.highlight(blockIndex: idx)
+    }
+
     /// 跳到源码行（阅读视图按块、编辑器按行）
     func jump(toLine line: Int) {
         if let rendered = readerViewController.textView.rendered, let idx = rendered.blockIndex(forLine: line) {
@@ -392,6 +405,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
 
     /// 文档从磁盘（重新）读入：同步编辑器文本
     func documentDidReload(_ source: String) {
+        hybridSplicer.reset()
         guard hasEditorPane else { return }
         editorViewController.replaceSource(source)
     }
@@ -500,24 +514,21 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     @objc func setModeHybrid(_ sender: Any?) { mode = .hybrid }
 
     private var hybridWired = false
+    private let hybridSplicer = SourceLineSplicer()
     /// 混合模式的回写：击键只更新文档源码（不重渲染），离开块时重解析 + 按 diff 重渲染
     private func wireHybrid() {
         guard !hybridWired, let hybrid = readerViewController.textView as? HybridTextView else { return }
         hybridWired = true
         hybrid.onSourceEdit = { [weak self, weak hybrid] _, text, lines in
             guard let self, let hybrid else { return }
-            var all = self.session.source.components(separatedBy: "\n")
-            // 源码末尾有换行时 components 多出一个空串；块源码自带末尾换行
-            let newLines = text.hasSuffix("\n") ? String(text.dropLast()).components(separatedBy: "\n") : text.components(separatedBy: "\n")
-            guard lines.lowerBound >= 1, lines.upperBound <= all.count else { return }
-            all.replaceSubrange((lines.lowerBound - 1)...(lines.upperBound - 1), with: newLines)
-            let joined = all.joined(separator: "\n")
+            // 以前整篇 split("\n") + join：1 MB 每击键 ≈ 5 ms。现在只在本次激活的第一击算一次块的 UTF-16 区间，之后按区间替换
+            guard let (joined, newLineCount) = self.hybridSplicer.replace(lines: lines, in: self.session.source, with: text) else { return }
             self.markdownDocument?.setSourceFromEditor(joined, tracked: false)
             self.markdownDocument?.updateChangeCount(.changeDone)
             self.session.updateSourceWithoutRendering(joined)
             hybrid.source = joined
             // 后续块的行号随之平移：由下次重解析修正；本块行范围的变化在 HybridTextView 内部按 activeLines 维护
-            hybrid.activeLinesDidChange(to: lines.lowerBound...(lines.lowerBound + newLines.count - 1))
+            hybrid.activeLinesDidChange(to: lines.lowerBound...(lines.lowerBound + newLineCount - 1))
         }
         hybrid.renderPreview = { [weak self] src in
             guard let self else { return nil }
@@ -526,6 +537,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         }
         hybrid.onDeactivate = { [weak self] in
             guard let self else { return }
+            self.hybridSplicer.reset()
             self.session.sourceDidChange(self.session.source, reason: .edited)
             if self.editorAdded { self.editorViewController.replaceSource(self.session.source) }
         }

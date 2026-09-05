@@ -36,15 +36,23 @@ public final class MermaidCache: @unchecked Sendable {
         queue.asyncAfter(deadline: .now() + 5) { [self] in trim() }
     }
 
+    private static let hexDigits = Array("0123456789abcdef".utf8)
     public static func key(source: String, theme: String) -> String {
         let d = SHA256.hash(data: Data("\(theme)|\(MermaidRenderer.mermaidVersion)|\(source)".utf8))
-        return d.map { String(format: "%02x", $0) }.joined()
+        // 查表转十六进制：以前每字节一次 String(format: "%02x")，1 MB 基准（273 张图）里占渲染的 5%
+        var bytes = [UInt8](); bytes.reserveCapacity(64)
+        for b in d { bytes.append(Self.hexDigits[Int(b >> 4)]); bytes.append(Self.hexDigits[Int(b & 0x0f)]) }
+        return String(decoding: bytes, as: UTF8.self)
     }
+
+    /// 已知磁盘上也没有的键：渲染阶段每张图都来问一次，未命中不能每次都去 stat + 读文件
+    private let missing = NSCache<NSString, NSNumber>()
 
     public func image(forKey key: String) -> NSImage? {
         if let i = memory.object(forKey: key as NSString) { return i }
+        if missing.object(forKey: key as NSString) != nil { return nil }
         let url = dir.appendingPathComponent(key + ".png")
-        guard let data = try? Data(contentsOf: url), let img = MermaidRenderer.image(fromPNG: data) else { return nil }
+        guard let data = try? Data(contentsOf: url), let img = MermaidRenderer.image(fromPNG: data) else { missing.setObject(1, forKey: key as NSString); return nil }
         memory.setObject(img, forKey: key as NSString, cost: data.count)
         // 触碰 mtime（LRU）
         queue.async { try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path) }
@@ -52,6 +60,7 @@ public final class MermaidCache: @unchecked Sendable {
     }
 
     public func store(png: Data, image: NSImage, forKey key: String) {
+        missing.removeObject(forKey: key as NSString)
         memory.setObject(image, forKey: key as NSString, cost: png.count)
         let url = dir.appendingPathComponent(key + ".png")
         queue.async { try? png.write(to: url, options: .atomic) }
@@ -101,7 +110,8 @@ public final class MermaidRenderer: NSObject, WKNavigationDelegate {
     private var inflight = 0
 
     /// 打包资源里是否有 mermaid.min.js（构建时由 scripts/fetch_mermaid.sh 放入）
-    public nonisolated static var isAvailable: Bool { resourceURL(for: "mermaid.min.js") != nil }
+    /// 缓存：以前是每个 Mermaid 块渲染时查一次文件系统（URL 拼接 + stat），1 MB 基准里占渲染的 5%
+    public nonisolated static let isAvailable: Bool = resourceURL(for: "mermaid.min.js") != nil
     nonisolated static func resourceURL(for name: String) -> URL? {
         guard let dir = QuireRenderResources.bundle.url(forResource: "Mermaid", withExtension: nil) else { return nil }
         let u = dir.appendingPathComponent(name)

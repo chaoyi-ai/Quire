@@ -337,3 +337,54 @@ public final class HybridTextView: ReaderTextView, NSTextStorageDelegate {
         suppressDelegate = false
     }
 }
+
+
+/// 混合模式击键回写：把源码第 `lines` 行替换成新文本。整篇按 "\n" 拆再拼是 O(n) 的字符串工作（1 MB ≈ 5 ms / 击键）；
+/// 这里只在一次激活的第一击扫一遍找到块的 UTF-16 区间，之后每击键只做一次区间替换（memcpy 级）。
+/// 块换块（`lines.lowerBound` 变了）、离开块、文档重载时区间失效（`reset`）。
+public final class SourceLineSplicer {
+    private var startLine = 0
+    private var region: NSRange?
+    public init() {}
+    public func reset() { region = nil }
+
+    /// 返回新源码与新文本的行数；行号越界返回 nil
+    public func replace(lines: ClosedRange<Int>, in source: String, with text: String) -> (String, Int)? {
+        let ns = source as NSString
+        if region == nil || startLine != lines.lowerBound || NSMaxRange(region!) > ns.length {
+            guard let r = Self.range(ofLines: lines, in: ns) else { return nil }
+            region = r; startLine = lines.lowerBound
+        }
+        guard let r = region else { return nil }
+        // 块源码自带末尾换行；文末没有换行的块要把它去掉，否则每击键给文件末尾多加一个换行
+        let regionEndsWithNewline = r.length > 0 && ns.character(at: NSMaxRange(r) - 1) == 0x0A
+        let atEOF = NSMaxRange(r) == ns.length
+        var t = text
+        if atEOF, !regionEndsWithNewline, t.hasSuffix("\n") { t.removeLast() }
+        let out = ns.replacingCharacters(in: r, with: t)
+        region = NSRange(location: r.location, length: (t as NSString).length)
+        let body = text.hasSuffix("\n") ? String(text.dropLast()) : text
+        let newLineCount = body.reduce(1) { $0 + ($1 == "\n" ? 1 : 0) }
+        return (out, newLineCount)
+    }
+
+    /// 第 lines 行（1-based，含）在 UTF-16 里的区间，含末行的换行（若有）
+    static func range(ofLines lines: ClosedRange<Int>, in ns: NSString) -> NSRange? {
+        guard lines.lowerBound >= 1 else { return nil }
+        var line = 1, pos = 0
+        let nl = "\n"
+        var start: Int? = lines.lowerBound == 1 ? 0 : nil
+        while start == nil || line <= lines.upperBound {
+            let r = ns.range(of: nl, options: [], range: NSRange(location: pos, length: ns.length - pos))
+            if r.location == NSNotFound {
+                // 最后一行没有换行
+                guard line == lines.upperBound, let s = start ?? (line == lines.lowerBound ? pos : nil) else { return nil }
+                return NSRange(location: s, length: ns.length - s)
+            }
+            line += 1; pos = NSMaxRange(r)
+            if start == nil, line == lines.lowerBound { start = pos }
+            if line == lines.upperBound + 1, let s = start { return NSRange(location: s, length: pos - s) }
+        }
+        return nil
+    }
+}

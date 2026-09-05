@@ -98,11 +98,28 @@ final class QuickOpenPanel: NSPanel, NSTextFieldDelegate, NSTableViewDataSource,
     }
 
     func refresh() {
-        results = index.search(field.stringValue)
+        let query = field.stringValue.trimmingCharacters(in: .whitespaces)
+        let recents = query.isEmpty ? recentPaths() : []
+        results = recents.isEmpty ? index.search(query) : recents.map { ($0, FuzzyMatcher.Match(score: 0, positions: [])) }
         table.reloadData()
         if !results.isEmpty { table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
         let n = index.relativePaths.count
+        if !recents.isEmpty { hint.stringValue = L("最近打开的文件 · ↑↓ 选择 ⏎ 打开 Esc 关闭"); return }
         hint.stringValue = index.isScanning ? L("正在扫描…") : String(format: L("%d 个文件 · ↑↓ 选择 ⏎ 打开 Esc 关闭"), n) + (index.truncated ? L("（已截断）") : "")
+    }
+
+    /// 空查询时列最近打开、且在本根目录内的文件（系统"最近打开"顺序，去重、仍存在的）
+    private func recentPaths() -> [String] {
+        let rootPath = index.root.standardizedFileURL.path + "/"
+        var seen = Set<String>(), out: [String] = []
+        for u in NSDocumentController.shared.recentDocumentURLs {
+            let p = u.standardizedFileURL.path
+            guard p.hasPrefix(rootPath), FileManager.default.fileExists(atPath: p) else { continue }
+            let rel = String(p.dropFirst(rootPath.count))
+            if seen.insert(rel).inserted { out.append(rel) }
+            if out.count >= 20 { break }
+        }
+        return out
     }
 
     // MARK: 输入

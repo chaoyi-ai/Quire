@@ -7,7 +7,7 @@
 
 | 类型 | 位置 |
 |------|------|
-| 内置主题 | 随 App 打包（源码在仓库 `Themes/*.json`） |
+| 内置主题 | 随 App 打包（源码在仓库 `Sources/QuireCore/Themes/*.json`，经 `ResourceBundle.locate` 定位） |
 | 用户主题 | `~/Library/Application Support/Quire/Themes/*.json`，目录监听热加载 |
 
 文件名任意，主题 `id` 必须唯一；同 id 时用户主题覆盖内置主题。

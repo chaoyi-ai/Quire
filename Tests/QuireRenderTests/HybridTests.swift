@@ -192,3 +192,57 @@ final class HybridPolishTests: XCTestCase {
         XCTAssertEqual(attrs[.foregroundColor] as? NSColor, v.style.theme.colors.editor.markdownMarker.nsColor)
     }
 }
+
+/// 混合模式回写：区间替换要与"整篇按行拆再拼"逐字节一致
+final class SourceLineSplicerTests: XCTestCase {
+    /// 旧实现（参照）
+    func reference(_ source: String, lines: ClosedRange<Int>, text: String) -> String? {
+        var all = source.components(separatedBy: "\n")
+        let newLines = text.hasSuffix("\n") ? String(text.dropLast()).components(separatedBy: "\n") : text.components(separatedBy: "\n")
+        guard lines.lowerBound >= 1, lines.upperBound <= all.count else { return nil }
+        all.replaceSubrange((lines.lowerBound - 1)...(lines.upperBound - 1), with: newLines)
+        return all.joined(separator: "\n")
+    }
+
+    func testMatchesReferenceAcrossKeystrokes() {
+        let src = "# 标题\n\n第一段。\n\n- a\n- b\n\n结尾段\n"
+        let sp = SourceLineSplicer()
+        var cur = src
+        var lines = 5...6
+        for text in ["- a\n- bb\n", "- a\n- bb\n- c\n", "- a\n- bb\n- c\n- 🎉d\n", "- x\n"] {
+            let (out, n) = sp.replace(lines: lines, in: cur, with: text)!
+            XCTAssertEqual(out, reference(cur, lines: lines, text: text))
+            XCTAssertEqual(n, text.dropLast().filter { $0 == "\n" }.count + 1)
+            cur = out; lines = 5...(5 + n - 1)
+        }
+    }
+
+    func testFirstAndLastLineAndNoTrailingNewline() {
+        let sp = SourceLineSplicer()
+        // 第一行
+        XCTAssertEqual(sp.replace(lines: 1...1, in: "a\nb\nc\n", with: "A\n")!.0, "A\nb\nc\n")
+        sp.reset()
+        // 最后一行、文末没有换行：不能凭空多一个换行
+        XCTAssertEqual(sp.replace(lines: 3...3, in: "a\nb\nc", with: "C\n")!.0, reference("a\nb\nc", lines: 3...3, text: "C\n"))
+        sp.reset()
+        // 最后一行、文末有换行
+        XCTAssertEqual(sp.replace(lines: 3...3, in: "a\nb\nc\n", with: "C\n")!.0, "a\nb\nC\n")
+        sp.reset()
+        // 文末换行之后算一个空行（与 components(separatedBy:) 一致）；再往后越界
+        XCTAssertEqual(sp.replace(lines: 4...4, in: "a\nb\nc\n", with: "x\n")!.0, reference("a\nb\nc\n", lines: 4...4, text: "x\n"))
+        sp.reset()
+        XCTAssertNil(sp.replace(lines: 5...5, in: "a\nb\nc\n", with: "x\n"))
+        XCTAssertNil(sp.replace(lines: 0...1, in: "a\n", with: "x\n"))
+        // 单行文档
+        sp.reset()
+        XCTAssertEqual(sp.replace(lines: 1...1, in: "only", with: "ONLY\n")!.0, "ONLY")
+    }
+
+    func testRegionInvalidatesWhenBlockChanges() {
+        let sp = SourceLineSplicer()
+        var cur = "a\nb\nc\n"
+        cur = sp.replace(lines: 1...1, in: cur, with: "A\n")!.0
+        cur = sp.replace(lines: 3...3, in: cur, with: "C\n")!.0   // 换了块：重新定位
+        XCTAssertEqual(cur, "A\nb\nC\n")
+    }
+}

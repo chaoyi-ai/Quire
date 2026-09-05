@@ -11,9 +11,11 @@
 swift build                          # Debug 编译
 swift test                           # 单元测试
 swift run -c release quire-bench all # 性能基准（JSON）
-scripts/build_app.sh                 # 组装 dist/Quire.app（release + ad-hoc 签名）
+scripts/build_app.sh                 # 组装 dist/Quire.app（release + ad-hoc 签名 + App Intents 元数据 + 冒烟）
+scripts/smoke_app.sh dist/Quire.app  # 隔离 .build 目录启动 App 并导出 PDF：发布包能在别的机器上跑的唯一证据
 scripts/fetch_mermaid.sh             # 拉取固定版本 mermaid.min.js（构建 App 前需要一次）
-scripts/bench.sh                     # 跑基准并与 docs/PERFORMANCE.md 预算比对
+scripts/bench.sh [leniency]          # 跑基准并与 scripts/bench_gate.sh 里的预算比对（参数是宽松系数，不是次数）
+scripts/release.sh <ver>             # 查 HEAD 的 CI → test → bench → build → smoke → zip → Cask → tag → GitHub Release
 ```
 
 ## 规矩
@@ -25,6 +27,9 @@ scripts/bench.sh                     # 跑基准并与 docs/PERFORMANCE.md 预�
 5. **主线程只装配 UI。** 解析、高亮、图片解码、属性字符串生成都在后台。
 6. **测试跟着走。** `QuireCore` 的改动带单元测试；新语言词法器至少一个 token 断言。
 7. **主题字段变更**同步更新 [docs/THEMES.md](docs/THEMES.md) 与全部内置主题。
+8. **资源一律经 `QuireCore.ResourceBundle.locate`**，不要直接用 `Bundle.module`（SwiftPM 的 accessor 只认编译机的 .build 路径；0.3.0–0.5.8 的发布包因此在别的机器上一启动就崩）。发布前必过 `smoke_app.sh`。
+9. **界面字符串走 `L()` / `RL()`**，键 = 中文原文，两套 `Localizable.strings` 都要加；`LocalizationTests` 会因缺键或多余键失败。
+10. **TextKit 2 三条硬规矩**见 DESIGN.md ADR-13：已有布局的视图先清空再 `setAttributedString`；定位用 `enumerateTextLayoutFragments(.ensuresLayout)` 而不是 `textLayoutFragment(for:)`；淡化 / 高亮不用渲染属性。
 
 ## 提交约定
 
