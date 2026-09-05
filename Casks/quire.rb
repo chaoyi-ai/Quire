@@ -2,8 +2,8 @@
 # 注意：App 目前只做 ad-hoc 签名、未公证——Gatekeeper 会拦，需要 `xattr -dr com.apple.quarantine /Applications/Quire.app`
 # 或在 Finder 里右键打开。公证（Developer ID + notarytool）完成后去掉这段说明。版本与 sha256 由 scripts/release.sh 更新。
 cask "quire" do
-  version "0.6.9"
-  sha256 "1593f70602a0b36f1f30e1d32be60d4a5507cff28f328fed293d1d458e63ef0a"
+  version "0.7.0"
+  sha256 "27bafcf5a58b8d16b4e5bb44feebaf3b26ed4d18545fd82391356114673c87a1"
 
   url "https://github.com/chaoyi-ai/Quire/releases/download/v#{version}/Quire-#{version}.zip"
   name "Quire"
