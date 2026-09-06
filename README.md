@@ -108,7 +108,7 @@ quire export README.md README.pdf
 | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | 性能预算、原则、禁止事项、基准工具 |
 | [docs/THEMES.md](docs/THEMES.md) | 主题 JSON 规范、内置主题、自定义主题 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 里程碑 M0–M7 与任务拆分 |
-| [docs/research/](docs/research/) | 对标调研：Typora、iA Writer、侧栏设计 |
+| [docs/research/](docs/research/) | 对标调研：Typora、iA Writer、侧栏设计、Kindle 阅读设置 |
 | [CHANGELOG.md](CHANGELOG.md) | 每个版本改了什么、为什么 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 构建、测试、提交约定 |
 
