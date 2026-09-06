@@ -11,13 +11,10 @@ final class ReadingLayoutPanelController: NSViewController {
     private let presetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let fontPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let codeFontPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let sizeSlider = NSSlider(value: 16, minValue: 0, maxValue: Double(ReadingLayout.fontSizes.count - 1), target: nil, action: nil)
-    private let sizeLabel = NSTextField(labelWithString: "")
+    private let sizeField = StepField(min: 10, max: 36, step: 1, decimals: 0, unit: "pt")
     private let weightControl = NSSegmentedControl(labels: [L("主题"), L("中"), L("半粗")], trackingMode: .selectOne, target: nil, action: nil)
-    private let lineSlider = NSSlider(value: 1.6, minValue: ReadingLayout.lineHeightRange.lowerBound, maxValue: ReadingLayout.lineHeightRange.upperBound, target: nil, action: nil)
-    private let lineLabel = NSTextField(labelWithString: "")
-    private let paraSlider = NSSlider(value: 1, minValue: ReadingLayout.paragraphSpacingRange.lowerBound, maxValue: ReadingLayout.paragraphSpacingRange.upperBound, target: nil, action: nil)
-    private let paraLabel = NSTextField(labelWithString: "")
+    private let lineField = StepField(min: 1.0, max: 2.5, step: 0.05, decimals: 2, unit: "×")
+    private let paraField = StepField(min: 0.25, max: 2.0, step: 0.05, decimals: 2, unit: "em")
     private let widthControl = NSSegmentedControl(labels: [L("主题"), L("窄"), L("中"), L("宽"), L("不限")], trackingMode: .selectOne, target: nil, action: nil)
     private let alignControl = NSSegmentedControl(labels: [L("主题"), L("左对齐"), L("两端对齐")], trackingMode: .selectOne, target: nil, action: nil)
     private var pending: DispatchWorkItem?
@@ -32,15 +29,6 @@ final class ReadingLayoutPanelController: NSViewController {
 
         func label(_ s: String) -> NSTextField { let t = NSTextField(labelWithString: s); t.textColor = .secondaryLabelColor; t.font = .systemFont(ofSize: 12); return t }
         func row(_ name: String, _ v: NSView) { grid.addRow(with: [label(name), v]) }
-        func sliderRow(_ slider: NSSlider, _ value: NSTextField) -> NSView {
-            slider.isContinuous = true
-            slider.translatesAutoresizingMaskIntoConstraints = false
-            slider.widthAnchor.constraint(equalToConstant: 270).isActive = true   // NSSlider 没有固有宽度，不定就缩成一个点
-            value.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular); value.textColor = .secondaryLabelColor
-            value.alignment = .right; value.widthAnchor.constraint(equalToConstant: 48).isActive = true
-            let st = NSStackView(views: [slider, value]); st.orientation = .horizontal; st.spacing = 8
-            return st
-        }
 
         presetPopup.target = self; presetPopup.action = #selector(presetChanged(_:))
         row(L("预设"), presetPopup)
@@ -50,18 +38,21 @@ final class ReadingLayoutPanelController: NSViewController {
         codeFontPopup.target = self; codeFontPopup.action = #selector(codeFontChanged(_:))
         row(L("代码字体"), codeFontPopup)
 
-        sizeSlider.numberOfTickMarks = ReadingLayout.fontSizes.count; sizeSlider.allowsTickMarkValuesOnly = true
-        sizeSlider.target = self; sizeSlider.action = #selector(sizeChanged(_:))
-        row(L("字号"), sliderRow(sizeSlider, sizeLabel))
+        // 数值项用"输入框 + 步进器"（macOS 字体面板 / 系统设置的做法），不用滑杆：桌面上滑杆难精确到某个值，也没法直接打数字
+        sizeField.onChange = { [weak self] v in self?.debounced { $0.fontSize = Int(v) } }
+        sizeField.onReset = { [weak self] in self?.update { $0.fontSize = 0 } }
+        row(L("字号"), sizeField)
 
         weightControl.target = self; weightControl.action = #selector(weightChanged(_:))
         weightControl.segmentDistribution = .fillEqually
         row(L("正文粗细"), weightControl)
 
-        lineSlider.target = self; lineSlider.action = #selector(lineChanged(_:))
-        row(L("行距"), sliderRow(lineSlider, lineLabel))
-        paraSlider.target = self; paraSlider.action = #selector(paraChanged(_:))
-        row(L("段距"), sliderRow(paraSlider, paraLabel))
+        lineField.onChange = { [weak self] v in self?.debounced { $0.lineHeight = v } }
+        lineField.onReset = { [weak self] in self?.update { $0.lineHeight = 0 } }
+        row(L("行距"), lineField)
+        paraField.onChange = { [weak self] v in self?.debounced { $0.paragraphSpacing = v } }
+        paraField.onReset = { [weak self] in self?.update { $0.paragraphSpacing = 0 } }
+        row(L("段距"), paraField)
 
         widthControl.target = self; widthControl.action = #selector(widthChanged(_:))
         widthControl.segmentDistribution = .fillEqually
@@ -121,14 +112,10 @@ final class ReadingLayoutPanelController: NSViewController {
         let t = ThemeManager.shared.currentTheme.typography
         refreshPresets()
         select(fontPopup, family: l.bodyFontFamily); select(codeFontPopup, family: l.codeFontFamily)
-        let size = l.fontSize > 0 ? l.fontSize : Int(t.baseSize)
-        sizeSlider.doubleValue = Double(ReadingLayout.fontSizes.firstIndex(of: size) ?? ReadingLayout.fontSizes.firstIndex { $0 >= size } ?? 3)
-        sizeLabel.stringValue = l.fontSize > 0 ? "\(size) pt" : "\(size)*"
+        sizeField.set(value: Double(l.fontSize > 0 ? l.fontSize : Int(t.baseSize)), followingTheme: l.fontSize == 0)
         weightControl.selectedSegment = l.weight.rawValue
-        let lh = l.lineHeight > 0 ? l.lineHeight : Double(t.lineHeight)
-        lineSlider.doubleValue = lh; lineLabel.stringValue = String(format: l.lineHeight > 0 ? "%.2f" : "%.2f*", lh)
-        let ps = l.paragraphSpacing > 0 ? l.paragraphSpacing : Double(t.paragraphSpacing)
-        paraSlider.doubleValue = ps; paraLabel.stringValue = String(format: l.paragraphSpacing > 0 ? "%.2f" : "%.2f*", ps)
+        lineField.set(value: l.lineHeight > 0 ? l.lineHeight : Double(t.lineHeight), followingTheme: l.lineHeight == 0)
+        paraField.set(value: l.paragraphSpacing > 0 ? l.paragraphSpacing : Double(t.paragraphSpacing), followingTheme: l.paragraphSpacing == 0)
         widthControl.selectedSegment = ReadingLayout.contentWidths.firstIndex(of: l.contentWidth) ?? 0
         alignControl.selectedSegment = l.alignment.rawValue
     }
@@ -176,7 +163,7 @@ final class ReadingLayoutPanelController: NSViewController {
         guard l != layout else { return }
         prefs.readingLayout = l
     }
-    /// 滑杆连续拖动：70 ms 内只提交一次（1 MB 文档一次全量重建 ≈ 120 ms，不能每帧都来）
+    /// 步进器连点 / 键盘连按：70 ms 内只提交一次（1 MB 文档一次全量重建 ≈ 120 ms，不能每下都来）
     private func debounced(_ change: @escaping (inout ReadingLayout) -> Void) {
         pending?.cancel()
         let w = DispatchWorkItem { [weak self] in self?.update(change) }
@@ -190,22 +177,7 @@ final class ReadingLayoutPanelController: NSViewController {
     }
     @objc private func fontChanged(_ s: NSPopUpButton) { let f = (s.selectedItem?.representedObject as? String) ?? ""; update { $0.bodyFontFamily = f } }
     @objc private func codeFontChanged(_ s: NSPopUpButton) { let f = (s.selectedItem?.representedObject as? String) ?? ""; update { $0.codeFontFamily = f } }
-    @objc private func sizeChanged(_ s: NSSlider) {
-        let size = ReadingLayout.fontSizes[min(max(0, Int(s.doubleValue.rounded())), ReadingLayout.fontSizes.count - 1)]
-        sizeLabel.stringValue = "\(size) pt"
-        debounced { $0.fontSize = size }
-    }
     @objc private func weightChanged(_ s: NSSegmentedControl) { let w = ReadingLayout.Weight(rawValue: s.selectedSegment) ?? .theme; update { $0.weight = w } }
-    @objc private func lineChanged(_ s: NSSlider) {
-        let v = (s.doubleValue * 20).rounded() / 20
-        lineLabel.stringValue = String(format: "%.2f", v)
-        debounced { $0.lineHeight = v }
-    }
-    @objc private func paraChanged(_ s: NSSlider) {
-        let v = (s.doubleValue * 20).rounded() / 20
-        paraLabel.stringValue = String(format: "%.2f", v)
-        debounced { $0.paragraphSpacing = v }
-    }
     @objc private func widthChanged(_ s: NSSegmentedControl) { let w = ReadingLayout.contentWidths[s.selectedSegment]; update { $0.contentWidth = w } }
     @objc private func alignChanged(_ s: NSSegmentedControl) { let a = ReadingLayout.Alignment(rawValue: s.selectedSegment) ?? .theme; update { $0.alignment = a } }
     @objc private func resetAll(_ s: Any?) { update { $0 = .followTheme } }
@@ -232,4 +204,62 @@ final class ReadingLayoutPanelController: NSViewController {
         prefs.layoutPresets.removeAll { $0.id == id }
         refreshPresets()
     }
+}
+
+/// 数值项：可输入的文本框 + 步进器 + 单位；右侧一个小「↺」把该项恢复为跟随主题。
+/// 跟随主题时显示主题的实际值（灰字），一旦输入 / 步进就变成显式值（黑字）。
+@MainActor
+final class StepField: NSStackView, NSTextFieldDelegate {
+    var onChange: ((Double) -> Void)?
+    var onReset: (() -> Void)?
+    private let field = NSTextField()
+    private let stepper = NSStepper()
+    private let unitLabel = NSTextField(labelWithString: "")
+    private let resetButton = NSButton()
+    private let decimals: Int
+    private let range: ClosedRange<Double>
+
+    init(min: Double, max: Double, step: Double, decimals: Int, unit: String) {
+        self.decimals = decimals; range = min...max
+        super.init(frame: .zero)
+        orientation = .horizontal; spacing = 4; alignment = .centerY
+        let f = NumberFormatter(); f.minimumFractionDigits = decimals; f.maximumFractionDigits = decimals; f.minimum = NSNumber(value: min); f.maximum = NSNumber(value: max)
+        field.formatter = f
+        field.alignment = .right
+        field.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        field.controlSize = .small
+        field.delegate = self
+        field.target = self; field.action = #selector(fieldCommitted(_:))
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.widthAnchor.constraint(equalToConstant: 56).isActive = true
+        stepper.minValue = min; stepper.maxValue = max; stepper.increment = step
+        stepper.valueWraps = false; stepper.controlSize = .small
+        stepper.target = self; stepper.action = #selector(stepped(_:))
+        unitLabel.stringValue = unit; unitLabel.font = .systemFont(ofSize: 11); unitLabel.textColor = .secondaryLabelColor
+        unitLabel.widthAnchor.constraint(equalToConstant: 22).isActive = true
+        resetButton.image = NSImage(systemSymbolName: "arrow.counterclockwise", accessibilityDescription: L("恢复为跟随主题"))?.withSymbolConfiguration(.init(pointSize: 10, weight: .medium))
+        resetButton.isBordered = false; resetButton.bezelStyle = .texturedRounded; resetButton.imagePosition = .imageOnly
+        resetButton.toolTip = L("恢复为跟随主题")
+        resetButton.target = self; resetButton.action = #selector(reset(_:))
+        addView(field, in: .leading); addView(stepper, in: .leading); addView(unitLabel, in: .leading); addView(resetButton, in: .leading)
+    }
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    func set(value: Double, followingTheme: Bool) {
+        field.doubleValue = value
+        stepper.doubleValue = value
+        field.textColor = followingTheme ? .secondaryLabelColor : .labelColor
+        field.toolTip = followingTheme ? L("跟随主题") : nil
+        resetButton.isHidden = followingTheme
+    }
+
+    private func commit(_ v: Double) {
+        let clamped = Swift.min(range.upperBound, Swift.max(range.lowerBound, v))
+        set(value: clamped, followingTheme: false)
+        onChange?(clamped)
+    }
+    @objc private func stepped(_ s: NSStepper) { commit(s.doubleValue) }
+    @objc private func fieldCommitted(_ f: NSTextField) { commit(f.doubleValue) }
+    func controlTextDidEndEditing(_ obj: Notification) { commit(field.doubleValue) }
+    @objc private func reset(_ s: Any?) { onReset?() }
 }
