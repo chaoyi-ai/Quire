@@ -19,6 +19,13 @@ public struct RenderOptions: Hashable, Sendable {
     public var baseFontSize: Int = 0
     /// 标题自动编号（1 / 1.1 / 1.1.1，按文档里的级别相对计）；开着时增量渲染退化为全量（编号会跨块变化）
     public var headingNumbers = false
+    /// 阅读版式（见 ReadingLayout；零值 = 跟随主题）：正文字重 0 主题 / 1 medium / 2 semibold；行高倍率；段距 em；
+    /// 内容列宽 pt（-1 主题、0 不限）；对齐 0 主题 / 1 左 / 2 两端
+    public var bodyWeight = 0
+    public var lineHeight: Double = 0
+    public var paragraphSpacing: Double = 0
+    public var contentWidth = -1
+    public var alignment = 0
     public init(codeLineNumbers: Bool = false, linkUnderline: Bool = false, largeFile: Bool = false,
                 bodyFontFamily: String = "", codeFontFamily: String = "", baseFontSize: Int = 0, headingNumbers: Bool = false) {
         self.codeLineNumbers = codeLineNumbers; self.linkUnderline = linkUnderline; self.largeFile = largeFile
@@ -40,6 +47,8 @@ public final class RenderStyle: @unchecked Sendable {
     public let codeSize: CGFloat
     public let lineHeight: CGFloat          // pt
     public let paragraphSpacing: CGFloat    // pt
+    /// 段落两端对齐（版式选项；只作用于正文段落与引用，不动列表 / 代码 / 标题）
+    public let justified: Bool
 
     // 字体
     public let bodyFont: NSFont
@@ -87,13 +96,20 @@ public final class RenderStyle: @unchecked Sendable {
         // 设置里的字体覆盖排在主题字体列表之前；找不到就自然落到主题的
         let bodyFamilies = options.bodyFontFamily.isEmpty ? t.bodyFont : [options.bodyFontFamily] + t.bodyFont
         let codeFamilies = options.codeFontFamily.isEmpty ? t.codeFont : [options.codeFontFamily] + t.codeFont
-        lineHeight = (baseSize * CGFloat(t.lineHeight)).rounded()
-        paragraphSpacing = (baseSize * CGFloat(t.paragraphSpacing)).rounded()
+        // 版式覆盖：显式值 > 主题
+        lineHeight = (baseSize * CGFloat(options.lineHeight > 0 ? options.lineHeight : t.lineHeight)).rounded()
+        paragraphSpacing = (baseSize * CGFloat(options.paragraphSpacing > 0 ? options.paragraphSpacing : t.paragraphSpacing)).rounded()
+        justified = options.alignment == 2
 
         let body = Self.resolveFont(families: bodyFamilies, size: baseSize, mono: false)
-        bodyFont = body
+        // 正文加重：只对有对应字重的字体生效（找不到就原样），不做合成描边
+        bodyFont = switch options.bodyWeight {
+        case 1: Self.weighted(body, weight: .medium, families: bodyFamilies)
+        case 2: Self.weighted(body, weight: .semibold, families: bodyFamilies)
+        default: body
+        }
         bodyBold = Self.variant(body, traits: .boldFontMask)
-        bodyItalic = Self.variant(body, traits: .italicFontMask)
+        bodyItalic = Self.variant(bodyFont, traits: .italicFontMask)
         bodyBoldItalic = Self.variant(Self.variant(body, traits: .boldFontMask), traits: .italicFontMask)
         let code = Self.resolveFont(families: codeFamilies, size: codeSize, mono: true)
         codeFont = code
@@ -127,7 +143,7 @@ public final class RenderStyle: @unchecked Sendable {
         syntaxColors = sc
 
         let l = theme.layout
-        maxContentWidth = CGFloat(l.maxContentWidth) * scale
+        maxContentWidth = (options.contentWidth >= 0 ? CGFloat(options.contentWidth) : CGFloat(l.maxContentWidth)) * scale
         horizontalPadding = CGFloat(l.horizontalPadding)
         verticalPadding = CGFloat(l.verticalPadding)
         codeBlockRadius = CGFloat(l.codeBlockRadius)

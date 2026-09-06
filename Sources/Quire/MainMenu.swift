@@ -126,6 +126,9 @@ enum MainMenu {
         let gsearch = view.addItem(withTitle: L("全局搜索…"), action: #selector(DocumentWindowController.showGlobalSearch(_:)), keyEquivalent: "F")
         gsearch.keyEquivalentModifierMask = [.command, .shift]
         view.addItem(.separator())
+        let layoutItem = view.addItem(withTitle: L("阅读版式…"), action: #selector(DocumentWindowController.showReadingLayout(_:)), keyEquivalent: "a")
+        layoutItem.keyEquivalentModifierMask = [.command, .option]
+        view.addItem(.separator())
         view.addItem(withTitle: L("阅读"), action: #selector(DocumentWindowController.setModeReader(_:)), keyEquivalent: "1")
         view.addItem(withTitle: L("编辑"), action: #selector(DocumentWindowController.setModeEditor(_:)), keyEquivalent: "2")
         view.addItem(withTitle: L("分栏"), action: #selector(DocumentWindowController.setModeSplit(_:)), keyEquivalent: "3")

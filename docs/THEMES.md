@@ -29,6 +29,8 @@
 
 外观模式：`亮 / 暗 / 跟随系统`。跟随系统时使用用户分别指定的亮色主题与暗色主题。
 
+**版式覆盖（0.8+）**：主题的 `typography`（字体、baseSize、lineHeight、paragraphSpacing）与 `layout.maxContentWidth` 是**默认值**；用户在工具栏「Aa」/ 设置 → 阅读版式 里设的显式值会覆盖它们（每项可单独"跟随主题"）。主题作者不需要为此改任何东西。
+
 ## 3. 文件格式
 
 ```jsonc

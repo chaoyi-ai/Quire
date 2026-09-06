@@ -193,6 +193,8 @@ public final class AttributedStringBuilder: @unchecked Sendable {
         let key = "p-\(ctx.indent)-\(ctx.quoteDepth)-\(ctx.listDepth)-\(hasMarker ? ctx.markerWidth : 0)-\(ctx.isLastInList ? 1 : 0)"
         let ps = paragraphStyle(key: key) { p in
             p.minimumLineHeight = style.lineHeight; p.maximumLineHeight = style.lineHeight
+            // 两端对齐只给正文段落与引用：列表项短、代码 / 标题不该拉伸。英文要配断词，否则词距忽大忽小比左对齐更难看
+            if style.justified, ctx.listDepth == 0 { p.alignment = .justified; p.hyphenationFactor = 0.9 }
             p.paragraphSpacing = ctx.listDepth > 0 && !ctx.isLastInList ? (style.paragraphSpacing * 0.25).rounded() : style.paragraphSpacing
             p.headIndent = ctx.indent
             p.firstLineHeadIndent = hasMarker ? ctx.indent - ctx.markerWidth : ctx.indent

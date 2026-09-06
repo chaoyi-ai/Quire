@@ -23,9 +23,11 @@ final class Preferences: ObservableObject {
         static let editorFontSize = "editor.fontSize"
         static let editorLineHeight = "editor.lineHeight"
         static let editorColumn = "editor.columnChars"
-        static let readerBodyFont = "reader.bodyFontFamily"
+        static let readerBodyFont = "reader.bodyFontFamily"    // 0.7 之前的三个键：首次启动迁移进 reader.layout
         static let readerCodeFont = "reader.codeFontFamily"
         static let readerFontSize = "reader.baseFontSize"
+        static let readerLayout = "reader.layout"
+        static let readerPresets = "reader.layoutPresets"
         static let math = "parser.math"
         static let toc = "parser.toc"
         static let transclusion = "parser.transclusion"
@@ -54,9 +56,19 @@ final class Preferences: ObservableObject {
     @Published var editorLineHeight: Double { didSet { d.set(editorLineHeight, forKey: Key.editorLineHeight); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var editorColumnChars: Int { didSet { d.set(editorColumnChars, forKey: Key.editorColumn); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
 
-    @Published var readerBodyFontFamily: String { didSet { d.set(readerBodyFontFamily, forKey: Key.readerBodyFont); ThemeManager.shared.refresh() } }
-    @Published var readerCodeFontFamily: String { didSet { d.set(readerCodeFontFamily, forKey: Key.readerCodeFont); ThemeManager.shared.refresh() } }
-    @Published var readerBaseFontSize: Int { didSet { d.set(readerBaseFontSize, forKey: Key.readerFontSize); ThemeManager.shared.refresh() } }
+    /// 阅读版式（与配色主题正交；每项可跟随主题）。变化 = 全量重建属性串，走主题切换同一条路径
+    @Published var readingLayout: ReadingLayout {
+        didSet {
+            guard readingLayout != oldValue else { return }
+            if let data = try? JSONEncoder().encode(readingLayout) { d.set(data, forKey: Key.readerLayout) }
+            ThemeManager.shared.refresh()
+            NotificationCenter.default.post(name: Self.didChange, object: nil)
+        }
+    }
+    /// 用户自存的版式预设（内置的在 ReadingLayoutPreset.builtIn）
+    @Published var layoutPresets: [ReadingLayoutPreset] {
+        didSet { if let data = try? JSONEncoder().encode(layoutPresets) { d.set(data, forKey: Key.readerPresets) } }
+    }
 
     @Published var mathEnabled: Bool { didSet { d.set(mathEnabled, forKey: Key.math); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
     @Published var tocEnabled: Bool { didSet { d.set(tocEnabled, forKey: Key.toc); NotificationCenter.default.post(name: Self.didChange, object: nil) } }
@@ -110,9 +122,17 @@ final class Preferences: ObservableObject {
         editorFontSize = d.integer(forKey: Key.editorFontSize)
         editorLineHeight = d.double(forKey: Key.editorLineHeight)
         editorColumnChars = d.integer(forKey: Key.editorColumn)
-        readerBodyFontFamily = d.string(forKey: Key.readerBodyFont) ?? ""
-        readerCodeFontFamily = d.string(forKey: Key.readerCodeFont) ?? ""
-        readerBaseFontSize = d.integer(forKey: Key.readerFontSize)
+        if let data = d.data(forKey: Key.readerLayout), let l = try? JSONDecoder().decode(ReadingLayout.self, from: data) {
+            readingLayout = l
+        } else {
+            // 迁移 0.7 之前的三个独立键
+            var l = ReadingLayout()
+            l.bodyFontFamily = d.string(forKey: Key.readerBodyFont) ?? ""
+            l.codeFontFamily = d.string(forKey: Key.readerCodeFont) ?? ""
+            l.fontSize = d.integer(forKey: Key.readerFontSize)
+            readingLayout = l
+        }
+        layoutPresets = (d.data(forKey: Key.readerPresets)).flatMap { try? JSONDecoder().decode([ReadingLayoutPreset].self, from: $0) } ?? []
         mathEnabled = d.bool(forKey: Key.math)
         tocEnabled = d.bool(forKey: Key.toc)
         transclusion = d.bool(forKey: Key.transclusion)
@@ -129,8 +149,7 @@ final class Preferences: ObservableObject {
     }
 
     var renderOptions: RenderOptions {
-        RenderOptions(codeLineNumbers: codeLineNumbers, linkUnderline: linkUnderline, largeFile: false,
-                      bodyFontFamily: readerBodyFontFamily, codeFontFamily: readerCodeFontFamily, baseFontSize: readerBaseFontSize, headingNumbers: headingNumbers)
+        RenderOptions(codeLineNumbers: codeLineNumbers, linkUnderline: linkUnderline, largeFile: false, headingNumbers: headingNumbers).applying(readingLayout)
     }
     var largeFileThresholdBytes: Int { largeFileThresholdMB * 1024 * 1024 }
 }
@@ -175,7 +194,7 @@ struct PreferencesView: View {
     @State private var cliInstalled = CLIInstaller.isInstalled
     private var allFamilies: [String] {
         var out = NSFontManager.shared.availableFontFamilies.filter { !$0.hasPrefix(".") }.sorted()
-        if !prefs.readerBodyFontFamily.isEmpty, !out.contains(prefs.readerBodyFontFamily) { out.insert(prefs.readerBodyFontFamily, at: 0) }
+        if !prefs.readingLayout.bodyFontFamily.isEmpty, !out.contains(prefs.readingLayout.bodyFontFamily) { out.insert(prefs.readingLayout.bodyFontFamily, at: 0) }
         return out
     }
     private var fontFamilies: [String] {
@@ -187,6 +206,11 @@ struct PreferencesView: View {
         out.sort()
         if !prefs.editorFontFamily.isEmpty, !out.contains(prefs.editorFontFamily) { out.insert(prefs.editorFontFamily, at: 0) }
         return out
+    }
+
+    /// 版式字段的绑定（一份数据：与工具栏 Aa 面板共用 Preferences.readingLayout）
+    private func layout<T>(_ kp: WritableKeyPath<ReadingLayout, T>) -> Binding<T> {
+        Binding(get: { prefs.readingLayout[keyPath: kp] }, set: { prefs.readingLayout[keyPath: kp] = $0 })
     }
 
     var body: some View {
@@ -244,19 +268,45 @@ struct PreferencesView: View {
                     }
                 }
             }
-            Section(L("阅读")) {
-                Picker(L("正文字体"), selection: $prefs.readerBodyFontFamily) {
+            Section(L("阅读版式")) {
+                Picker(L("正文字体"), selection: layout(\.bodyFontFamily)) {
                     Text(L("跟随主题")).tag("")
                     ForEach(allFamilies, id: \.self) { Text($0).tag($0) }
                 }
-                Picker(L("代码字体"), selection: $prefs.readerCodeFontFamily) {
+                Picker(L("代码字体"), selection: layout(\.codeFontFamily)) {
                     Text(L("跟随主题")).tag("")
                     ForEach(fontFamilies, id: \.self) { Text($0).tag($0) }
                 }
-                Picker(L("基础字号"), selection: $prefs.readerBaseFontSize) {
+                Picker(L("基础字号"), selection: layout(\.fontSize)) {
                     Text(L("跟随主题")).tag(0)
-                    ForEach([13, 14, 15, 16, 17, 18, 19, 20, 22, 24], id: \.self) { Text("\($0) pt").tag($0) }
+                    ForEach(ReadingLayout.fontSizes, id: \.self) { Text("\($0) pt").tag($0) }
                 }
+                Picker(L("正文粗细"), selection: layout(\.weight)) {
+                    Text(L("跟随主题")).tag(ReadingLayout.Weight.theme)
+                    Text(L("中")).tag(ReadingLayout.Weight.medium)
+                    Text(L("半粗")).tag(ReadingLayout.Weight.semibold)
+                }
+                Picker(L("行距"), selection: layout(\.lineHeight)) {
+                    Text(L("跟随主题")).tag(0.0)
+                    ForEach([1.3, 1.45, 1.6, 1.7, 1.85, 2.0], id: \.self) { Text(String(format: "%.2f", $0)).tag($0) }
+                }
+                Picker(L("段距"), selection: layout(\.paragraphSpacing)) {
+                    Text(L("跟随主题")).tag(0.0)
+                    ForEach([0.5, 0.75, 1.0, 1.25, 1.5], id: \.self) { Text(String(format: "%.2f em", $0)).tag($0) }
+                }
+                Picker(L("行宽"), selection: layout(\.contentWidth)) {
+                    Text(L("跟随主题")).tag(-1)
+                    Text(L("窄")).tag(620); Text(L("中")).tag(760); Text(L("宽")).tag(920)
+                    Text(L("不限")).tag(0)
+                }
+                Picker(L("对齐"), selection: layout(\.alignment)) {
+                    Text(L("跟随主题")).tag(ReadingLayout.Alignment.theme)
+                    Text(L("左对齐")).tag(ReadingLayout.Alignment.leading)
+                    Text(L("两端对齐")).tag(ReadingLayout.Alignment.justified)
+                }
+                Text(L("工具栏「Aa」可就地调整版式并存为预设")).font(.caption).foregroundStyle(.secondary)
+            }
+            Section(L("阅读")) {
                 Toggle(L("数学公式（$$…$$ 块与 $…$ 行内，LaTeX）"), isOn: $prefs.mathEnabled)
                 Toggle(L("[TOC] 展开为目录"), isOn: $prefs.tocEnabled)
                 Toggle(L("内容块：独占一行的 ![[文件]] 展开为该文件内容（.md / .csv / 图片）"), isOn: $prefs.transclusion)

@@ -722,6 +722,20 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         sidebarViewController.revealCurrent()
     }
 
+    /// 阅读版式面板（工具栏 Aa / 显示 → 阅读版式…）
+    private weak var layoutButton: NSButton?
+    private var layoutPopover: NSPopover?
+    @objc func showReadingLayout(_ sender: Any?) {
+        if let p = layoutPopover, p.isShown { p.close(); return }
+        let anchor = (sender as? NSView) ?? layoutButton ?? window?.contentView
+        guard let anchor else { return }
+        let p = NSPopover()
+        p.behavior = .transient
+        p.contentViewController = ReadingLayoutPanelController()
+        layoutPopover = p
+        p.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+    }
+
     /// 工具栏图标统一字号 / 字重（否则实心的外观图标比线条图标重一圈）
     private static func toolbarSymbol(_ name: String, _ label: String) -> NSImage {
         (NSImage(systemSymbolName: name, accessibilityDescription: label) ?? NSImage()).withSymbolConfiguration(.init(pointSize: 14, weight: .regular)) ?? NSImage()
@@ -734,10 +748,11 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         static let mode = NSToolbarItem.Identifier("mode")
         static let theme = NSToolbarItem.Identifier("theme")
         static let appearance = NSToolbarItem.Identifier("appearance")
+        static let layout = NSToolbarItem.Identifier("readingLayout")
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Item.sidebar, .sidebarTrackingSeparator, .flexibleSpace, Item.mode, .flexibleSpace, Item.appearance, Item.theme]
+        [Item.sidebar, .sidebarTrackingSeparator, .flexibleSpace, Item.mode, .flexibleSpace, Item.layout, Item.appearance, Item.theme]
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         toolbarDefaultItemIdentifiers(toolbar)
@@ -781,6 +796,17 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             let menu = MainMenu.buildThemeMenu()
             menu.delegate = MainMenu.Handler.shared
             item.menu = menu
+            return item
+        case Item.layout:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = L("版式"); item.toolTip = L("阅读版式：字体、字号、行距、行宽…")
+            // 用自己的按钮当视图：popover 需要一个锚点视图（纯图片的 NSToolbarItem 没有 view）
+            let button = NSButton(image: Self.toolbarSymbol("textformat.size", L("版式")), target: self, action: #selector(showReadingLayout(_:)))
+            button.isBordered = false
+            button.bezelStyle = .texturedRounded
+            button.setAccessibilityLabel(L("阅读版式"))
+            item.view = button
+            layoutButton = button
             return item
         case Item.appearance:
             let item = NSToolbarItem(itemIdentifier: id)
