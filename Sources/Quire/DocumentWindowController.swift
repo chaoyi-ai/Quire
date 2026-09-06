@@ -121,14 +121,19 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         }
         // 阅读视图滚动 → 侧栏高亮 + 编辑器同步
         readerViewController.onTopBlockChanged = { [weak self] index in
-            self?.syncEditorToReader(blockIndex: index)
+            guard let self else { return }
+            self.syncEditorToReader(blockIndex: index)
+            self.wordCount.update(chapter: self.readingTracker.topBlockChanged(index))
         }
         readerViewController.onSectionChanged = { [weak self] index in
             self?.sidebarViewController.highlight(blockIndex: index)
         }
         document.session.onOutline = { [weak self] outline in
-            self?.sidebarViewController.outline = outline
+            guard let self else { return }
+            self.sidebarViewController.outline = outline
+            self.refreshChapterProgress()
         }
+        wordCount.tracker = readingTracker
         // 字数：全文统计随解析更新；选区统计随选择变化
         document.session.onStats = { [weak self] st in self?.wordCount.update(stats: st) }
         wordCount.update(stats: document.session.stats)
@@ -152,7 +157,8 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             }
         }
         sidebarViewController.currentURL = document.fileURL
-        if !document.session.parsed.blocks.isEmpty { sidebarViewController.outline = document.session.parsed.outline }
+        // 小文档在打开时同步解析完了，onOutline 在这之前就已经发过：补一次
+        if !document.session.parsed.blocks.isEmpty { sidebarViewController.outline = document.session.parsed.outline; refreshChapterProgress() }
         // 存储为 / 首次存储后 URL 变化 → 侧栏跟随
         fileURLObserver = document.observe(\.fileURL, options: [.new]) { [weak self] doc, _ in
             Task { @MainActor [weak self] in
@@ -513,6 +519,16 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     @objc func setModeSplit(_ sender: Any?) { mode = .split }
     @objc func setModeHybrid(_ sender: Any?) { mode = .hybrid }
 
+    private let readingTracker = ReadingTracker()
+    /// 章节进度：换了块表就重算（源码没变时行起点表复用）。刚 setRendered 时视口还没排版，topVisibleBlockIndex 是 nil，下一轮再算
+    private func refreshChapterProgress() {
+        readingTracker.documentChanged(session.parsed, source: session.parsedSource)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let top = self.readerViewController.textView.topVisibleBlockIndex() ?? 0
+            self.wordCount.update(chapter: self.readingTracker.progress(at: top))
+        }
+    }
     private var hybridWired = false
     private let hybridSplicer = SourceLineSplicer()
     /// 混合模式的回写：击键只更新文档源码（不重渲染），离开块时重解析 + 按 diff 重渲染

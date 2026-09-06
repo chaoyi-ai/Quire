@@ -323,3 +323,14 @@
 "两端对齐" = "Justified";
 "全部跟随主题" = "Follow Theme for All";
 "工具栏「Aa」可就地调整版式并存为预设" = "The toolbar “Aa” button adjusts layout in place and saves presets";
+"本章剩余 %d 分钟" = "%d min left in chapter";
+"本章" = "Chapter";
+"（正文开头）" = "(before first heading)";
+"本章剩余" = "Left in chapter";
+"%@ 字 · 约 %d 分钟" = "%@ words · about %d min";
+"阅读速度" = "Reading speed";
+"实测约标称的 %.1f 倍（%d 个样本）" = "About %.1f× nominal (%d samples)";
+"尚未校准（按 400 字 / 200 词每分钟估算）" = "Not calibrated yet (400 CJK chars / 200 words per minute)";
+"全文" = "Document";
+"重置速度校准" = "Reset Speed Calibration";
+"胶囊显示" = "Capsule shows";
