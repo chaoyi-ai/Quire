@@ -27,6 +27,7 @@ final class ReadingLayoutPanelController: NSViewController {
         let grid = NSGridView(numberOfColumns: 2, rows: 0)
         grid.rowSpacing = 10; grid.columnSpacing = 12
         grid.column(at: 0).xPlacement = .trailing
+        grid.yPlacement = .center   // 标签与控件按行垂直居中（默认是顶对齐，滑杆 / 分段控件比标签高，标签会浮在上沿）
         grid.column(at: 1).width = 340
 
         func label(_ s: String) -> NSTextField { let t = NSTextField(labelWithString: s); t.textColor = .secondaryLabelColor; t.font = .systemFont(ofSize: 12); return t }
