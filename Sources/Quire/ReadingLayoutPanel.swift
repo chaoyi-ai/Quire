@@ -83,6 +83,9 @@ final class ReadingLayoutPanelController: NSViewController {
         }
     }
 
+    /// 弹出时别把焦点丢进第一个输入框（字号框会被选中、光标闪，像在等你打字）
+    override func viewDidAppear() { super.viewDidAppear(); view.window?.makeFirstResponder(nil) }
+
     deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
 
     // MARK: 显示

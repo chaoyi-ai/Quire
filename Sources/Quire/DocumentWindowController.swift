@@ -739,17 +739,20 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     }
 
     /// 阅读版式面板（工具栏 Aa / 显示 → 阅读版式…）
-    private weak var layoutButton: NSButton?
     private var layoutPopover: NSPopover?
     @objc func showReadingLayout(_ sender: Any?) {
         if let p = layoutPopover, p.isShown { p.close(); return }
-        let anchor = (sender as? NSView) ?? layoutButton ?? window?.contentView
-        guard let anchor else { return }
         let p = NSPopover()
         p.behavior = .transient
         p.contentViewController = ReadingLayoutPanelController()
         layoutPopover = p
-        p.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+        // 挂在工具栏项上（macOS 14 API）：系统负责定位在按钮正下方。以前自己塞一个 NSButton 当 item.view 再按 bounds 弹——
+        // 工具栏视图是翻转坐标，.minY 成了上沿，弹到窗口外面；且自定义视图在 macOS 26 的工具栏里第一次点击只是"激活"，不触发 action
+        if let item = window?.toolbar?.items.first(where: { $0.itemIdentifier == Item.layout }) {
+            p.show(relativeTo: item)
+        } else if let v = window?.contentView {
+            p.show(relativeTo: NSRect(x: v.bounds.maxX - 40, y: v.bounds.maxY - 8, width: 1, height: 1), of: v, preferredEdge: .maxY)
+        }
     }
 
     /// 工具栏图标统一字号 / 字重（否则实心的外观图标比线条图标重一圈）
@@ -816,13 +819,9 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         case Item.layout:
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = L("版式"); item.toolTip = L("阅读版式：字体、字号、行距、行宽…")
-            // 用自己的按钮当视图：popover 需要一个锚点视图（纯图片的 NSToolbarItem 没有 view）
-            let button = NSButton(image: Self.toolbarSymbol("textformat.size", L("版式")), target: self, action: #selector(showReadingLayout(_:)))
-            button.isBordered = false
-            button.bezelStyle = .texturedRounded
-            button.setAccessibilityLabel(L("阅读版式"))
-            item.view = button
-            layoutButton = button
+            item.image = Self.toolbarSymbol("textformat.size", L("版式"))
+            item.isBordered = false
+            item.target = self; item.action = #selector(showReadingLayout(_:))
             return item
         case Item.appearance:
             let item = NSToolbarItem(itemIdentifier: id)
