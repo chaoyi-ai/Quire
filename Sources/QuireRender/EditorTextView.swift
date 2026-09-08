@@ -452,13 +452,33 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
             if stateChanged || ns.substring(with: para).hasPrefix("---") {
                 para = NSRange(location: para.location, length: ns.length - para.location)
             }
-            let st = fenceState(before: para.location)
-            highlight(range: para, state: st)
-            if showsAuthorship { applyAuthorshipColors(in: para) }
+            // **不能在这里改属性**：这还在 NSTextStorage 的 processEditing 里，我们对整段做的属性编辑会并进 storage 的
+            // editedRange；随后 TextKit 2 `_fixSelectionAfterChangeInCharacterRange:changeInLength:` 按这个被撑大的
+            // 范围修正选区——光标在段尾时会被推到段落换行符之后，下一个字符就掉到下一行行首（"竖着往下长"）。
+            // 记下范围，等这轮编辑结束（didChangeText）再高亮；纯属性编辑单独成一轮，changeInLength 为 0，不动光标
+            if let prev = pendingHighlight {
+                let lo = min(prev.location, para.location), hi = max(NSMaxRange(prev), NSMaxRange(para))
+                para = ns.paragraphRange(for: NSRange(location: lo, length: min(hi, ns.length) - lo))
+            }
+            pendingHighlight = para
+            DispatchQueue.main.async { [weak self] in self?.flushPendingHighlight() }   // 兜底：不经 didChangeText 的程序化改动
         }
     }
 
+    /// 等待高亮的段落范围（见 willProcessEditing）
+    private var pendingHighlight: NSRange?
+    /// 把 willProcessEditing 里记下的段落高亮掉（在编辑结束之后，独立的一轮属性编辑）
+    public func flushPendingHighlight() {
+        guard let para = pendingHighlight, let ts = textStorage else { return }
+        pendingHighlight = nil
+        let ns = ts.string as NSString
+        guard NSMaxRange(para) <= ns.length else { return }
+        highlight(range: para, state: fenceState(before: para.location))
+        if showsAuthorship { applyAuthorshipColors(in: para) }
+    }
+
     public override func didChangeText() {
+        flushPendingHighlight()
         super.didChangeText()
         onTextChange?()
         updateFormatToolbar()
