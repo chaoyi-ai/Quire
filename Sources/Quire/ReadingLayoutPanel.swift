@@ -221,6 +221,8 @@ final class StepField: NSStackView, NSTextFieldDelegate {
     private let resetButton = NSButton()
     private let decimals: Int
     private let range: ClosedRange<Double>
+    /// 当前显示的值：结束编辑时值没变就不提交——否则面板一弹出、焦点从字号框移走就把"跟随主题"改成了显式值
+    private var shownValue: Double = 0
 
     init(min: Double, max: Double, step: Double, decimals: Int, unit: String) {
         self.decimals = decimals; range = min...max
@@ -249,6 +251,7 @@ final class StepField: NSStackView, NSTextFieldDelegate {
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
     func set(value: Double, followingTheme: Bool) {
+        shownValue = value
         field.doubleValue = value
         stepper.doubleValue = value
         field.textColor = followingTheme ? .secondaryLabelColor : .labelColor
@@ -263,6 +266,9 @@ final class StepField: NSStackView, NSTextFieldDelegate {
     }
     @objc private func stepped(_ s: NSStepper) { commit(s.doubleValue) }
     @objc private func fieldCommitted(_ f: NSTextField) { commit(f.doubleValue) }
-    func controlTextDidEndEditing(_ obj: Notification) { commit(field.doubleValue) }
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard abs(field.doubleValue - shownValue) > 0.0001 else { return }
+        commit(field.doubleValue)
+    }
     @objc private func reset(_ s: Any?) { onReset?() }
 }

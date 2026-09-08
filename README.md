@@ -13,9 +13,11 @@
 > A fast, lightweight, native macOS Markdown reader/editor. Multiple themes, syntax-highlighted code, GFM tables and Mermaid — rendered with AppKit/TextKit 2, no WebView for the document body.
 
 <p align="center">
-  <img src="docs/screenshots/reader-light.png" width="800" alt="Quire 阅读模式（GitHub Light）">
+  <img src="docs/screenshots/reader-light.png" width="800" alt="Quire 阅读模式（GitHub Light）：侧栏一棵树导航文件夹 → 文件 → 大纲">
   <br>
-  <img src="docs/screenshots/split-dark.png" width="800" alt="Quire 分栏编辑（One Dark）">
+  <img src="docs/screenshots/split-dark.png" width="800" alt="Quire 分栏编辑（One Dark）：源码编辑 + 同步滚动预览">
+  <br>
+  <img src="docs/screenshots/layout-panel.png" width="800" alt="Quire 阅读版式面板（Paper）：字体 / 字号 / 粗细 / 行距 / 段距 / 行宽 / 对齐，就地实时预览，可存预设">
 </p>
 
 ## 为什么又一个 Markdown 阅读器？
@@ -43,8 +45,9 @@ Quire 的第一功能是**快和省**，其他功能都在这个前提下做：
 - **代码高亮**：自研轻量词法器，30+ 语言，无 JS 运行时
 - **Mermaid**：唯一使用 WebKit 的地方——惰性、离屏、渲染完销毁、结果缓存
 - **多主题**：10 套内置（GitHub / Paper / Solarized / Nord / Dracula / One Dark / Gruvbox），JSON 自定义主题、热切换、跟随系统明暗；窗口铬（标题栏 / 侧栏 / 字数胶囊）颜色全部从主题背景推导，不用系统材质色
+- **阅读版式**（对标 Kindle）：版式与配色分层——正文 / 代码字体、字号、粗细、行距、段距、行宽、对齐每项可单独跟随主题或覆盖；工具栏「Aa」面板就地调、正文实时变；预设 紧凑 / 标准 / 舒适 / 大字 + 自定义命名预设；两端对齐配断词
 - **侧栏**：目录树 → Markdown 文件 → 文件内大纲，一棵树导航整个文件夹（Quire 的特色）；位置栏切换最近根目录，常驻筛选框（打字按名筛树、回车全文搜索），右键新建 / 重命名 / 废纸篓、拖拽移动，收藏与 `#标签` 分组；懒加载、FSEvents 监听、其他文件大纲快速扫描（不做完整解析）
-- **阅读器**：外部修改自动刷新（保持滚动位置）、缩放、查找、打印
+- **阅读器**：外部修改自动刷新（保持滚动位置）、缩放、查找、打印；字数胶囊可显示「本章剩余 N 分钟」，阅读时间按你的实际速度校准
 - **编辑器**：源码编辑 + Markdown 高亮、行号、当前行高亮、列表/围栏/引用续行、⌘B/I/K、⌃⇧` 行内代码、分栏同步滚动、大纲跟随光标、块级增量预览（击键 → 预览 1.1 ms）
 - **导出**：HTML（内联主题 CSS）、PDF（按块边界分页、书签、纸张 / 边距 / 页眉页脚可调）、PNG；pandoc 可选
 - **写作环境**：混合实时预览（⌘4，块级就地编辑）、专注 / 打字机 / 沉浸模式、悬挂标记、格式工具条、表格辅助、图片 / 富文本粘贴、字数统计
@@ -107,7 +110,7 @@ quire export README.md README.pdf
 | [docs/DESIGN.md](docs/DESIGN.md) | 架构、关键决策（ADR）、渲染管线、模块划分 |
 | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | 性能预算、原则、禁止事项、基准工具 |
 | [docs/THEMES.md](docs/THEMES.md) | 主题 JSON 规范、内置主题、自定义主题 |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | 里程碑 M0–M7 与任务拆分 |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | 里程碑 M0–M8 与任务拆分 |
 | [docs/research/](docs/research/) | 对标调研：Typora、iA Writer、侧栏设计、Kindle 阅读设置 |
 | [CHANGELOG.md](CHANGELOG.md) | 每个版本改了什么、为什么 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 构建、测试、提交约定 |
@@ -124,6 +127,7 @@ quire export README.md README.pdf
 | ✅ M5 1.0 准备 | 本地化、数学、可访问性、快速打开 / 全局搜索 / 字数 / 剪贴板、沉浸 / Focus、Homebrew cask、更新检查（公证待 Developer ID；Quick Look 扩展被 SwiftPM 打包阻塞） |
 | ✅ M6 混合实时预览与就地编辑 | 对标 Typora：spike 验证 → 行内实时预览、表格 / 图片 / 数学就地编辑、扩展语法、CLI（[调研](docs/research/typora.md)） |
 | ✅ M7 文本智能与组织 | 对标 iA Writer：词性高亮、文风检查、著作归属、Wikilinks / 标签、内容块、PDF 排版（[调研](docs/research/ia-writer.md)） |
+| ✅ M8 阅读体验 | 对标 Kindle：版式与配色分层、Aa 面板、版式预设、两端对齐、本章剩余 + 速度校准（[调研](docs/research/kindle.md)） |
 
 详见 [docs/ROADMAP.md](docs/ROADMAP.md) 与 [GitHub Milestones](https://github.com/chaoyi-ai/Quire/milestones)。
 
