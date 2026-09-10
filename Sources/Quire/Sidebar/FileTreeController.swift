@@ -91,6 +91,8 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
     private var quickLookURL: URL?
     private var lastActivation: (ObjectIdentifier, TimeInterval)?
     private var activeSearch: ContentSearch?
+    /// 上次发起搜索时索引还在扫（结果不全，扫完要重搜一次）
+    private var indexWasScanning = false
     private let searchQueue = DispatchQueue(label: "com.korako.quire.search", qos: .userInitiated)
     private let ioQueue = DispatchQueue(label: "com.korako.quire.sidebar.io", qos: .userInitiated)
     nonisolated private static let maxChildren = 5000
@@ -133,8 +135,12 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         }
         let index = FileIndex.index(for: root)   // 预热：打开文件夹时就开始后台扫（筛选 / 搜索 / wikilink 都用它）
         indexToken = index.observers.add { [weak self] in
-            guard let self, case .filter(let q) = self.mode else { return }
-            self.applyFilter(q)   // 索引扫完：筛选结果补全
+            guard let self else { return }
+            switch self.mode {
+            case .filter(let q): self.applyFilter(q)   // 索引扫完：筛选结果补全
+            case .search(let q): if self.indexWasScanning { self.search(q) }   // 刚打开文件夹就搜：索引没建好时搜的是空表，扫完重搜
+            case .tree: break
+            }
         }
         onStateChange?()
     }
@@ -464,6 +470,7 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         mode = .search(q)
         searchNotes = []
         let index = FileIndex.index(for: root)
+        indexWasScanning = index.isScanning
         let files = index.relativePaths.map { index.url(for: $0) }
         let results = SidebarNode(kind: .folder, url: root, name: "", parent: nil)
         results.children = []
@@ -495,7 +502,8 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.activeSearch === search, let results = self.displayRoot else { return }
                 var notes: [String] = []
-                if results.children?.isEmpty ?? true { notes.append(L("没有找到")) }
+                if self.indexWasScanning { notes.append(L("正在建立索引，扫完会自动重搜…")) }
+                else if results.children?.isEmpty ?? true { notes.append(L("没有找到")) }
                 let skipped = summary.skippedTooLarge + summary.skippedUnreadable
                 if skipped > 0 { notes.append(String(format: L("（%d 个文件过大或读不了，没有搜）"), skipped)) }
                 if truncatedIndex { notes.append(String(format: L("（文件超过 %d 个，只搜了前面的）"), FileIndex.maxFiles)) }
@@ -649,12 +657,16 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     func trash(_ node: SidebarNode) {
         guard let url = node.url, mode == .tree else { return }
-        if let doc = NSDocumentController.shared.document(for: url) {
-            if doc.isDocumentEdited {
-                let a = NSAlert(); a.messageText = String(format: L("「%@」有未存储的改动"), node.name); a.informativeText = L("先存储或关闭它，再移到废纸篓。"); a.runModal(); return
-            }
-            doc.close()
+        // 打开着的文档（文件本身，或文件夹里的）：有未存储改动就拦下，否则先关掉——不然它们的 fileURL 指着废纸篓
+        let path = url.standardizedFileURL.path
+        let open = NSDocumentController.shared.documents.filter { d in
+            guard let p = d.fileURL?.standardizedFileURL.path else { return false }
+            return p == path || p.hasPrefix(path + "/")
         }
+        if let dirty = open.first(where: { $0.isDocumentEdited }) {
+            let a = NSAlert(); a.messageText = String(format: L("「%@」有未存储的改动"), dirty.displayName); a.informativeText = L("先存储或关闭它，再移到废纸篓。"); a.runModal(); return
+        }
+        open.forEach { $0.close() }
         do { try FileManager.default.trashItem(at: url, resultingItemURL: nil) } catch { NSApp.presentError(error); return }
         Favorites.remove(url)
     }
@@ -788,8 +800,8 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         guard let root else { return nil }
         guard let n = item as? SidebarNode else { return (nil, root) }
         switch n.kind {
-        case .folder: return n.url.map { (n, $0) }
-        case .file: if let u = n.url { return (n.parent?.kind == .folder ? n.parent : nil, u.deletingLastPathComponent()) }; return nil
+        case .folder: return n.url.map { (n === rootNode ? nil : n, $0) }   // 根节点在 outline 里是 nil
+        case .file: if let u = n.url { let p = n.parent; return ((p?.kind == .folder && p !== rootNode) ? p : nil, u.deletingLastPathComponent()) }; return nil
         default: return nil
         }
     }

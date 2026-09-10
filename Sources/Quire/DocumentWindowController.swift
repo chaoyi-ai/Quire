@@ -143,6 +143,10 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
             nonisolated(unsafe) let obj = n.object
             MainActor.assumeIsolated {
                 guard let self, let tv = obj as? NSTextView, tv.window === self.window else { return }
+                // 只认正文的两个视图：侧栏筛选框、⌘P 面板的字段编辑器也是同一窗口里的 NSTextView，在里面选字不该变成"已选 N 字"
+                let isReader = tv === self.readerViewController.textView
+                let isEditor = self.hasEditorPane && tv === self.editorViewController.textView
+                guard isReader || isEditor else { return }
                 let r = tv.selectedRange()
                 if self.mode == .editor, self.hasEditorPane, tv === self.editorViewController.textView { self.followCaretInSidebar(location: r.location) }
                 guard r.length > 0, let s = tv.textStorage?.string as NSString? else { self.wordCount.update(selection: nil); return }
@@ -229,6 +233,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
         if let prefsObserver { NotificationCenter.default.removeObserver(prefsObserver) }
         if let selectionObserver { NotificationCenter.default.removeObserver(selectionObserver) }
+        if let sidebarResizeObserver { NotificationCenter.default.removeObserver(sidebarResizeObserver) }
     }
 
     /// 窗口自己的背景也用主题色：macOS 26 的侧栏是一块带圆角、向内缩进的浮板，浮板外面那圈（圆角外侧、左边和底部的缝）
@@ -240,7 +245,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
 
     // MARK: - 侧栏宽度（自己记：NSSplitView 的 autosave 在窗格折叠 / 展开时会把侧栏一起重新分配，每种启动模式宽度都不一样）
     private static let sidebarWidthKey = "sidebar.width"
-    private var sidebarResizeObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var sidebarResizeObserver: NSObjectProtocol?
     private func restoreSidebarWidth() {
         guard let sidebar = splitViewController.splitViewItems.first, !sidebar.isCollapsed else { return }
         let w = CGFloat(UserDefaults.standard.double(forKey: Self.sidebarWidthKey))
@@ -505,6 +510,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         modeControl?.selectedSegment = mode.rawValue
         // 字数胶囊跟着可见的窗格走（只编辑时阅读窗格折叠）
         (mode == .editor ? editorViewController : readerViewController).attachStatusOverlay(wordCount)
+        if mode == .editor { wordCount.update(chapter: nil) } else if old != nil { refreshChapterProgress() }
         updateModeIndicator()
         // 混合模式：阅读视图可点击进入源码态
         let hybrid = readerViewController.textView as? HybridTextView

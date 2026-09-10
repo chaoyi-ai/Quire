@@ -71,7 +71,14 @@ enum Favorites {
     static func remove(_ u: URL) { if contains(u) { urls.removeAll { $0.standardizedFileURL == u.standardizedFileURL } } }
     /// 文件改名 / 移动后收藏跟着走
     static func replace(_ old: URL, with new: URL) {
-        guard contains(old) else { return }
-        urls = urls.map { $0.standardizedFileURL == old.standardizedFileURL ? new : $0 }
+        let oldPath = old.standardizedFileURL.path
+        var changed = false
+        let mapped = urls.map { u -> URL in
+            let p = u.standardizedFileURL.path
+            if p == oldPath { changed = true; return new }
+            if p.hasPrefix(oldPath + "/") { changed = true; return new.appendingPathComponent(String(p.dropFirst(oldPath.count + 1))) }   // 文件夹移动：里面的收藏跟着走
+            return u
+        }
+        if changed { urls = mapped }
     }
 }
