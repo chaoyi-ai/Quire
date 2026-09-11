@@ -507,8 +507,7 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
 
     public override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
-        needsDisplay = true   // 当前行高亮：鼠标点选走的是这条（不是 setSelectedRange），不标脏就不会重画
-        enclosingScrollView?.verticalRulerView?.needsDisplay = true
+        invalidateCurrentLine()   // setSelectedRange(_:affinity:stillSelecting:) 也走到这里，只在这一处标脏
         if !stillSelecting { updateFormatToolbar() } else { formatToolbar?.isHidden = true }
         guard focusMode != .off, !stillSelecting else { return }
         applyFocusDim()
@@ -581,12 +580,12 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
 
     public override func resignFirstResponder() -> Bool {
         formatToolbar?.isHidden = true
-        needsDisplay = true   // 当前行高亮只在有焦点时画
+        if let r = lastCurrentLineRect { setNeedsDisplay(r.insetBy(dx: 0, dy: -2)) } else { needsDisplay = true }   // 当前行高亮只在有焦点时画
         return super.resignFirstResponder()
     }
 
     public override func becomeFirstResponder() -> Bool {
-        needsDisplay = true
+        invalidateCurrentLine()
         return super.becomeFirstResponder()
     }
 
@@ -644,10 +643,18 @@ public final class EditorTextView: NSTextView, NSTextStorageDelegate {
         f.intersection(rect).fill()
     }
 
-    public override func setSelectedRange(_ charRange: NSRange, affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
-        super.setSelectedRange(charRange, affinity: affinity, stillSelecting: stillSelectingFlag)
-        needsDisplay = true
-        enclosingScrollView?.verticalRulerView?.needsDisplay = true
+    /// 上次画了当前行高亮的矩形（视图坐标）：选区变化时只重画它和新位置这两条，不整视图重画
+    /// （拖选 / 按住方向键时每次选区变化都整视图重画，1 MB 文档一屏要 3–5 ms；行号栏同样只刷这两行）
+    private var lastCurrentLineRect: NSRect?
+    private func invalidateCurrentLine() {
+        let new = currentLineRect()
+        let ruler = enclosingScrollView?.verticalRulerView
+        for r in [lastCurrentLineRect, new].compactMap({ $0 }) {
+            let dirty = r.insetBy(dx: 0, dy: -2)
+            setNeedsDisplay(dirty)
+            if let ruler { ruler.setNeedsDisplay(ruler.convert(dirty, from: self).insetBy(dx: -ruler.bounds.width, dy: 0)) }
+        }
+        lastCurrentLineRect = new
     }
 
     // MARK: - 行号

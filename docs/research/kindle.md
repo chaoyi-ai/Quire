@@ -1,17 +1,17 @@
 # 调研：Kindle 的阅读视图设置，Quire 能吸收什么
 
-> 2026-09-06。对象：Kindle 电子书阅读器（固件 5.12.4+ 的 Aa 菜单）、Kindle iOS / iPadOS App、Kindle for Web。A
-B> 结论先说：Kindle 最值得学的不是某个滑杆，而是**把"版式"从"配色"里拆出来、就地调、可存成预设**这三件事。
-C>
-D> **实施状态（2026-09-08）**：§3.1–3.6 已在 0.8.0–0.8.4 全部落地（ROADMAP M8，ADR-15）。与提案的差别：数值项用「输入框 + 步进器」而不是滑杆（桌面上滑杆难精确、也不能直接打数字）；行宽用 窄 / 中 / 宽 / 不限 四档 pt 值而不是字符数；Aa 面板挂在工具栏项上由系统定位（`NSPopover.show(relativeTo: NSToolbarItem)`）。§3.7 翻页模式仍在长期想法。
-E
-F## 1. Kindle 有什么
-G
-H### 1.1 设备端 Aa 菜单（Paperwhite / Oasis / Basic，固件 5.12.4+）
-I
-J一个面板四个页签，所有调整**在正文上实时预览**（面板只占屏幕下半，上半就是书）。
-K
-L| 页签 | 项 | 取值 |
+> 2026-09-06。对象：Kindle 电子书阅读器（固件 5.12.4+ 的 Aa 菜单）、Kindle iOS / iPadOS App、Kindle for Web。
+> 结论先说：Kindle 最值得学的不是某个滑杆，而是**把"版式"从"配色"里拆出来、就地调、可存成预设**这三件事。
+>
+> **实施状态（2026-09-08）**：§3.1–3.6 已在 0.8.0–0.8.4 全部落地（ROADMAP M8，ADR-15）。与提案的差别：数值项用「输入框 + 步进器」而不是滑杆（桌面上滑杆难精确、也不能直接打数字）；行宽用 窄 / 中 / 宽 / 不限 四档 pt 值而不是字符数；Aa 面板挂在工具栏项上由系统定位（`NSPopover.show(relativeTo: NSToolbarItem)`）。§3.7 翻页模式仍在长期想法。
+
+## 1. Kindle 有什么
+
+### 1.1 设备端 Aa 菜单（Paperwhite / Oasis / Basic，固件 5.12.4+）
+
+一个面板四个页签，所有调整**在正文上实时预览**（面板只占屏幕下半，上半就是书）。
+
+| 页签 | 项 | 取值 |
 |---|---|---|
 | 字体 | 字体族 | Bookerly、Amazon Ember、Baskerville、Caecilia、Caecilia Condensed、Futura、Helvetica、OpenDyslexic、Palatino + 用户侧载字体（OTF/TTF 放进 `fonts/` 目录） |
 | | 粗细 | 5 级（对任何字体做"合成加粗"，不是只切 Bold 字重） |
@@ -141,8 +141,4 @@ Kindle 对任何字体做 5 级合成加粗，是为 e-ink 低对比度设计的
 - [Kindle app for iPad lets you finally create your own themes — Ebook Friendly](https://ebookfriendly.com/kindle-app-ipad-custom-themes/)
 - [How to customize reading options in Kindle for iPhone and iPad — iMore](https://www.imore.com/how-customize-reading-options-kindle-app-ios)
 - [Do You Like the New Themes Option on Your Kindle? — The eBook Reader](https://blog.the-ebook-reader.com/2019/01/22/do-you-like-the-new-themes-option-on-your-kindle/)
-- [5 Hidden Kindle Features — SlashGear](https://www.slashgear.com/2020365/hidden-kindle-features-you-probably-do-not-know-about/
-
-<!-- quire-authorship v1 hash=b15183db84db1aac
-{"authors":[{"color":"#3B82F6","id":"me","name":"我"},{"color":"#F59E0B","id":"paste","name":"粘贴"},{"color":"#A855F7","id":"ai","name":"AI"},{"color":"#22C55E","id":"quote","name":"引用"}],"spans":[["me",122,1],["me",124,1],["me",187,1],["me",190,1],["me",422,1],["me",424,1],["me",442,1],["me",444,1],["me",502,1],["me",504,1],["me",548,1],["me",550,1]]}
--->
+- [5 Hidden Kindle Features — SlashGear](https://www.slashgear.com/2020365/hidden-kindle-features-you-probably-do-not-know-about/)
