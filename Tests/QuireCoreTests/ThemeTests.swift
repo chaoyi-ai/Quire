@@ -15,7 +15,7 @@ final class ThemeTests: XCTestCase {
         let cat = ThemeStore.loadBuiltIn()
         XCTAssertTrue(cat.errors.isEmpty, "内置主题加载错误：\(cat.errors)")
         let ids = Set(cat.themes.map(\.id))
-        XCTAssertEqual(ids, ["github-light", "github-dark", "paper", "solarized-light", "solarized-dark", "nord", "dracula", "one-dark", "gruvbox-light", "gruvbox-dark"])
+        XCTAssertEqual(ids, ["github-light", "github-dark", "paper", "solarized-light", "solarized-dark", "nord", "dracula", "one-dark", "gruvbox-light", "gruvbox-dark", "claude-light", "claude-dark"])
         // extends 生效：paper 继承 github-light 的 layout，但覆盖了 background 与字体
         let paper = cat.theme(id: "paper")!
         XCTAssertEqual(paper.layout.maxContentWidth, 760)
@@ -29,8 +29,8 @@ final class ThemeTests: XCTestCase {
                 XCTAssertNotNil(t.colors.syntax[k], "\(t.id) 缺少 syntax.\(k.rawValue)")
             }
         }
-        XCTAssertEqual(cat.themes(for: .dark).count, 6)
-        XCTAssertEqual(cat.themes(for: .light).count, 4)
+        XCTAssertEqual(cat.themes(for: .dark).count, 7)
+        XCTAssertEqual(cat.themes(for: .light).count, 5)
     }
 
     func testValidationErrors() throws {
@@ -75,5 +75,33 @@ final class ThemeTests: XCTestCase {
         XCTAssertEqual(cat.theme(id: "nord")?.colors.accent.hexString, "#123456")
         XCTAssertEqual(cat.errors.count, 1)
         XCTAssertTrue(cat.errors[0].path.hasSuffix("broken.json"))
+    }
+}
+
+/// 成对主题（跟随系统在一对之间切）
+final class ThemePairTests: XCTestCase {
+    func testCounterpartBothDirectionsAndNotInherited() {
+        let cat = ThemeStore.loadBuiltIn()
+        let light = cat.theme(id: "github-light")!, dark = cat.theme(id: "github-dark")!
+        XCTAssertEqual(light.pair, "github-dark")
+        XCTAssertNil(dark.pair, "只需单向声明")
+        XCTAssertEqual(cat.counterpart(of: light)?.id, "github-dark")
+        XCTAssertEqual(cat.counterpart(of: dark)?.id, "github-light", "反向也认")
+        // paper extends github-light：不继承搭档关系
+        let paper = cat.theme(id: "paper")!
+        XCTAssertNil(paper.pair)
+        XCTAssertNil(cat.counterpart(of: paper))
+        // 没有搭档的
+        XCTAssertNil(cat.counterpart(of: cat.theme(id: "nord")!))
+        XCTAssertEqual(cat.counterpart(of: cat.theme(id: "claude-light")!)?.id, "claude-dark")
+        XCTAssertEqual(cat.counterpart(of: cat.theme(id: "claude-dark")!)?.id, "claude-light")
+    }
+
+    func testPairMustBeOppositeAppearance() throws {
+        var loader = ThemeLoader(available: Dictionary(uniqueKeysWithValues: ThemeStore.loadBuiltIn().themes.map { ($0.id, $0) }))
+        loader.defaults = [.light: "github-light", .dark: "github-dark"]
+        let t = try loader.load(data: Data(#"{"schema":1,"id":"x-light","name":"X","appearance":"light","pair":"paper"}"#.utf8))
+        let cat = ThemeCatalog(themes: ThemeStore.loadBuiltIn().themes + [t], errors: [])
+        XCTAssertNil(cat.counterpart(of: t), "同外观的 pair 无效")
     }
 }

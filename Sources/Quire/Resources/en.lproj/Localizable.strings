@@ -336,3 +336,4 @@
 "胶囊显示" = "Capsule shows";
 "恢复为跟随主题" = "Back to theme value";
 "正在建立索引，扫完会自动重搜…" = "Indexing… will search again when done";
+"与「%@」成对：跟随系统时在两者之间切换" = "Paired with “%@”: Follow System switches between the two";

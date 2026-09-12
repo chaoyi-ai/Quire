@@ -13,6 +13,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     let sidebarViewController: SidebarViewController
     private var fileURLObserver: NSKeyValueObservation?
     private let splitViewController = NSSplitViewController()
+    private let themedSplitView = ThemedSplitView()
     /// 正文区：编辑器 + 阅读视图放在一个经典 NSSplitView 里（不用 NSSplitViewController：那套用约束握着窗格宽度，
     /// setPosition 不生效、给窗格加宽度约束会把窗口撑大，每种启动模式分出来的宽度都不一样）。折叠 = 隐藏子视图
     private let contentSplit = NSSplitView()
@@ -50,12 +51,19 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         // 注意：不要在这里 self.document = document —— NSDocument.addWindowController 会因"已关联"而跳过登记
         window.delegate = self
 
-        // 侧栏 + 编辑器 + 阅读
-        let sidebar = NSSplitViewItem(sidebarWithViewController: sidebarViewController)
+        // 侧栏 + 编辑器 + 阅读。
+        // 侧栏是普通 split item（不是 sidebarWithViewController:）：macOS 26 给 .sidebar 行为的项套一层"浮板"——向内缩 8 pt、
+        // 圆角、玻璃描边、投影，浮板外那圈露窗口背景；我们自己按主题铺色，浮板的每一层都成了要对齐的缝（0.6.3–0.6.9 反复修的就是它），
+        // 而 macOS 27 又把侧栏改回贴边。普通项：贴窗口左缘、全高（在透明标题栏下面）、1 pt 主题色分隔线，各版本一致（ADR-17）
+        themedSplitView.isVertical = true   // 自己给的 split view 控制器不再替我们配置：方向、分隔线样式都要自己设
+        themedSplitView.dividerStyle = .thin
+        splitViewController.splitView = themedSplitView   // 要在 splitView 被读到之前换成自己的子类（分隔线颜色跟主题）
+        let sidebar = NSSplitViewItem(viewController: sidebarViewController)
         sidebar.minimumThickness = 180
         sidebar.maximumThickness = 420
         sidebar.holdingPriority = NSLayoutConstraint.Priority(300)   // 窗口 / 窗格宽度变化都落在正文窗格上，侧栏保持自己的宽度
         sidebar.canCollapse = true
+        sidebar.allowsFullHeightLayout = true
         sidebar.isCollapsed = UserDefaults.standard.bool(forKey: "sidebar.collapsed")
         contentSplit.isVertical = true
         contentSplit.dividerStyle = .thin
@@ -241,6 +249,16 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     nonisolated(unsafe) private var themeObserver: NSObjectProtocol?
     private func applyWindowBackground() {
         window?.backgroundColor = ThemeManager.shared.currentStyle.background
+        themedSplitView.dividerTint = ThemeManager.shared.currentStyle.border
+        themedSplitView.needsDisplay = true
+    }
+
+    /// 侧栏折叠 / 展开（普通 split item 不能用 NSSplitViewController.toggleSidebar，那只认 .sidebar 行为的项）
+    var isSidebarCollapsed: Bool { splitViewController.splitViewItems.first?.isCollapsed ?? false }
+    func setSidebarCollapsed(_ collapsed: Bool, animated: Bool = true) {
+        guard let item = splitViewController.splitViewItems.first, item.isCollapsed != collapsed else { return }
+        if animated, window?.isVisible == true { item.animator().isCollapsed = collapsed } else { item.isCollapsed = collapsed }
+        if !collapsed { DispatchQueue.main.async { [weak self] in self?.restoreSidebarWidth() } }
     }
 
     // MARK: - 侧栏宽度（自己记：NSSplitView 的 autosave 在窗格折叠 / 展开时会把侧栏一起重新分配，每种启动模式宽度都不一样）
@@ -345,7 +363,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
                                         rulers: editorAdded ? editorViewController.scrollView.rulersVisible : Preferences.shared.editorLineNumbers,
                                         wordCountHidden: wordCount.isHidden, enteredFullScreen: !wasFull, hidTabBar: tabBarVisible)
         mode = .editor
-        if !sidebarCollapsed { splitViewController.toggleSidebar(nil) }
+        if !sidebarCollapsed { setSidebarCollapsed(true, animated: false) }
         window.toolbar?.isVisible = false
         if tabBarVisible { window.toggleTabBar(nil) }
         editorViewController.scrollView.rulersVisible = false
@@ -367,7 +385,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         wordCount.isHidden = saved.wordCountHidden
         window.toolbar?.isVisible = saved.toolbarVisible
         if saved.hidTabBar, window.tabGroup?.isTabBarVisible == false { window.toggleTabBar(nil) }
-        if !saved.sidebarCollapsed, splitViewController.splitViewItems.first?.isCollapsed == true { splitViewController.toggleSidebar(nil) }
+        if !saved.sidebarCollapsed, isSidebarCollapsed { setSidebarCollapsed(false, animated: false) }
         mode = saved.mode
         if restoreFullScreen, saved.enteredFullScreen, window.styleMask.contains(.fullScreen) { window.toggleFullScreen(nil) }
     }
@@ -603,8 +621,9 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     // MARK: - 动作
 
     @objc func toggleSidebar(_ sender: Any?) {
-        splitViewController.toggleSidebar(sender)
-        UserDefaults.standard.set(splitViewController.splitViewItems.first?.isCollapsed ?? false, forKey: "sidebar.collapsed")
+        let collapsed = !isSidebarCollapsed
+        setSidebarCollapsed(collapsed)
+        UserDefaults.standard.set(collapsed, forKey: "sidebar.collapsed")
     }
 
     @objc func chooseSidebarFolder(_ sender: Any?) {
@@ -777,7 +796,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Item.sidebar, .sidebarTrackingSeparator, .flexibleSpace, Item.mode, .flexibleSpace, Item.layout, Item.appearance, Item.theme]
+        [Item.sidebar, .flexibleSpace, Item.mode, .flexibleSpace, Item.layout, Item.appearance, Item.theme]   // 侧栏是普通 split item，sidebarTrackingSeparator 没有可跟踪的对象
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         toolbarDefaultItemIdentifiers(toolbar)
@@ -850,4 +869,12 @@ extension DocumentWindowController {
     func splitView(_ splitView: NSSplitView, shouldHideDividerAt dividerIndex: Int) -> Bool {
         splitView.arrangedSubviews.contains { $0.isHidden }   // 单栏时不画分隔线
     }
+}
+
+/// 外层三栏的 split view：分隔线颜色跟主题的 border 走（系统的 separatorColor 在深色主题里是一条发白的线）
+final class ThemedSplitView: NSSplitView {
+    var dividerTint: NSColor = .separatorColor
+    override var dividerColor: NSColor { dividerTint }
+    // macOS 26 的 .thin 分隔线不走 dividerColor（画的是系统材质色，深色主题里几乎看不见）：自己填
+    override func drawDivider(in rect: NSRect) { dividerTint.setFill(); rect.fill() }
 }

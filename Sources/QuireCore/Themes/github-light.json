@@ -3,6 +3,7 @@
   "id": "github-light",
   "name": "GitHub Light",
   "appearance": "light",
+  "pair": "github-dark",
   "author": "Quire",
   "colors": {
     "background": "#ffffff",

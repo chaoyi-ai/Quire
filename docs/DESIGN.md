@@ -49,6 +49,7 @@
 | ADR-12 | **不经 swift-markdown，直接遍历 cmark-gfm 节点** | swift-markdown Swift AST | 见 ADR-2：少一层 AST 拷贝，解析 3× 提速，且拿到 footnotes；类型判断对扩展节点（table / strikethrough / tasklist）用 `cmark_node_get_type_string` |
 | ADR-15 | **数学用 SwiftMath（iosMath 的 Swift 移植）原生绘制，不用 MathJax/KaTeX + WebView** | WebView 跑 MathJax；自绘 KaTeX 子集 | 运行时依赖从"只有 cmark-gfm"变为 + SwiftMath（MIT，纯 Swift，CoreText + OpenType MATH 表）。spike 数据：0.29 ms / 式、首次 11 ms、+9 MB / 200 式；只打包 Latin Modern 一套字体（0.7 MB）。`$$` 块在喂 cmark 前改写成 ```math 围栏，避免块内 `=` 被当 setext 标题；无 `$$` 的文档不做这一步 |
 | ADR-15 | **阅读版式与配色主题分层** | 把字体 / 行距 / 行宽都塞进主题 JSON（0.7 之前）；每个字段一个偏好项 | Kindle 的模型：配色（白 / 黑 / 褐）与版式（字体、字号、行距、边距、对齐）正交，版式可存预设。Quire 的主题 JSON 仍是版式默认值的来源（主题作者不受影响），`ReadingLayout` 作为一层覆盖叠在 `RenderOptions` 上，`RenderStyle` 合成时显式值 > 主题；变更走主题切换同一条全量重建路径（1 MB ≈ 120 ms，滑杆去抖 70 ms）。只影响阅读视图，编辑器有独立设置 |
+| ADR-17 | **侧栏是普通 `NSSplitViewItem`，不用 `sidebarWithViewController:`** | 系统侧栏项（macOS 26 的浮板玻璃：内缩 8 pt、圆角、描边、投影）；SwiftUI `.inspector`（KITT 的做法，贴边玻璃） | 我们自己按主题铺侧栏与正文的颜色，系统浮板的每一层（浮板外圈露窗口背景、玻璃描边、投影、被切断的标题栏带）都成了要对齐的缝，0.6.3–0.6.9 反复修的全是它；macOS 27 又把侧栏改回贴边。普通项：贴窗口左缘、全高（`allowsFullHeightLayout`，在透明标题栏下面）、自己画的 1 pt 主题 border 色分隔线，26 / 27 一致。代价：`NSSplitViewController.toggleSidebar` 与工具栏 `sidebarTrackingSeparator` 不再适用（折叠自己做 `setSidebarCollapsed`，用 `animator().isCollapsed`），没有系统的窄窗自动折叠。0.9.0 |
 | ADR-16 | **编辑器的属性编辑不放在 `NSTextStorage` 的 processEditing 期间** | 在 `willProcessEditing` / `didProcessEditing` 里直接改高亮属性（TextKit 1 时代的惯例） | TextKit 2 在 `endEditing` 时按 storage 累计的 editedRange（字符 + 属性编辑的并集）修正选区：整段属性重铺会把段尾光标推到换行符之后，每敲一个字掉一行。规则：processEditing 期间只**记录**要重铺的范围，`didChangeText`（或下一轮 run loop 兜底）再做，纯属性编辑单独成一轮、changeInLength 为 0 才不动光标。0.8.6 修，`EditorCaretTests` 守着 |
 | ADR-14 | **编辑器"淡化 / 高亮当前句"不用 TextKit 2 渲染属性，用置顶透明子视图画** | `setRenderingAttributes` / 临时属性 | 实测：NSTextView 在视口布局时用自己的临时属性覆盖 `setRenderingAttributes`；`removeRenderingAttribute` 对子范围是空操作；TextKit 2 把片段画在子 layer，view 自己 `draw(_:)` 的内容在其下面。透明子视图（zPosition 置顶、hitTest 返回 nil）按 `enumerateTextSegments` 的行段奇偶裁剪盖半透明背景色，精确到句子中段、不改 textStorage、零布局开销 |
 | ADR-13 | **TextKit 2 三条硬规矩**：① 整体换内容先清空再 `setAttributedString`；② 视口外片段位置只信 `enumerateTextLayoutFragments(from:options:.ensuresLayout)`，滚动到远处后必须"设视口 → 布局视口 → 重算"收敛；③ 不对整份 textStorage 做属性枚举，附件位置由渲染阶段按块标记 | 直接换内容 / `textLayoutFragment(for:)` / 全文 `enumerateAttribute` | 实测 1 MB：已有布局时直接 `setAttributedString` 4.3 s（TextKit 2 逐段落对账旧元素），清空后再设 10 ms；`textLayoutFragment(for: location)` 对未布局位置返回错误片段（估算几何可互相重叠），主题切换后恢复位置会落到文首；全文 `enumerateAttribute(.attachment)` 13 万 run 要 100 ms/次，原先每次 setRendered / 增量替换 / 改宽都做一遍。见 `ReaderTextView.setRendered / scroll(toBlock:) / forEachLoadableAttachment` |
@@ -261,8 +262,8 @@ enum Block: Hashable {
 
 | 部件 | 颜色 | 说明 |
 |---|---|---|
-| 窗口背景（`window.backgroundColor`） | = 主题 `background` | 透明标题栏 / 工具栏区、侧栏浮板外那圈圆角缝露出的都是它 |
-| 侧栏浮板 | 主题背景 深色提亮 6% / 浅色压暗 3%，**不透明** | 盖在 `.sidebar` 材质上（材质只借圆角，不借颜色；透窗会把后面的亮窗透进来） |
+| 窗口背景（`window.backgroundColor`） | = 主题 `background` | 透明标题栏 / 工具栏区透出来的就是它 |
+| 侧栏 | 主题背景 深色提亮 6% / 浅色压暗 3%，**不透明**；贴窗口左缘、全高 | 普通 split item（ADR-17），与正文之间是 1 pt 主题 `border` 色分隔线（`ThemedSplitView.drawDivider`） |
 | 标题栏 / 工具栏 | 透明（`titlebarAppearsTransparent`，无分隔线） | 所以看到的就是窗口背景；图标按钮不带底座，只保留模式分段控件的胶囊 |
 | 字数胶囊 | 主题背景 深色提亮 8% / 浅色压暗 4%，alpha 0.9 | 在 `effectiveAppearance` 下解 cgColor |
 | 正文 | 从安全区之下开始 | 铬坐在实心主题色上，正文不钻到铬底下 |

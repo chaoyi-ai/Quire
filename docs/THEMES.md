@@ -26,8 +26,12 @@
 | `one-dark` | One Dark | dark |
 | `gruvbox-light` | Gruvbox Light | light |
 | `gruvbox-dark` | Gruvbox Dark | dark |
+| `claude-light` | Claude Light（Anthropic 品牌配色：象牙底、陶土色强调、暖灰；衬线正文） | light |
+| `claude-dark` | Claude Dark | dark |
 
 外观模式：`亮 / 暗 / 跟随系统`。跟随系统时使用用户分别指定的亮色主题与暗色主题。
+
+**成对主题（0.9+）**：主题可声明 `"pair": "<另一外观的主题 id>"`（单向即可，两个方向都认）。在菜单里选中成对主题中的任何一个，另一外观的槽位也会换成它的搭档——于是"跟随系统"就在这一对之间切换（GitHub Light ↔ Dark、Solarized、Gruvbox、Claude 都成对）。`extends` 不继承 `pair`。
 
 **版式覆盖（0.8+）**：主题的 `typography`（字体、baseSize、lineHeight、paragraphSpacing）与 `layout.maxContentWidth` 是**默认值**；用户在工具栏「Aa」/ 设置 → 阅读版式 里设的显式值会覆盖它们（每项可单独"跟随主题"）。主题作者不需要为此改任何东西。
 
@@ -41,6 +45,7 @@
   "appearance": "light",             // 必填，"light" | "dark"
   "author": "Quire",                 // 可选
   "extends": "github-light",         // 可选：继承另一主题，未声明字段沿用父主题（仅一层）
+  "pair": "github-dark",             // 可选：成对的另一外观主题（见上）
 
   "colors": {
     "background": "#ffffff",

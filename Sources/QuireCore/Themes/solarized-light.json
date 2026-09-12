@@ -3,6 +3,7 @@
   "id": "solarized-light",
   "name": "Solarized Light",
   "appearance": "light",
+  "pair": "solarized-dark",
   "author": "Quire",
   "extends": "github-light",
   "colors": {

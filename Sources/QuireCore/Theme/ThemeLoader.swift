@@ -56,6 +56,7 @@ public struct ThemeLoader: Sendable {
         base.removeValue(forKey: "extends")
         base.removeValue(forKey: "sourcePath")
         base.removeValue(forKey: "extendsID")
+        base.removeValue(forKey: "pair")   // 搭档关系不继承：paper extends github-light 不等于 paper 和 github-dark 成对
 
         let extendsID = dict["extends"] as? String
         dict.removeValue(forKey: "extends")

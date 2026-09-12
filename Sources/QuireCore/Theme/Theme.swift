@@ -124,6 +124,9 @@ public struct Theme: Hashable, Sendable, Codable, Identifiable {
     public var sourcePath: String?
     /// 若由 `extends` 派生，记录父主题 id（用于禁止多层继承）
     public var extendsID: String?
+    /// 成对的另一外观主题 id（Claude Light ↔ Claude Dark）：选中其中一个时，另一个外观槽位也换成它的搭档，
+    /// "跟随系统"就在这一对之间切。单向声明即可（`ThemeCatalog.counterpart(of:)` 两个方向都认）
+    public var pair: String?
 
     public var isDark: Bool { appearance == .dark }
 }

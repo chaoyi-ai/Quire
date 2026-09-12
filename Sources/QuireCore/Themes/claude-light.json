@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "id": "claude-light",
+  "name": "Claude Light",
+  "appearance": "light",
+  "author": "Quire",
+  "pair": "claude-dark",
+  "extends": "github-light",
+  "colors": {
+    "background": "#faf9f5",
+    "foreground": "#141413",
+    "muted": "#6d6b67",
+    "accent": "#b14a28",
+    "heading": "#141413",
+    "border": "#e8e6dc",
+    "selection": "#d9775740",
+    "blockquote": {
+      "foreground": "#52514e",
+      "border": "#d97757",
+      "background": "#f5f0e880"
+    },
+    "code": {
+      "background": "#f0eee6",
+      "foreground": "#141413",
+      "inlineBackground": "#ebe8de",
+      "inlineForeground": "#8e2626",
+      "border": "#00000000",
+      "lineNumber": "#b0aea5"
+    },
+    "table": {
+      "headerBackground": "#f0eee6",
+      "stripe": "#f5f3ed",
+      "border": "#d1cfc5",
+      "hover": "#d9775714"
+    },
+    "syntax": {
+      "keyword": "#b14a28",
+      "string": "#5b6d3f",
+      "comment": "#6d6b67",
+      "number": "#8a5a0c",
+      "type": "#065f49",
+      "function": "#184f95",
+      "variable": "#141413",
+      "constant": "#862a4c",
+      "operator": "#52514e",
+      "punctuation": "#6d6b67",
+      "attribute": "#734500",
+      "tag": "#b14a28",
+      "meta": "#4a3aa7",
+      "regexp": "#1a7563",
+      "escape": "#862a4c",
+      "invalid": "#8e2626"
+    },
+    "editor": {
+      "currentLine": "#d9775712",
+      "gutter": "#b0aea5",
+      "markdownMarker": "#b0aea5",
+      "markdownHeading": "#b14a28",
+      "markdownLink": "#184f95",
+      "markdownCode": "#5b6d3f"
+    }
+  },
+  "typography": {
+    "bodyFont": [
+      "Charter",
+      "Georgia",
+      "system-serif"
+    ],
+    "baseSize": 16,
+    "lineHeight": 1.65,
+    "paragraphSpacing": 1.0,
+    "headingWeight": "medium"
+  },
+  "mermaid": {
+    "theme": "neutral"
+  }
+}

@@ -3,6 +3,7 @@
   "id": "gruvbox-light",
   "name": "Gruvbox Light",
   "appearance": "light",
+  "pair": "gruvbox-dark",
   "author": "Quire",
   "extends": "github-light",
   "colors": {

@@ -7,6 +7,11 @@ public struct ThemeCatalog: Sendable {
 
     public func theme(id: String) -> Theme? { themes.first { $0.id == id } }
     public func themes(for appearance: Appearance) -> [Theme] { themes.filter { $0.appearance == appearance } }
+    /// 成对的另一外观主题：自己声明的 `pair`，或别的主题把自己声明为 `pair`；必须是相反外观、且存在
+    public func counterpart(of theme: Theme) -> Theme? {
+        if let p = theme.pair, let t = self.theme(id: p), t.appearance != theme.appearance { return t }
+        return themes.first { $0.pair == theme.id && $0.appearance != theme.appearance }
+    }
     public var byID: [String: Theme] { Dictionary(themes.map { ($0.id, $0) }, uniquingKeysWith: { _, b in b }) }
     public static let empty = ThemeCatalog(themes: [], errors: [])
 }

@@ -1,0 +1,76 @@
+{
+  "schema": 1,
+  "id": "claude-dark",
+  "name": "Claude Dark",
+  "appearance": "dark",
+  "author": "Quire",
+  "extends": "github-dark",
+  "colors": {
+    "background": "#141413",
+    "foreground": "#f0efec",
+    "muted": "#97958d",
+    "accent": "#d97757",
+    "heading": "#f9f9f7",
+    "border": "#2c2c2a",
+    "selection": "#d977574d",
+    "blockquote": {
+      "foreground": "#c3c2b7",
+      "border": "#d97757",
+      "background": "#1a1a1980"
+    },
+    "code": {
+      "background": "#20201f",
+      "foreground": "#f0efec",
+      "inlineBackground": "#2c2c2a",
+      "inlineForeground": "#f4abab",
+      "border": "#00000000",
+      "lineNumber": "#6b6a63"
+    },
+    "table": {
+      "headerBackground": "#1e1e1d",
+      "stripe": "#181817",
+      "border": "#383835",
+      "hover": "#d977571f"
+    },
+    "syntax": {
+      "keyword": "#d97757",
+      "string": "#a3b88a",
+      "comment": "#97958d",
+      "number": "#e0a458",
+      "type": "#7fc3ae",
+      "function": "#6a9bcc",
+      "variable": "#f0efec",
+      "constant": "#e87ba4",
+      "operator": "#c3c2b7",
+      "punctuation": "#a5a49a",
+      "attribute": "#e0a458",
+      "tag": "#d97757",
+      "meta": "#a096eb",
+      "regexp": "#3bbd8c",
+      "escape": "#e87ba4",
+      "invalid": "#ec7e7e"
+    },
+    "editor": {
+      "currentLine": "#d9775714",
+      "gutter": "#6b6a63",
+      "markdownMarker": "#6b6a63",
+      "markdownHeading": "#d97757",
+      "markdownLink": "#6a9bcc",
+      "markdownCode": "#a3b88a"
+    }
+  },
+  "typography": {
+    "bodyFont": [
+      "Charter",
+      "Georgia",
+      "system-serif"
+    ],
+    "baseSize": 16,
+    "lineHeight": 1.65,
+    "paragraphSpacing": 1.0,
+    "headingWeight": "medium"
+  },
+  "mermaid": {
+    "theme": "dark"
+  }
+}

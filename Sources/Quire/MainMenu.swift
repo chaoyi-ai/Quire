@@ -211,6 +211,7 @@ enum MainMenu {
                 it.target = Handler.shared
                 it.state = t.id == current ? .on : .off
                 it.indentationLevel = 1
+                if let mate = tm.catalog.counterpart(of: t) { it.toolTip = String(format: L("与「%@」成对：跟随系统时在两者之间切换"), mate.name) }
                 if t.sourcePath?.contains("Application Support") == true { it.toolTip = t.sourcePath }
             }
         }

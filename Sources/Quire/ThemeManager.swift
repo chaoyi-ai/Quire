@@ -67,10 +67,14 @@ final class ThemeManager {
         }
     }
 
-    /// 选择主题：按主题外观写入对应槽位；若模式与主题外观不符则切换模式
+    /// 选择主题：按主题外观写入对应槽位；成对主题（Claude Light ↔ Dark）把另一槽位也换成搭档，"跟随系统"就在这一对之间切；
+    /// 若模式与主题外观不符则切换模式
     func select(themeID: String) {
         guard let t = catalog.theme(id: themeID) else { return }
         if t.appearance == .dark { defaults.set(themeID, forKey: Key.darkTheme) } else { defaults.set(themeID, forKey: Key.lightTheme) }
+        if let mate = catalog.counterpart(of: t) {
+            defaults.set(mate.id, forKey: mate.appearance == .dark ? Key.darkTheme : Key.lightTheme)
+        }
         // 选了与当前外观相反的主题：切换外观模式，让它立即生效
         if effectiveAppearance != t.appearance {
             defaults.set((t.appearance == .dark ? AppearanceMode.dark : .light).rawValue, forKey: Key.mode)
