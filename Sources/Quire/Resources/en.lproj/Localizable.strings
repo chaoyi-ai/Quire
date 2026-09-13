@@ -337,6 +337,8 @@
 "恢复为跟随主题" = "Back to theme value";
 "正在建立索引，扫完会自动重搜…" = "Indexing… will search again when done";
 "与「%@」成对：跟随系统时在两者之间切换" = "Paired with “%@”: Follow System switches between the two";
+"关闭标签页" = "Close Tab";
+"关闭窗口" = "Close Window";
 "新建标签页" = "New Tab";
 "下一个标签页" = "Next Tab";
 "上一个标签页" = "Previous Tab";

@@ -49,7 +49,7 @@
 | ADR-12 | **不经 swift-markdown，直接遍历 cmark-gfm 节点** | swift-markdown Swift AST | 见 ADR-2：少一层 AST 拷贝，解析 3× 提速，且拿到 footnotes；类型判断对扩展节点（table / strikethrough / tasklist）用 `cmark_node_get_type_string` |
 | ADR-15 | **数学用 SwiftMath（iosMath 的 Swift 移植）原生绘制，不用 MathJax/KaTeX + WebView** | WebView 跑 MathJax；自绘 KaTeX 子集 | 运行时依赖从"只有 cmark-gfm"变为 + SwiftMath（MIT，纯 Swift，CoreText + OpenType MATH 表）。spike 数据：0.29 ms / 式、首次 11 ms、+9 MB / 200 式；只打包 Latin Modern 一套字体（0.7 MB）。`$$` 块在喂 cmark 前改写成 ```math 围栏，避免块内 `=` 被当 setext 标题；无 `$$` 的文档不做这一步 |
 | ADR-15 | **阅读版式与配色主题分层** | 把字体 / 行距 / 行宽都塞进主题 JSON（0.7 之前）；每个字段一个偏好项 | Kindle 的模型：配色（白 / 黑 / 褐）与版式（字体、字号、行距、边距、对齐）正交，版式可存预设。Quire 的主题 JSON 仍是版式默认值的来源（主题作者不受影响），`ReadingLayout` 作为一层覆盖叠在 `RenderOptions` 上，`RenderStyle` 合成时显式值 > 主题；变更走主题切换同一条全量重建路径（1 MB ≈ 120 ms，滑杆去抖 70 ms）。只影响阅读视图，编辑器有独立设置 |
-| ADR-18 | **标签页自己做（`TabGroups`），不用系统标签组** | `NSWindow.tabbingMode = .preferred` 的系统标签栏 | 系统标签栏是一条改不了颜色的系统件（macOS 26 的胶囊样式，半透明灰带），多标签时还不允许隐藏（`toggleTabBar` 无效、菜单灰），自绘标签条替换它的路走不通。现在：一组文档窗口共用一个框，同一时刻只显示选中的那个（其余 `orderOut`），标签条是主题铬色画的标题栏附件（选中标签与正文同色 + 2 pt accent 顶线）。每个文档仍是独立 NSDocument / 窗口，关闭询问、脏标记、窗口菜单都照旧；⌘⇧] / ⌘⇧[ 切换、拖动排序、中键关闭、「移到新窗口 / 合并所有窗口」在窗口菜单。不做拖出去成窗口。0.9.2 |
+| ADR-18 | **一个窗口 = 一个工作区，文档是正文列里的标签；所有标签共用一个 `WorkspaceWindowController`** | 一份文档一个窗口 + 系统标签组（≤ 0.9.1）；自己的窗口组（0.9.2：多个窗口共用一个框、只显示选中的）| 系统标签栏是改不了颜色、多标签时藏不掉、还横跨侧栏的系统件；0.9.2 的窗口组保住了颜色但标签条仍在标题栏里横跨侧栏，侧栏一点文件就 fork 新窗口，因为模型仍是"一文档一窗"。现在按 Nova / Xcode 的结构（docs/research/window-chrome.md）：侧栏 = 工作区目录、正文列 = 标签条 + 窗格、工具栏左段与侧栏同宽（`NSTrackingSeparatorToolbarItem` 跟外层分栏）；`document` 随当前标签换挂（关闭询问、脏标记、标题都走当前标签）；文档控制器按"文件在 key 工作区根内"决定进标签还是开新窗；侧栏单击 = 临时标签（斜体，下次单击替换，编辑 / 双击固定）；状态恢复按工作区自己存（`WorkspaceState`），窗口 `isRestorable = false`。0.10.0 |
 | ADR-17 | **侧栏是普通 `NSSplitViewItem`，不用 `sidebarWithViewController:`** | 系统侧栏项（macOS 26 的浮板玻璃：内缩 8 pt、圆角、描边、投影）；SwiftUI `.inspector`（KITT 的做法，贴边玻璃） | 我们自己按主题铺侧栏与正文的颜色，系统浮板的每一层（浮板外圈露窗口背景、玻璃描边、投影、被切断的标题栏带）都成了要对齐的缝，0.6.3–0.6.9 反复修的全是它；macOS 27 又把侧栏改回贴边。普通项：贴窗口左缘、全高（`allowsFullHeightLayout`，在透明标题栏下面）、自己画的 1 pt 主题 border 色分隔线，26 / 27 一致。代价：`NSSplitViewController.toggleSidebar` 与工具栏 `sidebarTrackingSeparator` 不再适用（折叠自己做 `setSidebarCollapsed`，用 `animator().isCollapsed`），没有系统的窄窗自动折叠。0.9.0 |
 | ADR-16 | **编辑器的属性编辑不放在 `NSTextStorage` 的 processEditing 期间** | 在 `willProcessEditing` / `didProcessEditing` 里直接改高亮属性（TextKit 1 时代的惯例） | TextKit 2 在 `endEditing` 时按 storage 累计的 editedRange（字符 + 属性编辑的并集）修正选区：整段属性重铺会把段尾光标推到换行符之后，每敲一个字掉一行。规则：processEditing 期间只**记录**要重铺的范围，`didChangeText`（或下一轮 run loop 兜底）再做，纯属性编辑单独成一轮、changeInLength 为 0 才不动光标。0.8.6 修，`EditorCaretTests` 守着 |
 | ADR-14 | **编辑器"淡化 / 高亮当前句"不用 TextKit 2 渲染属性，用置顶透明子视图画** | `setRenderingAttributes` / 临时属性 | 实测：NSTextView 在视口布局时用自己的临时属性覆盖 `setRenderingAttributes`；`removeRenderingAttribute` 对子范围是空操作；TextKit 2 把片段画在子 layer，view 自己 `draw(_:)` 的内容在其下面。透明子视图（zPosition 置顶、hitTest 返回 nil）按 `enumerateTextSegments` 的行段奇偶裁剪盖半透明背景色，精确到句子中段、不改 textStorage、零布局开销 |
@@ -261,18 +261,18 @@ enum Block: Hashable {
 
 **一切铬色都从主题背景推导，不用任何系统材质色。** 这样切主题时铬和正文永远同步，不会出现灰带、硬缝或"侧栏压标题"。
 
-**铬是一整块（0.9.1–0.9.2）**：工具栏行、标签条、侧栏用同一个"抬高一级"的色调（`ChromeColors.elevated`：浅 9.5% 黑 / 深 8% 白，sRGB 线性合成），正文是主题背景色。标签条自己画（ADR-18），铬里再没有系统件；侧栏的铬色从安全区之下开始；工具栏行由 `ChromeBandView` 铺色（标题栏透明，本来透出的是正文色）。
+**铬两种颜色，四条布局规则（0.10.0，docs/research/window-chrome.md §3）**：工具栏行、侧栏、标签条是同一个"抬高一级"的色调（`ChromeColors.elevated`：浅 9.5% 黑 / 深 8% 白，sRGB 线性合成），正文（含选中的标签）是主题背景色。铬里没有任何系统件：窗口不用 `fullSizeContentView`，标题栏透明、`window.backgroundColor` 就是铬色，所以工具栏行天然是铬色，不用再垫一块；侧栏从工具栏行之下开始；标签条在正文列顶部（`ContentColumnView`），永远不会盖到侧栏。
 
 | 部件 | 颜色 | 说明 |
 |---|---|---|
-| 窗口背景（`window.backgroundColor`） | = 主题 `background` | 透明标题栏 / 工具栏区透出来的就是它 |
-| 侧栏 | `ChromeColors.elevated(背景)`，**不透明**；贴窗口左缘，铬色从安全区之下开始（标题栏 / 标签栏底下是主题背景色） | 普通 split item（ADR-17），与正文之间是 1 pt 主题 `border` 色分隔线（`ThemedSplitView.drawDivider`） |
-| 工具栏行 + 标签条 | `ChromeColors.elevated(背景)`（`ChromeBandView` 铺整个标题栏；标签条 `TabStripView` 自己画同色底，选中标签 = 主题背景 + 2 pt accent 顶线） | 标题栏透明；标签页是自己的（ADR-18） |
-| 标题栏 | 透明（`titlebarAppearsTransparent`，无分隔线） | 图标按钮不带底座，只保留模式分段控件的胶囊 |
+| 窗口背景（`window.backgroundColor`） | `ChromeColors.elevated(背景)` | 透明标题栏透出来的就是它 = 工具栏行 |
+| 侧栏 | `ChromeColors.elevated(背景)`，**不透明** | 普通 split item（ADR-17），工具栏行之下、全高；与正文之间是 1 pt 主题 `border` 色分隔线（`ThemedSplitView.drawDivider`） |
+| 标签条（`TabStripView`） | 底 = `elevated(背景)`；选中标签 = 主题背景 + 2 pt accent 顶线；临时标签斜体 | 只在正文列；底边 1 pt `border` 线在选中标签处断开 |
+| 工具栏 | 左段（侧栏钮）与侧栏同宽（`NSTrackingSeparatorToolbarItem` 跟外层分栏第 0 条分隔线）；右段：模式分段控件居中，版式 / 外观 / 主题靠右；标题隐藏（标签就是标题） | 图标按钮不带底座 |
 | 字数胶囊 | 主题背景 深色提亮 8% / 浅色压暗 4%，alpha 0.9 | 在 `effectiveAppearance` 下解 cgColor |
-| 正文 | 从安全区之下开始 | 铬坐在实心主题色上，正文不钻到铬底下 |
+| 正文 | 主题背景 | 从标签条之下开始 |
 
-时序约束：窗口背景与观察者在 `DocumentWindowController.init` 里就位（状态恢复 / 合并标签出来的窗口不一定走 `showWindow`）；`ThemeManager` 对 `NSApp.effectiveAppearance` 的响应必须**同步**刷新——系统自动切深浅色时窗口先按新外观重画，主题晚一帧就闪旧色。
+时序约束：窗口背景与观察者在 `WorkspaceWindowController.init` 里就位；`ThemeManager` 对 `NSApp.effectiveAppearance` 的响应必须**同步**刷新——系统自动切深浅色时窗口先按新外观重画，主题晚一帧就闪旧色。
 
 ## 9. 文件监控与重载
 

@@ -285,7 +285,7 @@ enum LinkOpener {
     static func open(_ target: String, from base: URL?, in vc: ReaderViewController) -> Bool {
         if WikiLink.isWikiLink(target) {
             let name = (WikiLink.target(target).removingPercentEncoding ?? WikiLink.target(target))
-            guard let wc = vc.view.window?.windowController as? DocumentWindowController else { return false }
+            guard let wc = vc.view.window?.windowController as? WorkspaceWindowController else { return false }
             return wc.openWikiLink(name)
         }
         if target.hasPrefix("#") {

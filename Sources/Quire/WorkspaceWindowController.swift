@@ -2,61 +2,78 @@ import AppKit
 import QuireCore
 import QuireRender
 
-/// 文档窗口：侧栏（目录）| 编辑器 | 阅读视图，三态（阅读 / 编辑 / 分栏），滚动同步。
+/// 工作区窗口（docs/research/window-chrome.md §3）：一个窗口 = 一个工作区（侧栏根目录）；文档是正文列里的标签。
+/// 结构：工具栏行（全宽铬色）／ 侧栏（工具栏行之下、全高）| 正文列（标签条 + 编辑器 | 阅读视图）。
+/// 侧栏选中项 == 当前标签；单击侧栏文件开临时标签（斜体、下次单击替换），双击 / 编辑后固定。
+/// 所有文档共用这一个 NSWindowController：`document` 随当前标签换挂（关闭询问、脏标记、标题都跟着当前标签走）。
 @MainActor
-final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSWindowDelegate, NSMenuItemValidation, NSSplitViewDelegate {
+final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NSWindowDelegate, NSMenuItemValidation, NSSplitViewDelegate {
     enum Mode: Int { case reader = 0, editor = 1, split = 2, hybrid = 3 }   // hybrid = 混合实时预览（实验，spike #85）
 
-    let readerViewController: ReaderViewController
-    /// 编辑器按需创建（阅读模式启动时不构建，省启动时间）
-    private(set) lazy var editorViewController: EditorViewController = makeEditor()
+    /// 标签（顺序 = 标签条顺序）；工作区至少一个标签，最后一个关掉 = 关窗口
+    private(set) var tabs: [DocumentTab] = []
+    private(set) var current: DocumentTab!
     let sidebarViewController: SidebarViewController
-    private var fileURLObserver: NSKeyValueObservation?
     private let splitViewController = NSSplitViewController()
     private let themedSplitView = ThemedSplitView()
-    private let chromeBand = ChromeBandView()
-    private let tabStrip = TabStripController()
     /// 正文区：编辑器 + 阅读视图放在一个经典 NSSplitView 里（不用 NSSplitViewController：那套用约束握着窗格宽度，
     /// setPosition 不生效、给窗格加宽度约束会把窗口撑大，每种启动模式分出来的宽度都不一样）。折叠 = 隐藏子视图
-    private let contentSplit = NSSplitView()
+    private let contentSplit = ThemedSplitView()
+    private let contentColumn: ContentColumnView
+    private var tabStrip: TabStripView { contentColumn.strip }
     private let paneHost = NSViewController()
-    private var editorAdded = false
-    let session: DocumentSession
     private var modeControl: NSSegmentedControl?
     private let wordCount = WordCountView(frame: .zero)
     nonisolated(unsafe) private var selectionObserver: NSObjectProtocol?
     nonisolated(unsafe) private var prefsObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var themeObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var editedObserver: NSObjectProtocol?
     private var isSyncingScroll = false
 
-    var markdownDocument: MarkdownDocument? { document as? MarkdownDocument }
+    // 当前标签的快捷访问（旧代码都按"一个窗口一份文档"写，这几个名字保住它们）
+    var markdownDocument: MarkdownDocument? { current?.document }
+    var session: DocumentSession { current.session }
+    var readerViewController: ReaderViewController { current.reader }
+    /// 当前标签的编辑器（按需创建；是否已插进分栏看 `hasEditorPane`）
+    var editorViewController: EditorViewController { ensureEditor(current) }
+    private var editorAdded: Bool { current.editorAdded }
+    var rootURL: URL? { sidebarViewController.rootURL }
 
-    private(set) var mode: Mode = .reader {
-        didSet { applyMode(from: oldValue); UserDefaults.standard.set(mode.rawValue, forKey: "view.mode") }
+    var mode: Mode {
+        get { current?.mode ?? (Mode(rawValue: UserDefaults.standard.integer(forKey: "view.mode")) ?? .reader) }   // 工具栏在第一个标签之前就建
+        set { let old = current.mode; current.mode = newValue; applyMode(from: old); UserDefaults.standard.set(newValue.rawValue, forKey: "view.mode") }
     }
 
-    init(document: MarkdownDocument) {
-        session = document.session
-        readerViewController = ReaderViewController(session: document.session)
+    /// 所有工作区窗口（前后顺序）
+    static var all: [WorkspaceWindowController] {
+        NSApp.orderedWindows.compactMap { $0.windowController as? WorkspaceWindowController }
+    }
+    /// 当前（key / main）工作区
+    static var key: WorkspaceWindowController? {
+        (NSApp.keyWindow?.windowController as? WorkspaceWindowController) ?? (NSApp.mainWindow?.windowController as? WorkspaceWindowController) ?? all.first
+    }
+
+    init(document: MarkdownDocument, root: URL?, ephemeral: Bool = false) {
         sidebarViewController = SidebarViewController()
+        contentColumn = ContentColumnView(split: contentSplit)
         LaunchClock.mark("  wc: view controllers")
 
+        // 不用 fullSizeContentView：内容视图从工具栏行之下开始，侧栏自然从工具栏行之下开始（规则 3）；
+        // 标题栏透明，透出的是 window.backgroundColor —— 设成铬色，工具栏行就是铬色，不用再垫一块
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 800),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
         window.minSize = NSSize(width: 520, height: 320)
-        window.tabbingMode = .disallowed   // 标签页自己做（TabGroups），不用系统标签组
+        window.tabbingMode = .disallowed   // 标签页是自己的（正文列里的标签条），不用系统标签组
         window.isReleasedWhenClosed = false
+        window.isRestorable = false        // 状态恢复按工作区自己做（WorkspaceState），不让系统按文档一份一窗地恢复
+        window.titleVisibility = .hidden   // 标题就是选中的标签
         super.init(window: window)
         LaunchClock.mark("  wc: window")
-        session.transclusionRoot = { [weak self] in self?.sidebarViewController.rootURL }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.noteAuthorshipMismatchIfNeeded() }
-        // 注意：不要在这里 self.document = document —— NSDocument.addWindowController 会因"已关联"而跳过登记
         window.delegate = self
 
-        // 侧栏 + 编辑器 + 阅读。
-        // 侧栏是普通 split item（不是 sidebarWithViewController:）：macOS 26 给 .sidebar 行为的项套一层"浮板"——向内缩 8 pt、
-        // 圆角、玻璃描边、投影，浮板外那圈露窗口背景；我们自己按主题铺色，浮板的每一层都成了要对齐的缝（0.6.3–0.6.9 反复修的就是它），
-        // 而 macOS 27 又把侧栏改回贴边。普通项：贴窗口左缘、全高（在透明标题栏下面）、1 pt 主题色分隔线，各版本一致（ADR-17）
+        // 侧栏 | 正文列。侧栏是普通 split item（不是 sidebarWithViewController:）：macOS 26 给 .sidebar 行为的项套一层"浮板"——
+        // 向内缩 8 pt、圆角、玻璃描边、投影；我们自己按主题铺色，浮板的每一层都成了要对齐的缝（ADR-17）
         themedSplitView.isVertical = true   // 自己给的 split view 控制器不再替我们配置：方向、分隔线样式都要自己设
         themedSplitView.dividerStyle = .thin
         splitViewController.splitView = themedSplitView   // 要在 splitView 被读到之前换成自己的子类（分隔线颜色跟主题）
@@ -65,24 +82,18 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         sidebar.maximumThickness = 420
         sidebar.holdingPriority = NSLayoutConstraint.Priority(300)   // 窗口 / 窗格宽度变化都落在正文窗格上，侧栏保持自己的宽度
         sidebar.canCollapse = true
-        sidebar.allowsFullHeightLayout = true
         sidebar.isCollapsed = UserDefaults.standard.bool(forKey: "sidebar.collapsed")
         contentSplit.isVertical = true
         contentSplit.dividerStyle = .thin
         contentSplit.delegate = self
-        paneHost.view = contentSplit
-        paneHost.addChild(readerViewController)
-        readerViewController.view.autoresizingMask = [.width, .height]
-        contentSplit.addArrangedSubview(readerViewController.view)
+        paneHost.view = contentColumn
         let contentItem = NSSplitViewItem(viewController: paneHost)
         contentItem.minimumThickness = 280
         splitViewController.addSplitViewItem(sidebar)
         splitViewController.addSplitViewItem(contentItem)
         // 不用 NSSplitView 的 autosave：它会把某个模式下（有窗格折叠着）的三栏宽度原样复原到别的模式，每次启动都不一样；
         // 侧栏宽度自己记（sidebar.width），双栏在 showWindow / 切模式时按等宽分
-        splitViewController.splitView.dividerStyle = .thin
         window.contentViewController = splitViewController   // 注意：这会按子视图初始 frame 改窗口大小
-        // 恢复上次窗口位置/大小；没有则用默认尺寸并居中
         if !window.setFrameUsingName("QuireDocumentWindow") {
             window.setContentSize(NSSize(width: 1240, height: 800))
             window.center()
@@ -90,33 +101,41 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         window.setFrameAutosaveName("QuireDocumentWindow")
         LaunchClock.mark("  wc: split view")
 
-        // 工具栏
+        // 工具栏：左段（侧栏钮）与侧栏同宽——NSTrackingSeparatorToolbarItem 跟着外层分栏的分隔线走（规则 1）
         let toolbar = NSToolbar(identifier: "QuireToolbar")
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false
         window.toolbar = toolbar
         window.toolbarStyle = .unified
-        // 标题栏透明、不画分隔线：工具栏直接浮在正文上（macOS 26 的做法）。否则标题栏是一条比正文亮的材质带，
-        // 在侧栏浮板的右缘被硬生生切断，看起来像侧栏压着标题栏
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
-        window.addTitlebarAccessoryViewController(tabStrip)
-        // 工具栏行的铬色底（见 ChromeBandView）
-        chromeBand.wantsLayer = true
-        chromeBand.autoresizingMask = [.width, .minYMargin]
-        window.contentView?.addSubview(chromeBand, positioned: .above, relativeTo: nil)
-        layoutChromeBand()
-        observeChromeLayout()
-        // 窗口底色 = 主题背景（标题栏 / 工具栏区透出来的就是它），主题一变就跟。放在这里而不是 showWindow：
-        // 状态恢复 / 标签页合并出来的窗口不一定走 showWindow，那样窗口会一直是系统灰，切主题也不跟
         applyWindowBackground()
         themeObserver = NotificationCenter.default.addObserver(forName: ThemeManager.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.applyWindowBackground() }
         }
         LaunchClock.mark("  wc: toolbar")
 
-        // 侧栏：标题 → 跳转（阅读视图 + 编辑器）；文件 → 打开
+        // 标签条
+        tabStrip.onSelect = { [weak self] i in if let t = self?.tabs[safe: i] { self?.select(t) } }
+        tabStrip.onClose = { [weak self] i in if let t = self?.tabs[safe: i] { self?.closeTab(t) } }
+        tabStrip.onPin = { [weak self] i in if let t = self?.tabs[safe: i] { self?.pin(t) } }
+        tabStrip.onMove = { [weak self] from, to in self?.moveTab(from: from, to: to) }
+        tabStrip.onNew = { [weak self] in
+            self?.window?.makeKeyAndOrderFront(nil)
+            NSDocumentController.shared.newDocument(nil)
+        }
+        editedObserver = NotificationCenter.default.addObserver(forName: MarkdownDocument.editedStateDidChange, object: nil, queue: .main) { [weak self] n in
+            nonisolated(unsafe) let obj = n.object
+            MainActor.assumeIsolated {
+                guard let self, let doc = obj as? MarkdownDocument, let tab = self.tab(for: doc) else { return }
+                if doc.isDocumentEdited, tab.isEphemeral { tab.isEphemeral = false }   // 改过的标签不再是临时的
+                if tab === self.current { self.window?.isDocumentEdited = doc.isDocumentEdited }
+                self.refreshStrip()
+            }
+        }
+
+        // 侧栏：标题 → 跳转（阅读视图 + 编辑器）；文件 → 作为标签打开
         sidebarViewController.onSelectHeading = { [weak self] entry in
             guard let self else { return }
             self.readerViewController.scroll(toBlock: entry.blockIndex)
@@ -127,45 +146,21 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
                 DispatchQueue.main.async { [weak self] in self?.isSyncingScroll = false }
             }
         }
-        sidebarViewController.onOpenFile = { [weak self] url, line in
-            NavigationHistory.shared.push(current: self?.markdownDocument?.fileURL, to: url)
-            NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { doc, _, error in
-                if let error { NSApp.presentError(error); return }
-                guard let line, let md = doc as? MarkdownDocument, let wc = md.windowControllers.first as? DocumentWindowController else { return }
-                // 打开后跳到指定行（大纲里点的是其他文件的标题）：等首次渲染到位，而不是猜一个 0.2 s
-                md.session.whenRendered { ok in if ok { wc.jump(toLine: line) } }
-            }
-        }
-        // 阅读视图滚动 → 侧栏高亮 + 编辑器同步
-        readerViewController.onTopBlockChanged = { [weak self] index in
+        sidebarViewController.onOpenFile = { [weak self] url, line, pinned in
             guard let self else { return }
-            self.syncEditorToReader(blockIndex: index)
-            self.wordCount.update(chapter: self.readingTracker.topBlockChanged(index))
+            NavigationHistory.shared.push(current: self.markdownDocument?.fileURL, to: url)
+            self.open(url, ephemeral: !pinned, line: line)
         }
-        readerViewController.onSectionChanged = { [weak self] index in
-            self?.sidebarViewController.highlight(blockIndex: index)
-        }
-        document.session.onOutline = { [weak self] outline in
-            guard let self else { return }
-            self.sidebarViewController.outline = outline
-            self.refreshChapterProgress()
-        }
-        wordCount.tracker = readingTracker
-        // 字数：全文统计随解析更新；选区统计随选择变化
-        document.session.onStats = { [weak self] st in self?.wordCount.update(stats: st) }
-        wordCount.update(stats: document.session.stats)
-        wordCount.isHidden = !Preferences.shared.showWordCount
-        readerViewController.attachStatusOverlay(wordCount)
         selectionObserver = NotificationCenter.default.addObserver(forName: NSTextView.didChangeSelectionNotification, object: nil, queue: .main) { [weak self] n in
             nonisolated(unsafe) let obj = n.object
             MainActor.assumeIsolated {
-                guard let self, let tv = obj as? NSTextView, tv.window === self.window else { return }
+                guard let self, let tv = obj as? NSTextView, tv.window === self.window, let cur = self.current else { return }
                 // 只认正文的两个视图：侧栏筛选框、⌘P 面板的字段编辑器也是同一窗口里的 NSTextView，在里面选字不该变成"已选 N 字"
-                let isReader = tv === self.readerViewController.textView
-                let isEditor = self.hasEditorPane && tv === self.editorViewController.textView
+                let isReader = tv === cur.reader.textView
+                let isEditor = cur.hasEditorPane && tv === cur.editor?.textView
                 guard isReader || isEditor else { return }
                 let r = tv.selectedRange()
-                if self.mode == .editor, self.hasEditorPane, tv === self.editorViewController.textView { self.followCaretInSidebar(location: r.location) }
+                if cur.mode == .editor, isEditor { self.followCaretInSidebar(location: r.location) }
                 guard r.length > 0, let s = tv.textStorage?.string as NSString? else { self.wordCount.update(selection: nil); return }
                 self.wordCount.update(selection: TextStats.compute(s.substring(with: r)))
             }
@@ -177,43 +172,28 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
                 if self.window?.isVisible == true { self.session.startWatching() }   // 自动重新载入 开 / 关
             }
         }
-        sidebarViewController.currentURL = document.fileURL
-        // 小文档在打开时同步解析完了，onOutline 在这之前就已经发过：补一次
-        if !document.session.parsed.blocks.isEmpty { sidebarViewController.outline = document.session.parsed.outline; refreshChapterProgress() }
-        // 存储为 / 首次存储后 URL 变化 → 侧栏跟随
-        fileURLObserver = document.observe(\.fileURL, options: [.new]) { [weak self] doc, _ in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.sidebarViewController.currentURL = doc.fileURL
-                if self.editorAdded { self.editorViewController.documentURLDidChange(doc.fileURL) }
-                // 未命名文档首次存储 / 存储为：监视新路径、相对图片按新目录解析（以前只在 showWindow 时设过一次）
-                self.readerViewController.textView.baseURL = doc.fileURL
-                if self.window?.isVisible == true { self.session.startWatching() }
-            }
-        }
+        wordCount.isHidden = !Preferences.shared.showWordCount
 
-        // 初始模式：新文档 → 分栏；已有文档 → 上次选择（默认阅读）
-        let saved = Mode(rawValue: UserDefaults.standard.integer(forKey: "view.mode")) ?? .reader
-        mode = document.isNewDocument ? .split : saved
-        applyMode()
+        if let root { sidebarViewController.setRoot(root) }
+        addTab(document, ephemeral: ephemeral)
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
+    deinit {
+        for o in [themeObserver, prefsObserver, selectionObserver, sidebarResizeObserver, editedObserver] { if let o { NotificationCenter.default.removeObserver(o) } }
+    }
+
     override func showWindow(_ sender: Any?) {
         LaunchClock.mark("showWindow")
-        let target = TabGroups.shared.currentTarget
+        let firstShow = window?.isVisible == false
         super.showWindow(sender)
         LaunchClock.mark("window shown")
-        // 新窗口并进当前（key）文档窗口所在的标签组；没有就自己一组
-        if let window, TabGroups.shared.group(of: window) == nil { TabGroups.shared.add(window, joining: target === window ? nil : target) }
-        tabStrip.refresh()
-        markdownDocument?.session.startWatching()
-        // 焦点给正文，不给侧栏筛选框（否则一打开光标就在筛选框里、方向键滚不了文档）
-        if mode == .editor || mode == .split { window?.makeFirstResponder(editorViewController.textView) }
-        else { window?.makeFirstResponder(readerViewController.textView) }
+        current.session.startWatching()
+        guard firstShow else { return }
+        focusContent()
         restoreSidebarWidth()
-        // 启动那几百毫秒里窗口还在布局（分栏 autosave 复原、inset 到位）：这期间不做滚动同步，也等它们完了再把双栏分成等宽
+        // 启动那几百毫秒里窗口还在布局（inset 到位）：这期间不做滚动同步，也等它们完了再把双栏分成等宽
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self else { return }
             self.readyForScrollSync = true
@@ -221,85 +201,288 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         }
     }
 
-    private func makeEditor() -> EditorViewController {
-        let vc = EditorViewController(session: session)
-        vc.onScroll = { [weak self] line in self?.syncReaderToEditor(line: line) }
-        return vc
+    private func focusContent() {
+        guard let window, let cur = current else { return }
+        // 焦点给正文，不给侧栏筛选框（否则一打开光标就在筛选框里、方向键滚不了文档）
+        if (cur.mode == .editor || cur.mode == .split), cur.hasEditorPane, let tv = cur.editor?.textView { window.makeFirstResponder(tv) }
+        else { window.makeFirstResponder(cur.reader.textView) }
     }
 
-    /// 首次进入编辑/分栏时把编辑器插入 split view（sidebar 之后、reader 之前）
-    private func ensureEditorPane() {
-        guard !editorAdded else { return }
-        editorAdded = true
-        editorViewController.loadViewIfNeeded()   // 隐藏着插入不会触发 loadView；后面要直接碰 textView / scrollView
-        paneHost.addChild(editorViewController)
-        let half = max(280, (contentSplit.bounds.width / 2).rounded())
-        editorViewController.view.frame = NSRect(x: 0, y: 0, width: half, height: max(100, contentSplit.bounds.height))
-        editorViewController.view.autoresizingMask = [.width, .height]
-        editorViewController.view.isHidden = !(mode == .editor || mode == .split)
-        contentSplit.insertArrangedSubview(editorViewController.view, at: 0)
-        contentSplit.adjustSubviews()
-        // 编辑器可能晚于文档打开创建：同步当前源码
-        if let doc = markdownDocument { editorViewController.replaceSource(doc.source) }
-        editorViewController.textView.focusMode = focusMode
-        editorViewController.textView.posMode = posMode
-        if styleCheckOn { editorViewController.textView.styleChecker = StyleRulesStore.checker() }
+    // MARK: - 标签
+
+    func tab(for doc: MarkdownDocument) -> DocumentTab? { tabs.first { $0.document === doc } }
+    /// 文件是否属于这个工作区（在根目录下；没有根 = 只有未命名文档的空工作区，什么都收）
+    func contains(_ url: URL) -> Bool {
+        guard let root = rootURL else { return true }
+        let p = url.standardizedFileURL.path, r = root.standardizedFileURL.path
+        return p == r || p.hasPrefix(r.hasSuffix("/") ? r : r + "/")
     }
 
-    func windowWillClose(_ notification: Notification) {
-        markdownDocument?.session.stopWatching()
-        if let window { TabGroups.shared.remove(window) }
+    /// 把文档加为标签（默认插在当前标签之后并选中）。临时标签会替换掉已有的、没改过的临时标签
+    @discardableResult
+    func addTab(_ doc: MarkdownDocument, ephemeral: Bool, select: Bool = true) -> DocumentTab {
+        if let existing = tab(for: doc) { if select { self.select(existing) }; return existing }
+        let saved = Mode(rawValue: UserDefaults.standard.integer(forKey: "view.mode")) ?? .reader
+        let tab = DocumentTab(document: doc, mode: doc.isNewDocument ? .split : saved, ephemeral: ephemeral)
+        doc.workspace = self
+        wire(tab)
+        var index = current.flatMap { c in tabs.firstIndex { $0 === c } }.map { $0 + 1 } ?? tabs.count
+        var replacing: DocumentTab?
+        if ephemeral, let old = tabs.first(where: { $0.isEphemeral && !$0.document.isDocumentEdited }), let i = tabs.firstIndex(where: { $0 === old }) {
+            replacing = old; index = i
+        }
+        tabs.insert(tab, at: min(index, tabs.count))
+        if select || current == nil { self.select(tab) }
+        if let replacing { detach(replacing); replacing.document.close() }
+        refreshStrip()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self, weak tab] in if let tab, self?.current === tab { self?.noteAuthorshipMismatchIfNeeded() } }
+        return tab
     }
-    func windowDidMove(_ notification: Notification) { if let window { TabGroups.shared.frameDidChange(window) } }
-    func windowDidResize(_ notification: Notification) { if let window { TabGroups.shared.frameDidChange(window) } }
-    /// 状态恢复出来的窗口不走 showWindow：第一次成为 key 时并进组
-    func windowDidBecomeKey(_ notification: Notification) {
-        guard let window, TabGroups.shared.group(of: window) == nil else { return }
-        let others = TabGroups.shared.groups.first?.selected
-        TabGroups.shared.add(window, joining: others)
-        tabStrip.refresh()
+
+    /// 切到某个标签：换挂 document、换正文列的窗格、侧栏选中、标题 / 脏标记
+    func select(_ tab: DocumentTab) {
+        guard tabs.contains(where: { $0 === tab }) else { return }
+        let old = current
+        if old === tab { return }
+        if let old, old !== tab { old.document.removeWindowController(self) }
+        current = tab
+        if document !== tab.document { tab.document.addWindowController(self) }
+        window?.isDocumentEdited = tab.document.isDocumentEdited
+        mountPanes(tab)
+        sidebarViewController.currentURL = tab.document.fileURL
+        sidebarViewController.outline = tab.session.parsed.outline
+        wordCount.tracker = tab.readingTracker
+        wordCount.update(stats: tab.session.stats)
+        wordCount.update(selection: nil)
+        refreshChapterProgress()
+        refreshStrip()
+        if window?.isVisible == true {
+            tab.session.startWatching()
+            focusContent()
+        }
+        if let old, old !== tab { old.session.stopWatching() }
+    }
+
+    /// 固定临时标签（双击）
+    func pin(_ tab: DocumentTab) { tab.isEphemeral = false; refreshStrip() }
+
+    /// 设置某个标签的模式（恢复用）：不是当前标签就只记下，切过去时再装配
+    func setMode(_ m: Mode, of tab: DocumentTab) {
+        if tab === current { mode = m } else { tab.mode = m }
+    }
+
+    func moveTab(from: Int, to: Int) {
+        guard tabs.indices.contains(from), tabs.indices.contains(to), from != to else { return }
+        let t = tabs.remove(at: from); tabs.insert(t, at: to)
+        refreshStrip()
+    }
+
+    /// 在这个工作区里打开文件：已开着就切过去（固定则取消临时）；否则作为标签打开。文件不在根内 → 交给文档控制器另开窗口
+    func open(_ url: URL, ephemeral: Bool, line: Int? = nil) {
+        let dc = QuireDocumentController.shared as! QuireDocumentController
+        let target = contains(url) ? self : nil
+        dc.open(url, in: target, ephemeral: ephemeral) { doc in
+            guard let doc, let ws = doc.workspace else { return }
+            if !ephemeral, let t = ws.tab(for: doc) { ws.pin(t) }
+            // 打开后跳到指定行（大纲里点的是其他文件的标题）：等首次渲染到位，而不是猜一个 0.2 s
+            if let line { doc.session.whenRendered { ok in if ok { ws.jump(doc, toLine: line) } } }
+        }
+    }
+
+    /// 关闭标签：有未存储改动先问；最后一个标签 = 关窗口
+    func closeTab(_ tab: DocumentTab) {
+        guard tabs.contains(where: { $0 === tab }) else { return }
+        if tabs.count == 1 { window?.performClose(nil); return }
+        select(tab)
+        askThenClose([tab]) { _ in }
+    }
+    @objc func closeCurrentTab(_ sender: Any?) { if let cur = current { closeTab(cur) } }
+
+    /// 逐个询问未存储的文档（切到那个标签让 sheet 挂对窗口），都同意才 done(true)。除最后一个外，同意的顺手关掉
+    private var docCloseCallback: ((Bool) -> Void)?
+    private func askThenClose(_ remaining: [DocumentTab], keepLast: Bool = false, done: @escaping (Bool) -> Void) {
+        guard let tab = remaining.first else { done(true); return }
+        guard tabs.contains(where: { $0 === tab }) else { askThenClose(Array(remaining.dropFirst()), keepLast: keepLast, done: done); return }
+        select(tab)
+        docCloseCallback = { [weak self] ok in
+            guard let self else { return }
+            guard ok else { done(false); return }
+            if !(keepLast && self.tabs.count == 1) { tab.document.close() }
+            self.askThenClose(Array(remaining.dropFirst()), keepLast: keepLast, done: done)
+        }
+        tab.document.canClose(withDelegate: self, shouldClose: #selector(document(_:shouldClose:contextInfo:)), contextInfo: nil)
+    }
+    @objc private func document(_ doc: NSDocument, shouldClose: Bool, contextInfo: UnsafeMutableRawPointer?) {
+        let cb = docCloseCallback; docCloseCallback = nil
+        cb?(shouldClose)
+    }
+
+    /// 文档要关了（MarkdownDocument.close）：把它的标签摘掉。最后一个标签不摘——窗口跟着文档一起关（NSDocument 的默认路径）
+    func documentWillClose(_ doc: MarkdownDocument) {
+        guard let tab = tab(for: doc) else { return }
+        if tabs.count == 1 { doc.workspace = nil; return }
+        detach(tab)
+    }
+
+    /// 把标签从工作区摘掉但不关文档（移到别的窗口 / 关闭前）：选中相邻的
+    func detach(_ tab: DocumentTab) {
+        guard let i = tabs.firstIndex(where: { $0 === tab }) else { return }
+        tabs.remove(at: i)
+        tab.fileURLObserver = nil
+        tab.document.workspace = nil
+        if current === tab {
+            current = nil
+            if let next = tabs[safe: min(i, tabs.count - 1)] { select(next) }
+            else { unmountPanes(tab); tab.document.removeWindowController(self) }
+        } else {
+            tab.document.removeWindowController(self)
+        }
+        tab.session.stopWatching()
+        refreshStrip()
+    }
+
+    private func refreshStrip() {
+        tabStrip.items = tabs.map { .init(title: $0.title, edited: $0.document.isDocumentEdited, ephemeral: $0.isEphemeral, selected: $0 === current) }
     }
 
     // MARK: - 标签页（窗口菜单）
-    @objc func selectNextTab(_ sender: Any?) { if let window { TabGroups.shared.selectNext(from: window, offset: 1) } }
-    @objc func selectPreviousTab(_ sender: Any?) { if let window { TabGroups.shared.selectNext(from: window, offset: -1) } }
-    @objc func moveTabToNewWindow(_ sender: Any?) { if let window { TabGroups.shared.detach(window) } }
-    @objc func mergeAllWindows(_ sender: Any?) { if let window { TabGroups.shared.mergeAll(into: window) } }
-
-    deinit {
-        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
-        if let prefsObserver { NotificationCenter.default.removeObserver(prefsObserver) }
-        if let selectionObserver { NotificationCenter.default.removeObserver(selectionObserver) }
-        if let sidebarResizeObserver { NotificationCenter.default.removeObserver(sidebarResizeObserver) }
-        chromeObservers.forEach { NotificationCenter.default.removeObserver($0) }
+    @objc func selectNextTab(_ sender: Any?) { cycleTab(1) }
+    @objc func selectPreviousTab(_ sender: Any?) { cycleTab(-1) }
+    private func cycleTab(_ offset: Int) {
+        guard tabs.count > 1, let i = tabs.firstIndex(where: { $0 === current }) else { return }
+        select(tabs[(i + offset + tabs.count) % tabs.count])
+    }
+    /// 「移到新窗口」：当前标签拆出去，新窗口同一个根目录，错开一点显示
+    @objc func moveTabToNewWindow(_ sender: Any?) {
+        guard tabs.count > 1, let tab = current, let window else { return }
+        detach(tab)
+        let ws = WorkspaceWindowController(document: tab.document, root: rootURL, ephemeral: false)
+        var f = window.frame; f.origin.x += 40; f.origin.y -= 40
+        ws.window?.setFrame(f, display: false)
+        ws.showWindow(nil)
+    }
+    /// 「合并所有窗口」：别的工作区的标签全并进这个窗口（根目录保持本窗口的）
+    @objc func mergeAllWindows(_ sender: Any?) {
+        for other in Self.all where other !== self {
+            for t in other.tabs { other.detach(t); addTab(t.document, ephemeral: false, select: false) }
+            other.closeApproved = true
+            other.window?.close()
+        }
+        window?.makeKeyAndOrderFront(nil)
     }
 
-    /// 窗口自己的背景也用主题色：macOS 26 的侧栏是一块带圆角、向内缩进的浮板，浮板外面那圈（圆角外侧、左边和底部的缝）
-    /// 露的是窗口背景——不设的话是系统灰，和主题色的正文一比就是一圈灰边
-    nonisolated(unsafe) private var themeObserver: NSObjectProtocol?
+    // MARK: - 窗格装配
+
+    private func ensureEditor(_ tab: DocumentTab) -> EditorViewController {
+        if let e = tab.editor { return e }
+        let vc = EditorViewController(session: tab.session)
+        vc.onScroll = { [weak self, weak tab] line in if let self, let tab, tab === self.current { self.syncReaderToEditor(line: line) } }
+        tab.editor = vc
+        return vc
+    }
+
+    /// 每个标签的回调都先看"还是不是当前标签"：后台标签的解析结果不该改侧栏
+    private func wire(_ tab: DocumentTab) {
+        let doc = tab.document
+        tab.session.transclusionRoot = { [weak self] in self?.rootURL }
+        tab.reader.onTopBlockChanged = { [weak self, weak tab] index in
+            guard let self, let tab, tab === self.current else { return }
+            self.syncEditorToReader(blockIndex: index)
+            self.wordCount.update(chapter: tab.readingTracker.topBlockChanged(index))
+        }
+        tab.reader.onSectionChanged = { [weak self, weak tab] index in
+            guard let self, let tab, tab === self.current else { return }
+            self.sidebarViewController.highlight(blockIndex: index)
+        }
+        tab.session.onOutline = { [weak self, weak tab] outline in
+            guard let self, let tab, tab === self.current else { return }
+            self.sidebarViewController.outline = outline
+            self.refreshChapterProgress()
+        }
+        tab.session.onStats = { [weak self, weak tab] st in if let self, let tab, tab === self.current { self.wordCount.update(stats: st) } }
+        // 存储为 / 首次存储后 URL 变化 → 侧栏跟随、标签标题
+        tab.fileURLObserver = doc.observe(\.fileURL, options: [.new]) { [weak self, weak tab] doc, _ in
+            Task { @MainActor [weak self, weak tab] in
+                guard let self, let tab else { return }
+                if tab === self.current { self.sidebarViewController.currentURL = doc.fileURL }
+                tab.editor?.documentURLDidChange(doc.fileURL)
+                // 未命名文档首次存储 / 存储为：监视新路径、相对图片按新目录解析
+                tab.reader.textView.baseURL = doc.fileURL
+                if tab === self.current, self.window?.isVisible == true { tab.session.startWatching() }
+                self.refreshStrip()
+            }
+        }
+    }
+
+    /// 把标签的窗格换进正文分栏
+    private func mountPanes(_ tab: DocumentTab) {
+        for child in paneHost.children { child.removeFromParent() }
+        for v in contentSplit.arrangedSubviews { contentSplit.removeArrangedSubview(v); v.removeFromSuperview() }
+        let h = max(100, contentSplit.bounds.height)
+        if tab.editorAdded, let editor = tab.editor {
+            paneHost.addChild(editor)
+            editor.view.frame = NSRect(x: 0, y: 0, width: max(280, (contentSplit.bounds.width / 2).rounded()), height: h)
+            editor.view.autoresizingMask = [.width, .height]
+            contentSplit.addArrangedSubview(editor.view)
+        }
+        paneHost.addChild(tab.reader)
+        tab.reader.view.frame = NSRect(x: 0, y: 0, width: max(280, contentSplit.bounds.width), height: h)
+        tab.reader.view.autoresizingMask = [.width, .height]
+        contentSplit.addArrangedSubview(tab.reader.view)
+        contentSplit.adjustSubviews()
+        applyMode(from: nil)   // 只切窗格，不动窗口宽度
+    }
+    private func unmountPanes(_ tab: DocumentTab) {
+        for child in paneHost.children { child.removeFromParent() }
+        for v in contentSplit.arrangedSubviews { contentSplit.removeArrangedSubview(v); v.removeFromSuperview() }
+    }
+
+    /// 首次进入编辑/分栏时把编辑器插入 split view（reader 之前）
+    private func ensureEditorPane() {
+        guard let tab = current, !tab.editorAdded else { return }
+        tab.editorAdded = true
+        let editor = ensureEditor(tab)
+        editor.loadViewIfNeeded()   // 隐藏着插入不会触发 loadView；后面要直接碰 textView / scrollView
+        paneHost.addChild(editor)
+        let half = max(280, (contentSplit.bounds.width / 2).rounded())
+        editor.view.frame = NSRect(x: 0, y: 0, width: half, height: max(100, contentSplit.bounds.height))
+        editor.view.autoresizingMask = [.width, .height]
+        editor.view.isHidden = !(tab.mode == .editor || tab.mode == .split)
+        contentSplit.insertArrangedSubview(editor.view, at: 0)
+        contentSplit.adjustSubviews()
+        // 编辑器可能晚于文档打开创建：同步当前源码
+        editor.replaceSource(tab.document.source)
+        editor.textView.focusMode = focusMode
+        editor.textView.posMode = posMode
+        if styleCheckOn { editor.textView.styleChecker = StyleRulesStore.checker() }
+    }
+
+    // MARK: - 窗口
+
+    /// 关窗口：逐个问过所有未存储的标签，都同意才关（NSWindowController 默认只问自己挂着的那一份）
+    private var closeApproved = false
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if closeApproved || tabs.isEmpty { return true }
+        askThenClose(tabs, keepLast: true) { [weak self] ok in
+            guard ok, let self else { return }
+            self.closeApproved = true
+            self.window?.close()
+        }
+        return false
+    }
+    func windowWillClose(_ notification: Notification) {
+        for t in tabs { t.session.stopWatching() }
+    }
+
+    /// 窗口底色 = 铬色（透明标题栏透出来的就是它，工具栏行因此是铬色）；分隔线跟主题 border
     private func applyWindowBackground() {
-        window?.backgroundColor = ThemeManager.shared.currentStyle.background
+        let bg = ThemeManager.shared.currentStyle.background
+        window?.backgroundColor = ChromeColors.elevated(bg)
         themedSplitView.dividerTint = ThemeManager.shared.currentStyle.border
         themedSplitView.needsDisplay = true
-        chromeBand.layer?.backgroundColor = ChromeColors.elevated(ThemeManager.shared.currentStyle.background).cgColor
-    }
-
-    /// 工具栏行的高度 = 标题栏总高 − 系统标签栏（显示时）。标签栏的高度从标题栏里它的 clip view 读（私有类名，只读；读不到按 28）。
-    /// 判断有没有标签栏用 tabbedWindows（多于一个标签就一定显示，系统不允许藏）——**不要碰 window.tabGroup**：
-    /// 在窗口显示前读它会给窗口造一个自己的标签组，之后打开的文档就各开各的窗口，再也合不成标签
-    private func layoutChromeBand() {
-        guard let window, let content = window.contentView else { return }
-        let h = max(0, content.bounds.height - window.contentLayoutRect.maxY)   // 整个标题栏（工具栏行 + 标签条）
-        chromeBand.frame = NSRect(x: 0, y: content.bounds.height - h, width: content.bounds.width, height: h)
-    }
-    nonisolated(unsafe) private var chromeObservers: [NSObjectProtocol] = []
-    private func observeChromeLayout() {
-        // 标签栏的出现 / 消失没有专门通知：新标签会成为 key 窗口、关掉的会 willClose——这两个够了；窗口尺寸变了也重排
-        for name in [NSWindow.didBecomeKeyNotification, NSWindow.willCloseNotification, NSWindow.didResizeNotification] {
-            chromeObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { DispatchQueue.main.async { self?.layoutChromeBand() } }
-            })
-        }
+        contentSplit.dividerTint = ThemeManager.shared.currentStyle.border
+        contentSplit.needsDisplay = true
+        tabStrip.needsDisplay = true
     }
 
     /// 侧栏折叠 / 展开（普通 split item 不能用 NSSplitViewController.toggleSidebar，那只认 .sidebar 行为的项）
@@ -331,10 +514,9 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     }
 
     /// 编辑器面板已经建好（阅读 / 混合模式下没有：此时 `editorViewController.textView` 还是 nil，碰它就崩）
-    var hasEditorPane: Bool { editorAdded && editorViewController.isViewLoaded }
+    var hasEditorPane: Bool { current?.hasEditorPane ?? false }
     /// 需要源码编辑器的动作：阅读 / 混合模式先切到编辑模式
     func ensureEditorMode() { if mode == .reader || mode == .hybrid { mode = .editor } }
-
     // MARK: - 专注 / 沉浸
 
     private(set) var focusMode: EditorFocusMode = EditorFocusMode(rawValue: UserDefaults.standard.integer(forKey: "editor.focus")) ?? .off {
@@ -394,7 +576,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         focusMode = focusMode.next
     }
 
-    private struct ImmersiveSaved { var mode: Mode; var sidebarCollapsed: Bool; var toolbarVisible: Bool; var rulers: Bool; var wordCountHidden: Bool; var enteredFullScreen: Bool; var hidTabBar: Bool }
+    private struct ImmersiveSaved { var mode: Mode; var sidebarCollapsed: Bool; var toolbarVisible: Bool; var rulers: Bool; var wordCountHidden: Bool; var enteredFullScreen: Bool }
     private var immersiveSaved: ImmersiveSaved?
     var isImmersive: Bool { immersiveSaved != nil }
 
@@ -409,11 +591,11 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         let wasFull = window.styleMask.contains(.fullScreen)
         immersiveSaved = ImmersiveSaved(mode: mode, sidebarCollapsed: sidebarCollapsed, toolbarVisible: window.toolbar?.isVisible ?? true,
                                         rulers: editorAdded ? editorViewController.scrollView.rulersVisible : Preferences.shared.editorLineNumbers,
-                                        wordCountHidden: wordCount.isHidden, enteredFullScreen: !wasFull, hidTabBar: false)
+                                        wordCountHidden: wordCount.isHidden, enteredFullScreen: !wasFull)
         mode = .editor
         if !sidebarCollapsed { setSidebarCollapsed(true, animated: false) }
         window.toolbar?.isVisible = false
-        tabStrip.suppressed = true
+        contentColumn.stripHidden = true
         editorViewController.scrollView.rulersVisible = false
         wordCount.isHidden = true
         editorViewController.textView.immersiveWidth = session.style.maxContentWidth
@@ -432,7 +614,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         editorViewController.scrollView.rulersVisible = saved.rulers
         wordCount.isHidden = saved.wordCountHidden
         window.toolbar?.isVisible = saved.toolbarVisible
-        tabStrip.suppressed = false
+        contentColumn.stripHidden = false
         if !saved.sidebarCollapsed, isSidebarCollapsed { setSidebarCollapsed(false, animated: false) }
         mode = saved.mode
         if restoreFullScreen, saved.enteredFullScreen, window.styleMask.contains(.fullScreen) { window.toggleFullScreen(nil) }
@@ -461,30 +643,33 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     }
 
     /// 编辑模式：侧栏大纲跟随光标所在的块（阅读 / 双栏由阅读视图的章节回调驱动）
-    private var lastCaretBlock: Int?
     private func followCaretInSidebar(location: Int) {
         let line = editorViewController.textView.lineNumber(at: location)
         let idx: Int?
         if let rendered = readerViewController.textView.rendered { idx = rendered.blockIndex(forLine: line) }
         else { idx = session.parsed.blocks.lastIndex { ($0.sourceRange?.start.line ?? Int.max) <= line } }
-        guard let idx, idx != lastCaretBlock else { return }
-        lastCaretBlock = idx
+        guard let idx, idx != current.lastCaretBlock else { return }
+        current.lastCaretBlock = idx
         sidebarViewController.highlight(blockIndex: idx)
     }
 
-    /// 跳到源码行（阅读视图按块、编辑器按行）
-    func jump(toLine line: Int) {
-        if let rendered = readerViewController.textView.rendered, let idx = rendered.blockIndex(forLine: line) {
-            readerViewController.scroll(toBlock: idx)
+    /// 跳到源码行（阅读视图按块、编辑器按行）；文档不是当前标签就先切过去
+    func jump(_ doc: MarkdownDocument, toLine line: Int) {
+        guard let tab = tab(for: doc) else { return }
+        if tab !== current { select(tab) }
+        if let rendered = tab.reader.textView.rendered, let idx = rendered.blockIndex(forLine: line) {
+            tab.reader.scroll(toBlock: idx)
         }
-        if mode != .reader { editorViewController.scroll(toLine: line) }
+        if tab.mode != .reader, tab.hasEditorPane { tab.editor?.scroll(toLine: line) }
     }
+    func jump(toLine line: Int) { if let cur = current { jump(cur.document, toLine: line) } }
 
-    /// 文档从磁盘（重新）读入：同步编辑器文本
-    func documentDidReload(_ source: String) {
-        hybridSplicer.reset()
-        guard hasEditorPane else { return }
-        editorViewController.replaceSource(source)
+    /// 文档从磁盘（重新）读入：同步它那个标签的编辑器文本
+    func documentDidReload(_ doc: MarkdownDocument, _ source: String) {
+        guard let tab = tab(for: doc) else { return }
+        tab.hybridSplicer.reset()
+        guard tab.hasEditorPane else { return }
+        tab.editor?.replaceSource(source)
     }
 
     // MARK: - 模式
@@ -537,7 +722,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
 
     /// 显示 / 隐藏正文窗格（隐藏 = NSSplitView 的折叠）；双栏时分成等宽
     private func setPaneVisibility(showEditor: Bool) {
-        if editorAdded { editorViewController.view.isHidden = !showEditor }
+        if let cur = current, cur.editorAdded { cur.editor?.view.isHidden = !showEditor }
         readerViewController.view.isHidden = (mode == .editor)
         contentSplit.adjustSubviews()
         if mode == .split { equalizePanes() }
@@ -591,43 +776,41 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     @objc func setModeSplit(_ sender: Any?) { mode = .split }
     @objc func setModeHybrid(_ sender: Any?) { mode = .hybrid }
 
-    private let readingTracker = ReadingTracker()
     /// 章节进度：换了块表就重算（源码没变时行起点表复用）。刚 setRendered 时视口还没排版，topVisibleBlockIndex 是 nil，下一轮再算
     private func refreshChapterProgress() {
-        readingTracker.documentChanged(session.parsed, source: session.parsedSource)
+        guard let cur = current else { return }
+        cur.readingTracker.documentChanged(cur.session.parsed, source: cur.session.parsedSource)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             let top = self.readerViewController.textView.topVisibleBlockIndex() ?? 0
-            self.wordCount.update(chapter: self.readingTracker.progress(at: top))
+            self.wordCount.update(chapter: self.current.readingTracker.progress(at: top))
         }
     }
-    private var hybridWired = false
-    private let hybridSplicer = SourceLineSplicer()
     /// 混合模式的回写：击键只更新文档源码（不重渲染），离开块时重解析 + 按 diff 重渲染
     private func wireHybrid() {
-        guard !hybridWired, let hybrid = readerViewController.textView as? HybridTextView else { return }
-        hybridWired = true
-        hybrid.onSourceEdit = { [weak self, weak hybrid] _, text, lines in
-            guard let self, let hybrid else { return }
+        guard let tab = current, !tab.hybridWired, let hybrid = tab.reader.textView as? HybridTextView else { return }
+        tab.hybridWired = true
+        hybrid.onSourceEdit = { [weak hybrid, weak tab] _, text, lines in
+            guard let hybrid, let tab else { return }
             // 以前整篇 split("\n") + join：1 MB 每击键 ≈ 5 ms。现在只在本次激活的第一击算一次块的 UTF-16 区间，之后按区间替换
-            guard let (joined, newLineCount) = self.hybridSplicer.replace(lines: lines, in: self.session.source, with: text) else { return }
-            self.markdownDocument?.setSourceFromEditor(joined, tracked: false)
-            self.markdownDocument?.updateChangeCount(.changeDone)
-            self.session.updateSourceWithoutRendering(joined)
+            guard let (joined, newLineCount) = tab.hybridSplicer.replace(lines: lines, in: tab.session.source, with: text) else { return }
+            tab.document.setSourceFromEditor(joined, tracked: false)
+            tab.document.updateChangeCount(.changeDone)
+            tab.session.updateSourceWithoutRendering(joined)
             hybrid.source = joined
             // 后续块的行号随之平移：由下次重解析修正；本块行范围的变化在 HybridTextView 内部按 activeLines 维护
             hybrid.activeLinesDidChange(to: lines.lowerBound...(lines.lowerBound + newLineCount - 1))
         }
-        hybrid.renderPreview = { [weak self] src in
-            guard let self else { return nil }
+        hybrid.renderPreview = { [weak tab] src in
+            guard let tab else { return nil }
             let doc = MarkdownParser(options: Preferences.shared.parserOptions).parse(src)
-            return DocumentRenderer(style: self.session.style).render(doc).attributed
+            return DocumentRenderer(style: tab.session.style).render(doc).attributed
         }
-        hybrid.onDeactivate = { [weak self] in
-            guard let self else { return }
-            self.hybridSplicer.reset()
-            self.session.sourceDidChange(self.session.source, reason: .edited)
-            if self.editorAdded { self.editorViewController.replaceSource(self.session.source) }
+        hybrid.onDeactivate = { [weak tab] in
+            guard let tab else { return }
+            tab.hybridSplicer.reset()
+            tab.session.sourceDidChange(tab.session.source, reason: .edited)
+            if tab.hasEditorPane { tab.editor?.replaceSource(tab.session.source) }
         }
     }
     @objc private func modeChanged(_ sender: NSSegmentedControl) { mode = Mode(rawValue: sender.selectedSegment) ?? .reader }
@@ -841,10 +1024,12 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         static let theme = NSToolbarItem.Identifier("theme")
         static let appearance = NSToolbarItem.Identifier("appearance")
         static let layout = NSToolbarItem.Identifier("readingLayout")
+        static let sidebarSeparator = NSToolbarItem.Identifier("sidebarSeparator")
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Item.sidebar, .flexibleSpace, Item.mode, .flexibleSpace, Item.layout, Item.appearance, Item.theme]   // 侧栏是普通 split item，sidebarTrackingSeparator 没有可跟踪的对象
+        // 左段（侧栏钮）| 跟随侧栏分隔线的分隔项 | 右段：模式居中，版式 / 外观 / 主题靠右
+        [Item.sidebar, Item.sidebarSeparator, .flexibleSpace, Item.mode, .flexibleSpace, Item.layout, Item.appearance, Item.theme]
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         toolbarDefaultItemIdentifiers(toolbar)
@@ -852,6 +1037,9 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         switch id {
+        case Item.sidebarSeparator:
+            // 系统的 sidebarTrackingSeparator 只认 .sidebar 行为的 split item；显式指定分栏视图 + 分隔线序号就能跟普通项
+            return NSTrackingSeparatorToolbarItem(identifier: id, splitView: themedSplitView, dividerIndex: 0)
         case Item.sidebar:
             let item = NSToolbarItem(itemIdentifier: id)
             item.label = L("目录"); item.toolTip = L("显示/隐藏目录（⌘⌥S）")
@@ -910,7 +1098,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
 
 
 // MARK: - 正文区分栏（编辑器 | 阅读）
-extension DocumentWindowController {
+extension WorkspaceWindowController {
     func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool { false }
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat { max(proposedMinimumPosition, 280) }
     func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat { min(proposedMaximumPosition, splitView.bounds.width - 280) }
@@ -919,7 +1107,7 @@ extension DocumentWindowController {
     }
 }
 
-/// 外层三栏的 split view：分隔线颜色跟主题的 border 走（系统的 separatorColor 在深色主题里是一条发白的线）
+/// 主题色分隔线的 split view（外层 侧栏|正文、内层 编辑器|阅读 都用）：分隔线颜色跟主题的 border 走（系统的 separatorColor 在深色主题里是一条发白的线）
 final class ThemedSplitView: NSSplitView {
     var dividerTint: NSColor = .separatorColor
     override var dividerColor: NSColor { dividerTint }

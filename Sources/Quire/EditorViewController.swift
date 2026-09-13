@@ -49,7 +49,7 @@ final class EditorViewController: NSViewController {
         textView.showsFormatToolbar = Preferences.shared.formatToolbar
         textView.wikiLinkCompletions = { [weak self] prefix in
             guard let self, let root = self.session.document?.fileURL?.deletingLastPathComponent() else { return [] }
-            let index = FileIndex.index(for: (self.view.window?.windowController as? DocumentWindowController)?.sidebarViewController.rootURL ?? root)
+            let index = FileIndex.index(for: (self.view.window?.windowController as? WorkspaceWindowController)?.sidebarViewController.rootURL ?? root)
             let names = index.relativePaths.map { ($0 as NSString).lastPathComponent as NSString }.map { $0.deletingPathExtension }
             let unique = Array(Set(names))
             return prefix.isEmpty ? unique.sorted().prefix(30).map { $0 } : FuzzyMatcher.rank(query: prefix, candidates: unique, limit: 30).map(\.0)

@@ -18,7 +18,7 @@ enum AuthorshipMenu {
         func menuNeedsUpdate(_ menu: NSMenu) {
             MainActor.assumeIsolated {
                 menu.removeAllItems()
-                let on = menu.addItem(withTitle: L("著作归属"), action: #selector(DocumentWindowController.toggleAuthorship(_:)), keyEquivalent: "A")
+                let on = menu.addItem(withTitle: L("著作归属"), action: #selector(WorkspaceWindowController.toggleAuthorship(_:)), keyEquivalent: "A")
                 on.keyEquivalentModifierMask = [.command, .shift]
                 on.state = Preferences.shared.authorship ? .on : .off
                 menu.addItem(.separator())
@@ -37,12 +37,12 @@ enum AuthorshipMenu {
                     item.submenu = sub
                     return item
                 }
-                menu.addItem(authorsMenu(L("当前作者"), action: #selector(DocumentWindowController.setCurrentAuthor(_:)), selected: Preferences.shared.authorshipAuthor, allowNone: false))
-                menu.addItem(authorsMenu(L("以作者粘贴"), action: #selector(DocumentWindowController.pasteAsAuthor(_:)), selected: nil, allowNone: false))
-                menu.addItem(authorsMenu(L("标记选区为"), action: #selector(DocumentWindowController.markSelectionAsAuthor(_:)), selected: nil, allowNone: true))
+                menu.addItem(authorsMenu(L("当前作者"), action: #selector(WorkspaceWindowController.setCurrentAuthor(_:)), selected: Preferences.shared.authorshipAuthor, allowNone: false))
+                menu.addItem(authorsMenu(L("以作者粘贴"), action: #selector(WorkspaceWindowController.pasteAsAuthor(_:)), selected: nil, allowNone: false))
+                menu.addItem(authorsMenu(L("标记选区为"), action: #selector(WorkspaceWindowController.markSelectionAsAuthor(_:)), selected: nil, allowNone: true))
                 menu.addItem(.separator())
-                menu.addItem(withTitle: L("添加作者…"), action: #selector(DocumentWindowController.addAuthor(_:)), keyEquivalent: "")
-                menu.addItem(withTitle: L("归属统计…"), action: #selector(DocumentWindowController.showAuthorshipStats(_:)), keyEquivalent: "")
+                menu.addItem(withTitle: L("添加作者…"), action: #selector(WorkspaceWindowController.addAuthor(_:)), keyEquivalent: "")
+                menu.addItem(withTitle: L("归属统计…"), action: #selector(WorkspaceWindowController.showAuthorshipStats(_:)), keyEquivalent: "")
             }
         }
 
@@ -57,7 +57,7 @@ enum AuthorshipMenu {
     }
 }
 
-extension DocumentWindowController {
+extension WorkspaceWindowController {
     /// 读入时注释块哈希对不上：提示一次（区间已丢弃，作者表保留）
     func noteAuthorshipMismatchIfNeeded() {
         guard let doc = markdownDocument, doc.authorshipMismatch, let window else { return }

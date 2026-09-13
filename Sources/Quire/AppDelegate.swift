@@ -24,8 +24,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let path = ProcessInfo.processInfo.environment["QUIRE_EXPORT_PNG"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 Task { @MainActor in
-                    if let doc = NSDocumentController.shared.documents.first as? MarkdownDocument, let wc = doc.windowControllers.first as? DocumentWindowController {
-                        let ok = await Exporter.writeImage(document: doc, windowController: wc, to: URL(fileURLWithPath: path))
+                    if let doc = NSDocumentController.shared.documents.first as? MarkdownDocument {
+                        let ok = await Exporter.writeImage(document: doc, to: URL(fileURLWithPath: path))
                         FileHandle.standardError.write("QUIRE_EXPORT_PNG=\(ok ? "ok" : "failed")\n".data(using: .utf8)!)
                     }
                 }
@@ -35,8 +35,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 调试 / 脚本（含 scripts/smoke_app.sh）：首个文档渲染后导出 PDF 并退出
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 Task { @MainActor in
-                    if let doc = NSDocumentController.shared.documents.first as? MarkdownDocument, let wc = doc.windowControllers.first as? DocumentWindowController {
-                        let ok = await Exporter.writePDF(document: doc, windowController: wc, to: URL(fileURLWithPath: path))
+                    if let doc = NSDocumentController.shared.documents.first as? MarkdownDocument {
+                        let ok = await Exporter.writePDF(document: doc, to: URL(fileURLWithPath: path))
                         FileHandle.standardError.write("QUIRE_EXPORT_PDF=\(ok ? "ok" : "failed")\n".data(using: .utf8)!)
                     } else {
                         FileHandle.standardError.write("QUIRE_EXPORT_PDF=failed (no document)\n".data(using: .utf8)!)
@@ -45,15 +45,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+
         if ProcessInfo.processInfo.environment["QUIRE_OPEN_PREFS"] != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { PreferencesWindowController.shared.show() }
         }
     }
 
-    /// 无文档启动：弹开文件面板（⌘N 仍可新建）。命令行带文件时 AppKit 会走 open 事件而不调用这里。
+    /// 无文档启动：先恢复上次的工作区窗口；没有可恢复的就弹开文件面板（⌘N 仍可新建）。命令行带文件时 AppKit 会走 open 事件而不调用这里。
     func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        if WorkspaceState.restoreIfNeeded() { return true }
         NSDocumentController.shared.openDocument(nil)
         return true
+    }
+
+    /// 退出前记下所有工作区（此时文档还没开始关）
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        WorkspaceState.save()
+        return .terminateNow
     }
 
     /// Dock 点击且无窗口：弹开文件面板

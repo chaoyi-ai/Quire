@@ -12,7 +12,8 @@ final class SidebarViewController: NSViewController, NSSearchFieldDelegate, NSMe
     var outline: Outline = Outline(entries: []) { didSet { if outline != oldValue { outlineDidChange() } } }
     // 输出
     var onSelectHeading: ((Outline.Entry) -> Void)?
-    var onOpenFile: ((URL, Int?) -> Void)?
+    /// 打开文件：`pinned` = 固定标签（双击 / 新建），否则是临时标签（单击）
+    var onOpenFile: ((URL, Int?, Bool) -> Void)?
     private(set) var rootURL: URL? { didSet { if rootURL?.standardizedFileURL != oldValue?.standardizedFileURL { rootDidChange() } } }
 
     let files = FileTreeController()
@@ -152,11 +153,11 @@ final class SidebarViewController: NSViewController, NSSearchFieldDelegate, NSMe
     }
 
     private func wire() {
-        files.onOpenFile = { [weak self] url, line in self?.onOpenFile?(url, line) }
+        files.onOpenFile = { [weak self] url, line, pinned in self?.onOpenFile?(url, line, pinned) }
         files.onDropFolder = { [weak self] dir in self?.setRoot(dir) }
         files.onStateChange = { [weak self] in self?.updateFilesHeader() }
         files.onSelectHeading = { [weak self] e in self?.onSelectHeading?(e) }
-        favorites.onOpenFile = { [weak self] url in self?.onOpenFile?(url, nil) }
+        favorites.onOpenFile = { [weak self] url in self?.onOpenFile?(url, nil, false) }
         favorites.onChange = { [weak self] in self?.updateBottomSections() }
         tags.onSearchTag = { [weak self] tag in
             guard let self else { return }

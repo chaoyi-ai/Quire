@@ -42,8 +42,8 @@ enum URLScheme {
         guard !external || trusted(url) || confirm(String(format: L("外部应用请求打开：%@"), url.path), button: L("打开")) else { completion?(false); return }
         QuireDocumentController.shared.openDocument(withContentsOf: url, display: true) { doc, _, error in
             if let error { NSApp.presentError(error); completion?(false); return }
-            if let line, let md = doc as? MarkdownDocument, let wc = md.windowControllers.first as? DocumentWindowController {
-                md.session.whenRendered { ok in if ok { wc.jump(toLine: line) } }
+            if let line, let md = doc as? MarkdownDocument {
+                md.session.whenRendered { ok in if ok { md.workspace?.jump(md, toLine: line) } }
             }
             completion?(true)
         }
@@ -121,7 +121,7 @@ enum URLScheme {
         guard !external || trusted(url) && trusted(to) || confirm(String(format: L("外部应用请求导出：%@ → %@"), url.path, to.path), button: L("导出")) else { completion?(false); return }
         QuireDocumentController.shared.openDocument(withContentsOf: url, display: true) { doc, _, error in
             if let error { NSApp.presentError(error); completion?(false); return }
-            guard let md = doc as? MarkdownDocument, let wc = md.windowControllers.first as? DocumentWindowController else { completion?(false); return }
+            guard let md = doc as? MarkdownDocument, md.workspace != nil else { completion?(false); return }
             md.session.whenRendered { rendered in
                 guard rendered else { fail(String(format: L("导出失败：%@"), to.path)); completion?(false); return }
                 Task { @MainActor in
@@ -129,7 +129,7 @@ enum URLScheme {
                     if format == "html" {
                         do { try Exporter.html(for: md).write(to: to, atomically: true, encoding: .utf8) } catch { NSApp.presentError(error); ok = false }
                     } else {
-                        ok = await Exporter.writePDF(document: md, windowController: wc, to: to)
+                        ok = await Exporter.writePDF(document: md, to: to)
                         if !ok { fail(String(format: L("导出失败：%@"), to.path)) }
                     }
                     completion?(ok)
@@ -154,7 +154,7 @@ enum URLScheme {
         let p = canonical(url)
         var dirs: [String] = []
         for doc in NSDocumentController.shared.documents {
-            if let wc = doc.windowControllers.first as? DocumentWindowController, let root = wc.sidebarViewController.rootURL { dirs.append(canonical(root)) }
+            if let root = (doc as? MarkdownDocument)?.workspace?.rootURL { dirs.append(canonical(root)) }
             if let f = doc.fileURL { dirs.append(canonical(f.deletingLastPathComponent())) }
         }
         return dirs.contains { p == $0 || p.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }

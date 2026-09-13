@@ -34,15 +34,17 @@ enum MainMenu {
         file.addItem(withTitle: L("打开…"), action: #selector(NSDocumentController.openDocument(_:)), keyEquivalent: "o")
         let openFolderDoc = file.addItem(withTitle: L("打开文件夹…"), action: #selector(Handler.openFolder(_:)), keyEquivalent: "o")
         openFolderDoc.keyEquivalentModifierMask = [.command, .option]; openFolderDoc.target = Handler.shared
-        let openFolder = file.addItem(withTitle: L("在侧栏打开文件夹…"), action: #selector(DocumentWindowController.chooseSidebarFolder(_:)), keyEquivalent: "O")
+        let openFolder = file.addItem(withTitle: L("在侧栏打开文件夹…"), action: #selector(WorkspaceWindowController.chooseSidebarFolder(_:)), keyEquivalent: "O")
         openFolder.keyEquivalentModifierMask = [.command, .shift]
-        file.addItem(withTitle: L("快速打开…"), action: #selector(DocumentWindowController.quickOpen(_:)), keyEquivalent: "p")
+        file.addItem(withTitle: L("快速打开…"), action: #selector(WorkspaceWindowController.quickOpen(_:)), keyEquivalent: "p")
         let recent = NSMenu(title: L("打开最近使用"))
         let recentItem = file.addItem(withTitle: L("打开最近使用"), action: nil, keyEquivalent: "")
         recentItem.submenu = recent
         recent.addItem(withTitle: L("清除菜单"), action: #selector(NSDocumentController.clearRecentDocuments(_:)), keyEquivalent: "")
         file.addItem(.separator())
-        file.addItem(withTitle: L("关闭"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        file.addItem(withTitle: L("关闭标签页"), action: #selector(WorkspaceWindowController.closeCurrentTab(_:)), keyEquivalent: "w")
+        let closeWindow = file.addItem(withTitle: L("关闭窗口"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        closeWindow.keyEquivalentModifierMask = [.command, .shift]
         file.addItem(withTitle: L("存储…"), action: #selector(NSDocument.save(_:)), keyEquivalent: "s")
         let saveAs = file.addItem(withTitle: L("存储为…"), action: #selector(NSDocument.saveAs(_:)), keyEquivalent: "S"); saveAs.keyEquivalentModifierMask = [.command, .shift]
         file.addItem(withTitle: L("复原到已存储版本"), action: #selector(NSDocument.revertToSaved(_:)), keyEquivalent: "")
@@ -80,12 +82,12 @@ enum MainMenu {
         edit.addItem(withTitle: L("剪切"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         edit.addItem(withTitle: L("拷贝"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         edit.addItem(withTitle: L("粘贴"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        let pastePlain = edit.addItem(withTitle: L("粘贴为纯文本"), action: #selector(DocumentWindowController.pasteAsPlainText(_:)), keyEquivalent: "V")
+        let pastePlain = edit.addItem(withTitle: L("粘贴为纯文本"), action: #selector(WorkspaceWindowController.pasteAsPlainText(_:)), keyEquivalent: "V")
         pastePlain.keyEquivalentModifierMask = [.command, .shift]
-        let copyMD = edit.addItem(withTitle: L("复制为 Markdown"), action: #selector(DocumentWindowController.copyAsMarkdown(_:)), keyEquivalent: "C")
+        let copyMD = edit.addItem(withTitle: L("复制为 Markdown"), action: #selector(WorkspaceWindowController.copyAsMarkdown(_:)), keyEquivalent: "C")
         copyMD.keyEquivalentModifierMask = [.command, .shift]
-        edit.addItem(withTitle: L("复制为 HTML"), action: #selector(DocumentWindowController.copyAsHTML(_:)), keyEquivalent: "")
-        edit.addItem(withTitle: L("复制为纯文本"), action: #selector(DocumentWindowController.copyAsPlainText(_:)), keyEquivalent: "")
+        edit.addItem(withTitle: L("复制为 HTML"), action: #selector(WorkspaceWindowController.copyAsHTML(_:)), keyEquivalent: "")
+        edit.addItem(withTitle: L("复制为纯文本"), action: #selector(WorkspaceWindowController.copyAsPlainText(_:)), keyEquivalent: "")
         edit.addItem(withTitle: L("全选"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         edit.addItem(.separator())
         let find = NSMenu(title: L("查找"))
@@ -113,49 +115,49 @@ enum MainMenu {
 
         // View
         let view = NSMenu(title: L("显示"))
-        let sidebar = view.addItem(withTitle: L("显示/隐藏侧栏"), action: #selector(DocumentWindowController.toggleSidebar(_:)), keyEquivalent: "s")
+        let sidebar = view.addItem(withTitle: L("显示/隐藏侧栏"), action: #selector(WorkspaceWindowController.toggleSidebar(_:)), keyEquivalent: "s")
         sidebar.keyEquivalentModifierMask = [.command, .option]
-        let reveal = view.addItem(withTitle: L("在侧栏中显示当前文件"), action: #selector(DocumentWindowController.revealInSidebar(_:)), keyEquivalent: "j")
+        let reveal = view.addItem(withTitle: L("在侧栏中显示当前文件"), action: #selector(WorkspaceWindowController.revealInSidebar(_:)), keyEquivalent: "j")
         reveal.keyEquivalentModifierMask = [.command, .shift]
-        let backItem = view.addItem(withTitle: L("后退"), action: #selector(DocumentWindowController.navigateBack(_:)), keyEquivalent: "\u{F702}")
+        let backItem = view.addItem(withTitle: L("后退"), action: #selector(WorkspaceWindowController.navigateBack(_:)), keyEquivalent: "\u{F702}")
         backItem.keyEquivalentModifierMask = [.command, .control]
-        let fwdItem = view.addItem(withTitle: L("前进"), action: #selector(DocumentWindowController.navigateForward(_:)), keyEquivalent: "\u{F703}")
+        let fwdItem = view.addItem(withTitle: L("前进"), action: #selector(WorkspaceWindowController.navigateForward(_:)), keyEquivalent: "\u{F703}")
         fwdItem.keyEquivalentModifierMask = [.command, .control]
-        let filt = view.addItem(withTitle: L("筛选侧栏文件…"), action: #selector(DocumentWindowController.focusSidebarFilter(_:)), keyEquivalent: "f")
+        let filt = view.addItem(withTitle: L("筛选侧栏文件…"), action: #selector(WorkspaceWindowController.focusSidebarFilter(_:)), keyEquivalent: "f")
         filt.keyEquivalentModifierMask = [.command, .option]
-        let gsearch = view.addItem(withTitle: L("全局搜索…"), action: #selector(DocumentWindowController.showGlobalSearch(_:)), keyEquivalent: "F")
+        let gsearch = view.addItem(withTitle: L("全局搜索…"), action: #selector(WorkspaceWindowController.showGlobalSearch(_:)), keyEquivalent: "F")
         gsearch.keyEquivalentModifierMask = [.command, .shift]
         view.addItem(.separator())
-        let layoutItem = view.addItem(withTitle: L("阅读版式…"), action: #selector(DocumentWindowController.showReadingLayout(_:)), keyEquivalent: "a")
+        let layoutItem = view.addItem(withTitle: L("阅读版式…"), action: #selector(WorkspaceWindowController.showReadingLayout(_:)), keyEquivalent: "a")
         layoutItem.keyEquivalentModifierMask = [.command, .option]
         view.addItem(.separator())
-        view.addItem(withTitle: L("阅读"), action: #selector(DocumentWindowController.setModeReader(_:)), keyEquivalent: "1")
-        view.addItem(withTitle: L("编辑"), action: #selector(DocumentWindowController.setModeEditor(_:)), keyEquivalent: "2")
-        view.addItem(withTitle: L("分栏"), action: #selector(DocumentWindowController.setModeSplit(_:)), keyEquivalent: "3")
-        view.addItem(withTitle: L("混合（实验）"), action: #selector(DocumentWindowController.setModeHybrid(_:)), keyEquivalent: "4")
+        view.addItem(withTitle: L("阅读"), action: #selector(WorkspaceWindowController.setModeReader(_:)), keyEquivalent: "1")
+        view.addItem(withTitle: L("编辑"), action: #selector(WorkspaceWindowController.setModeEditor(_:)), keyEquivalent: "2")
+        view.addItem(withTitle: L("分栏"), action: #selector(WorkspaceWindowController.setModeSplit(_:)), keyEquivalent: "3")
+        view.addItem(withTitle: L("混合（实验）"), action: #selector(WorkspaceWindowController.setModeHybrid(_:)), keyEquivalent: "4")
         view.addItem(.separator())
         // 专注：⌘D 循环 关闭 → 句子 → 段落 → 打字机；子菜单可直选
         let focus = NSMenu(title: L("专注"))
         for (title, mode) in [(L("关闭"), EditorFocusMode.off), (L("句子"), .sentence), (L("段落"), .paragraph), (L("打字机"), .typewriter)] {
-            let it = focus.addItem(withTitle: title, action: #selector(DocumentWindowController.setFocusMode(_:)), keyEquivalent: "")
+            let it = focus.addItem(withTitle: title, action: #selector(WorkspaceWindowController.setFocusMode(_:)), keyEquivalent: "")
             it.tag = mode.rawValue
         }
         let focusItem = view.addItem(withTitle: L("专注"), action: nil, keyEquivalent: "")
         focusItem.submenu = focus
-        view.addItem(withTitle: L("切换专注模式"), action: #selector(DocumentWindowController.cycleFocusMode(_:)), keyEquivalent: "d")
+        view.addItem(withTitle: L("切换专注模式"), action: #selector(WorkspaceWindowController.cycleFocusMode(_:)), keyEquivalent: "d")
         // 词性高亮：关闭 / 全部 / 名词 / 动词 / 形容词 / 副词 / 连词
         let pos = NSMenu(title: L("词性高亮"))
         for (title, mode) in [(L("关闭"), POSMode.off), (L("全部词性"), .all), (L("只看名词"), .nouns), (L("只看动词"), .verbs), (L("只看形容词"), .adjectives), (L("只看副词"), .adverbs), (L("只看连词 / 介词"), .conjunctions)] {
-            let it = pos.addItem(withTitle: title, action: #selector(DocumentWindowController.setPOSMode(_:)), keyEquivalent: "")
+            let it = pos.addItem(withTitle: title, action: #selector(WorkspaceWindowController.setPOSMode(_:)), keyEquivalent: "")
             it.tag = mode.rawValue
         }
         pos.addItem(.separator())
         pos.addItem(withTitle: L("（英 / 德 / 法 / 意 / 西 / 葡 / 俄 / 荷；中文暂不支持词性）"), action: nil, keyEquivalent: "")
         view.addItem(withTitle: L("词性高亮"), action: nil, keyEquivalent: "").submenu = pos
-        let sc = view.addItem(withTitle: L("文风检查"), action: #selector(DocumentWindowController.toggleStyleCheck(_:)), keyEquivalent: "D")
+        let sc = view.addItem(withTitle: L("文风检查"), action: #selector(WorkspaceWindowController.toggleStyleCheck(_:)), keyEquivalent: "D")
         sc.keyEquivalentModifierMask = [.command, .shift, .option]
         view.addItem(withTitle: L("编辑文风规则…"), action: #selector(Handler.openStyleRules(_:)), keyEquivalent: "").target = Handler.shared
-        let immersive = view.addItem(withTitle: L("沉浸写作"), action: #selector(DocumentWindowController.toggleImmersive(_:)), keyEquivalent: "D")
+        let immersive = view.addItem(withTitle: L("沉浸写作"), action: #selector(WorkspaceWindowController.toggleImmersive(_:)), keyEquivalent: "D")
         immersive.keyEquivalentModifierMask = [.command, .shift]
         view.addItem(.separator())
         view.addItem(withTitle: L("放大"), action: #selector(Handler.zoomIn(_:)), keyEquivalent: "+").target = Handler.shared
@@ -181,12 +183,12 @@ enum MainMenu {
         window.addItem(withTitle: L("最小化"), action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         window.addItem(withTitle: L("缩放"), action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         window.addItem(.separator())
-        let nextTab = window.addItem(withTitle: L("下一个标签页"), action: #selector(DocumentWindowController.selectNextTab(_:)), keyEquivalent: "]")
+        let nextTab = window.addItem(withTitle: L("下一个标签页"), action: #selector(WorkspaceWindowController.selectNextTab(_:)), keyEquivalent: "]")
         nextTab.keyEquivalentModifierMask = [.command, .shift]
-        let prevTab = window.addItem(withTitle: L("上一个标签页"), action: #selector(DocumentWindowController.selectPreviousTab(_:)), keyEquivalent: "[")
+        let prevTab = window.addItem(withTitle: L("上一个标签页"), action: #selector(WorkspaceWindowController.selectPreviousTab(_:)), keyEquivalent: "[")
         prevTab.keyEquivalentModifierMask = [.command, .shift]
-        window.addItem(withTitle: L("把标签页移到新窗口"), action: #selector(DocumentWindowController.moveTabToNewWindow(_:)), keyEquivalent: "")
-        window.addItem(withTitle: L("合并所有窗口"), action: #selector(DocumentWindowController.mergeAllWindows(_:)), keyEquivalent: "")
+        window.addItem(withTitle: L("把标签页移到新窗口"), action: #selector(WorkspaceWindowController.moveTabToNewWindow(_:)), keyEquivalent: "")
+        window.addItem(withTitle: L("合并所有窗口"), action: #selector(WorkspaceWindowController.mergeAllWindows(_:)), keyEquivalent: "")
         window.addItem(.separator())
         window.addItem(withTitle: L("前置全部窗口"), action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         main.addItem(withTitle: L("窗口"), action: nil, keyEquivalent: "").submenu = window
@@ -284,7 +286,7 @@ enum MainMenu {
     }
     @objc func showPreferences(_ sender: Any?) { PreferencesWindowController.shared.show() }
         @objc func exportHTML(_ sender: Any?) {
-            guard let doc = NSDocumentController.shared.currentDocument as? MarkdownDocument, let w = doc.windowControllers.first?.window else { return }
+            guard let doc = NSDocumentController.shared.currentDocument as? MarkdownDocument, let w = doc.windowForSheet else { return }
             Exporter.exportHTML(document: doc, from: w)
         }
         @objc func exportImage(_ sender: Any?) {
@@ -297,7 +299,7 @@ enum MainMenu {
         }
         @objc func importPandoc(_ sender: Any?) { PandocBridge.importDocument() }
         @objc func exportPDF(_ sender: Any?) {
-            guard let doc = NSDocumentController.shared.currentDocument as? MarkdownDocument, let w = doc.windowControllers.first?.window else { return }
+            guard let doc = NSDocumentController.shared.currentDocument as? MarkdownDocument, let w = doc.windowForSheet else { return }
             Exporter.exportPDF(document: doc, from: w)
         }
         @objc func openHomepage(_ sender: Any?) { NSWorkspace.shared.open(URL(string: "https://github.com/chaoyi-ai/Quire")!) }

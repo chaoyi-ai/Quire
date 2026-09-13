@@ -36,17 +36,76 @@ final class QuireDocumentController: NSDocumentController {
         return super.runModalOpenPanel(openPanel, forTypes: types)
     }
 
-    /// 文件夹走 `openFolder`，其余照常（打开面板、Dock 拖放、`open -a`、服务菜单都经这里）
+    // MARK: - 打开到哪个工作区（docs/research/window-chrome.md §3）
+
+    /// 一次打开的去向：指定的工作区（nil = 新窗口，根目录 `newWindowRoot`）；`ephemeral` = 侧栏单击的临时标签
+    struct OpenTarget {
+        weak var workspace: WorkspaceWindowController?
+        var newWindowRoot: URL?
+        var ephemeral = false
+    }
+    /// 按文件路径登记的去向：NSDocumentController 读文件是异步的，makeWindowControllers 时按 fileURL 取
+    private var pendingTargets: [String: OpenTarget] = [:]
+    /// 未命名文档的去向（新建 / 空文件夹）
+    private var pendingUntitled: OpenTarget?
+
+    private static func key(_ url: URL) -> String { url.standardizedFileURL.path }
+
+    /// makeWindowControllers 取走登记的去向；没登记（Apple 事件、恢复……）就按 key 工作区推断
+    func takeTarget(for doc: MarkdownDocument) -> OpenTarget {
+        if let url = doc.fileURL {
+            if let t = pendingTargets.removeValue(forKey: Self.key(url)) { return t }
+            return OpenTarget(workspace: Self.workspace(for: url))
+        }
+        if let t = pendingUntitled { pendingUntitled = nil; return t }
+        return OpenTarget(workspace: WorkspaceWindowController.key)
+    }
+
+    /// 文件该进哪个工作区：key 工作区在根内（或它还没有根）→ 它；别的工作区在根内 → 那个；都不是 → nil（新窗口）
+    static func workspace(for url: URL) -> WorkspaceWindowController? {
+        let all = WorkspaceWindowController.all
+        let key = WorkspaceWindowController.key
+        if let key, key.contains(url) { return key }
+        if let ws = all.first(where: { $0.contains(url) }) { return ws }
+        return key?.rootURL == nil ? key : nil
+    }
+
+    /// 在指定工作区里打开（侧栏 / 链接 / 恢复）；`workspace` nil = 按 `workspace(for:)` 推断
+    func open(_ url: URL, in workspace: WorkspaceWindowController?, ephemeral: Bool, newWindowRoot: URL? = nil, completion: @escaping @MainActor (MarkdownDocument?) -> Void) {
+        pendingTargets[Self.key(url)] = OpenTarget(workspace: workspace ?? Self.workspace(for: url), newWindowRoot: newWindowRoot, ephemeral: ephemeral)
+        openDocument(withContentsOf: url, display: true) { doc, _, error in
+            if let error { NSApp.presentError(error) }
+            completion(doc as? MarkdownDocument)
+        }
+    }
+
+    /// 文件夹走 `openFolder`；已经开着的文档切到它的标签；其余照常（打开面板、Dock 拖放、`open -a`、服务菜单都经这里）
     override func openDocument(withContentsOf url: URL, display displayDocument: Bool, completionHandler: @escaping (NSDocument?, Bool, (any Error)?) -> Void) {
         var isDir: ObjCBool = false
         if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
             openFolder(url, completionHandler: completionHandler)
             return
         }
-        super.openDocument(withContentsOf: url, display: displayDocument, completionHandler: completionHandler)
+        if let doc = document(for: url) as? MarkdownDocument, let ws = doc.workspace, let tab = ws.tab(for: doc) {
+            pendingTargets[Self.key(url)] = nil
+            if displayDocument { ws.select(tab); ws.showWindow(nil) }
+            completionHandler(doc, true, nil)
+            return
+        }
+        let k = Self.key(url)
+        super.openDocument(withContentsOf: url, display: displayDocument) { [weak self] doc, already, error in
+            self?.pendingTargets[k] = nil
+            completionHandler(doc, already, error)
+        }
     }
 
-    /// 打开文件夹：优先 README.md / index.md，否则第一个 Markdown；都没有就新建一篇并把侧栏根设为该文件夹
+    /// ⌘N / 标签条 +：新文档进 key 工作区（没有窗口就新开一个）
+    override func newDocument(_ sender: Any?) {
+        pendingUntitled = OpenTarget(workspace: WorkspaceWindowController.key)
+        super.newDocument(sender)
+    }
+
+    /// 打开文件夹 = 新开一个工作区窗口：优先 README.md / index.md，否则第一个 Markdown；都没有就新建一篇
     func openFolder(_ folder: URL, completionHandler: ((NSDocument?, Bool, (any Error)?) -> Void)? = nil) {
         let fm = FileManager.default
         let items: [URL]
@@ -55,20 +114,30 @@ final class QuireDocumentController: NSDocumentController {
         let mds = items.filter { Self.markdownExtensions.contains($0.pathExtension.lowercased()) && ((try? $0.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile ?? false) }
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
         let preferred = mds.first { ["readme.md", "index.md", "readme.markdown"].contains($0.lastPathComponent.lowercased()) } ?? mds.first
-        let setRoot: (NSDocument?) -> Void = { doc in
-            (doc?.windowControllers.first as? DocumentWindowController)?.sidebarViewController.setRoot(folder)
+        // 同一个根已经开着一个工作区：不再开一个，切过去
+        if let ws = WorkspaceWindowController.all.first(where: { $0.rootURL?.standardizedFileURL == folder.standardizedFileURL }) {
+            ws.showWindow(nil)
+            completionHandler?(ws.markdownDocument, true, nil)
+            return
         }
         if let preferred {
-            super.openDocument(withContentsOf: preferred, display: true) { doc, already, error in
-                setRoot(doc)
+            if let doc = document(for: preferred) as? MarkdownDocument, let ws = doc.workspace, let tab = ws.tab(for: doc) {
+                // 文件已在别的工作区里开着：拆到新窗口
+                if ws.tabs.count > 1 { ws.detach(tab); WorkspaceWindowController(document: doc, root: folder).showWindow(nil) }
+                else { ws.sidebarViewController.setRoot(folder); ws.showWindow(nil) }
+                completionHandler?(doc, true, nil); return
+            }
+            pendingTargets[Self.key(preferred)] = OpenTarget(workspace: nil, newWindowRoot: folder)
+            super.openDocument(withContentsOf: preferred, display: true) { [weak self] doc, already, error in
+                self?.pendingTargets[Self.key(preferred)] = nil
                 completionHandler?(doc, already, error)
             }
         } else {
             do {
+                pendingUntitled = OpenTarget(workspace: nil, newWindowRoot: folder)
                 let doc = try openUntitledDocumentAndDisplay(true)
-                setRoot(doc)
                 completionHandler?(doc, false, nil)
-            } catch { completionHandler?(nil, false, error) }
+            } catch { pendingUntitled = nil; completionHandler?(nil, false, error) }
         }
     }
 }
@@ -90,6 +159,12 @@ final class MarkdownDocument: NSDocument {
     nonisolated(unsafe) var authorshipMismatch = false
     /// 下一次粘贴用的作者（"以作者粘贴"一次性覆盖）
     var nextPasteAuthor: String?
+    /// 所在的工作区窗口（文档是它的一个标签）。窗口控制器只挂在当前标签的文档上，所以不能靠 windowControllers 找窗口
+    @MainActor weak var workspace: WorkspaceWindowController?
+    /// 这份文档那个标签的阅读视图（导出 / 打印用）
+    @MainActor var readerViewController: ReaderViewController? { workspace?.tab(for: self)?.reader }
+    /// 脏标记变化（标签条上的圆点、临时标签固定）
+    static let editedStateDidChange = Notification.Name("com.korako.quire.documentEditedStateDidChange")
 
     override class var autosavesInPlace: Bool { true }
     override class var readableTypes: [String] { [QuireDocumentController.markdownType, "public.plain-text", "public.text"] }
@@ -102,10 +177,36 @@ final class MarkdownDocument: NSDocument {
         LaunchClock.mark("document init")
     }
 
+    /// 不再一份文档一个窗口：按登记的去向进某个工作区当标签，或新开一个工作区窗口
     override func makeWindowControllers() {
         LaunchClock.mark("makeWindowControllers begin")
-        addWindowController(DocumentWindowController(document: self))
+        let target = (NSDocumentController.shared as! QuireDocumentController).takeTarget(for: self)
+        if let ws = target.workspace, ws.window != nil { ws.addTab(self, ephemeral: target.ephemeral) }
+        else { _ = WorkspaceWindowController(document: self, root: target.newWindowRoot ?? fileURL?.deletingLastPathComponent()) }
         LaunchClock.mark("makeWindowControllers end")
+    }
+
+    /// 关闭：先把标签从工作区摘掉（不是最后一个标签时窗口不关）
+    override func close() {
+        MainActor.assumeIsolated { workspace?.documentWillClose(self) }
+        super.close()
+    }
+
+    /// 关闭前的询问：切到这份文档的标签，sheet 才有窗口可挂（否则退回 app 级模态）
+    override func canClose(withDelegate delegate: Any, shouldClose shouldCloseSelector: Selector?, contextInfo: UnsafeMutableRawPointer?) {
+        MainActor.assumeIsolated { if let ws = workspace, let t = ws.tab(for: self), ws.current !== t { ws.select(t) } }
+        super.canClose(withDelegate: delegate, shouldClose: shouldCloseSelector, contextInfo: contextInfo)
+    }
+
+    override func updateChangeCount(_ change: NSDocument.ChangeType) {
+        let was = isDocumentEdited
+        super.updateChangeCount(change)
+        if was != isDocumentEdited { NotificationCenter.default.post(name: Self.editedStateDidChange, object: self) }
+    }
+    override func updateChangeCount(withToken changeCountToken: Any, for saveOperation: NSDocument.SaveOperationType) {
+        let was = isDocumentEdited
+        super.updateChangeCount(withToken: changeCountToken, for: saveOperation)
+        if was != isDocumentEdited { NotificationCenter.default.post(name: Self.editedStateDidChange, object: self) }
     }
 
     override func fileNameExtension(forType typeName: String, saveOperation: NSDocument.SaveOperationType) -> String? { "md" }
@@ -127,7 +228,7 @@ final class MarkdownDocument: NSDocument {
         LaunchClock.mark("file read (\(data.count) bytes)")
         MainActor.assumeIsolated {
             session.sourceDidChange(src, reason: .opened)
-            (windowControllers.first as? DocumentWindowController)?.documentDidReload(src)
+            workspace?.documentDidReload(self, src)
         }
     }
 
@@ -204,7 +305,7 @@ final class MarkdownDocument: NSDocument {
         if var a = authorship, !a.spans.isEmpty { a.realign(from: source, to: text, author: nil); authorship = a }   // 程序化改动：无归属
         source = text
         session.sourceDidChange(text, reason: .externalChange)
-        (windowControllers.first as? DocumentWindowController)?.documentDidReload(text)
+        workspace?.documentDidReload(self, text)
         updateChangeCount(.changeDone)
     }
 
@@ -242,8 +343,8 @@ final class MarkdownDocument: NSDocument {
         conflictPromptedContent = nil
         MainActor.assumeIsolated {
             session.sourceDidChange(s, reason: .externalChange)
-            (windowControllers.first as? DocumentWindowController)?.documentDidReload(s)
-            (windowControllers.first as? DocumentWindowController)?.noteAuthorshipMismatchIfNeeded()
+            workspace?.documentDidReload(self, s)
+            if workspace?.current?.document === self { workspace?.noteAuthorshipMismatchIfNeeded() }
         }
     }
 
@@ -269,14 +370,14 @@ final class MarkdownDocument: NSDocument {
     /// `printOperation(withSettings:)` 是同步 API，等不了加载
     private var preparedPrintView: ReaderTextView?
     override func print(withSettings printSettings: [NSPrintInfo.AttributeKey: Any], showPrintPanel: Bool, delegate: Any?, didPrint didPrintSelector: Selector?, contextInfo: UnsafeMutableRawPointer?) {
-        guard let wc = windowControllers.first as? DocumentWindowController else { return }
+        guard let reader = readerViewController else { return }
         let ctx = UncheckedSendableBox(contextInfo)
         let del = UncheckedSendableBox(delegate)
         Task { @MainActor in
             let info = NSPrintInfo(dictionary: printSettings)
             let layout = PDFLayout.load()
             layout.configure(info, forPrintPanel: true)
-            preparedPrintView = await wc.readerViewController.printableView(width: info.paperSize.width - info.leftMargin - info.rightMargin, layout: layout, document: self)
+            preparedPrintView = await reader.printableView(width: info.paperSize.width - info.leftMargin - info.rightMargin, layout: layout, document: self)
             super.print(withSettings: printSettings, showPrintPanel: showPrintPanel, delegate: del.value, didPrint: didPrintSelector, contextInfo: ctx.value)
         }
     }

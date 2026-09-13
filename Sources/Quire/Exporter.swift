@@ -28,7 +28,6 @@ enum Exporter {
     }
 
     static func exportPDF(document: MarkdownDocument, from window: NSWindow) {
-        guard let wc = document.windowControllers.first as? DocumentWindowController else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.pdf]
         panel.nameFieldStringValue = (document.fileURL?.deletingPathExtension().lastPathComponent ?? "Untitled") + ".pdf"
@@ -39,7 +38,7 @@ enum Exporter {
             guard resp == .OK, let url = panel.url else { return }
             model.layout.save()
             Task { @MainActor in
-                if await !writePDF(document: document, windowController: wc, to: url, layout: model.layout) { presentExportFailure(url) }
+                if await !writePDF(document: document, to: url, layout: model.layout) { presentExportFailure(url) }
             }
         }
     }
@@ -50,13 +49,14 @@ enum Exporter {
 
     /// 直接写 PDF（分页；纸张 / 边距 / 页眉页脚按 `layout`，默认读记住的设置）。先把图片 / Mermaid 都加载完再打印
     @discardableResult
-    static func writePDF(document: MarkdownDocument, windowController wc: DocumentWindowController, to url: URL, layout: PDFLayout? = nil) async -> Bool {
+    static func writePDF(document: MarkdownDocument, to url: URL, layout: PDFLayout? = nil) async -> Bool {
+        guard let reader = document.readerViewController else { return false }
         let layout = layout ?? PDFLayout.load()
         let info = NSPrintInfo.shared.copy() as! NSPrintInfo
         info.jobDisposition = .save
         info.dictionary()[NSPrintInfo.AttributeKey.jobSavingURL] = url
         layout.configure(info, forPrintPanel: false)
-        let view = await wc.readerViewController.printableView(width: info.paperSize.width - info.leftMargin - info.rightMargin, layout: layout, document: document)
+        let view = await reader.printableView(width: info.paperSize.width - info.leftMargin - info.rightMargin, layout: layout, document: document)
         let op = NSPrintOperation(view: view, printInfo: info)
         op.showsPrintPanel = false
         op.showsProgressPanel = false
@@ -91,7 +91,6 @@ enum Exporter {
 
     /// 导出为图片：整页 PNG（2×），超长时按高度上限截断并提示
     static func exportImage(document: MarkdownDocument, from window: NSWindow) {
-        guard let wc = document.windowControllers.first as? DocumentWindowController else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
         panel.nameFieldStringValue = (document.fileURL?.deletingPathExtension().lastPathComponent ?? "Untitled") + ".png"
@@ -99,21 +98,22 @@ enum Exporter {
         panel.beginSheetModal(for: window) { resp in
             guard resp == .OK, let url = panel.url else { return }
             Task { @MainActor in
-                if await !writeImage(document: document, windowController: wc, to: url) { presentExportFailure(url) }
+                if await !writeImage(document: document, to: url) { presentExportFailure(url) }
             }
         }
     }
 
     @discardableResult
-    static func writeImage(document: MarkdownDocument, windowController wc: DocumentWindowController, to url: URL) async -> Bool {
+    static func writeImage(document: MarkdownDocument, to url: URL) async -> Bool {
+        guard let reader = document.readerViewController else { return false }
         do {
             let width: CGFloat = 800
-            let view = await wc.readerViewController.printableView(width: width - 48)
+            let view = await reader.printableView(width: width - 48)
             let maxH: CGFloat = 16_000
             let contentH = min(view.frame.height, maxH)
             let container = NSView(frame: NSRect(x: 0, y: 0, width: width, height: contentH + 48))
             container.wantsLayer = true
-            container.layer?.backgroundColor = wc.session.style.background.cgColor
+            container.layer?.backgroundColor = document.session.style.background.cgColor
             view.frame = NSRect(x: 24, y: 24, width: width - 48, height: contentH)
             container.addSubview(view)
             // 2×

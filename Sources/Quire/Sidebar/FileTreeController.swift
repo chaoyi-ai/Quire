@@ -64,7 +64,8 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
     var root: URL? { didSet { if root?.standardizedFileURL != oldValue?.standardizedFileURL { rootDidChange() } } }
     var currentURL: URL? { didSet { if currentURL != oldValue { currentDidChange() } } }
     /// 打开文件（行号：搜索命中 / 其他文件的标题）
-    var onOpenFile: ((URL, Int?) -> Void)?
+    /// 打开文件（url, 行, 固定）：单击 = 临时标签；双击 / 新建 = 固定标签
+    var onOpenFile: ((URL, Int?, Bool) -> Void)?
     /// 当前文档的标题被点：跳转
     var onSelectHeading: ((Outline.Entry) -> Void)?
     /// 当前文档的大纲（解析结果）：挂在它的文件节点下面——文件树里能直接看到并跳转章节，这是 Quire 的特色
@@ -571,7 +572,7 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         let url = Self.uniqueURL(in: dir, base: L("未命名"), ext: "md")
         do { try Data().write(to: url) } catch { NSApp.presentError(error); return }
         pendingRename = url   // 目录变化重列后进入重命名
-        onOpenFile?(url, nil)
+        onOpenFile?(url, nil, true)
     }
 
     func newFolder() {
@@ -682,23 +683,23 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         let row = outlineView.clickedRow
         guard row >= 0, let node = outlineView.item(atRow: row) as? SidebarNode else { return }
         if node.kind == .folder { outlineView.isItemExpanded(node) ? outlineView.collapseItem(node) : outlineView.expandItem(node) }
-        else { activate(node) }
+        else { activate(node, pinned: true) }   // 双击 = 固定标签
     }
 
-    private func activate(_ node: SidebarNode) {
+    private func activate(_ node: SidebarNode, pinned: Bool = false) {
         let now = ProcessInfo.processInfo.systemUptime
-        if let last = lastActivation, last.0 == ObjectIdentifier(node), now - last.1 < 0.1 { return }   // action 与 selectionDidChange 会连着来
+        if !pinned, let last = lastActivation, last.0 == ObjectIdentifier(node), now - last.1 < 0.1 { return }   // action 与 selectionDidChange 会连着来
         lastActivation = (ObjectIdentifier(node), now)
         switch node.kind {
-        case .hit: if let url = node.parent?.url { onOpenFile?(url, node.line) }
+        case .hit: if let url = node.parent?.url { onOpenFile?(url, node.line, pinned) }
         case .heading:
             if let file = fileNode(of: node), file === currentFileNode, let bi = node.blockIndex {
                 onSelectHeading?(Outline.Entry(id: "", level: node.level, title: node.name, blockIndex: bi, line: node.line))
-            } else if let url = node.url { onOpenFile?(url, node.line) }
+            } else if let url = node.url { onOpenFile?(url, node.line, pinned) }
         case .file:
             guard let url = node.url else { return }
             if !node.isMarkdown { NSWorkspace.shared.open(url); return }   // 非 Markdown：交给默认 App
-            if url.standardizedFileURL != currentURL?.standardizedFileURL { onOpenFile?(url, nil) }
+            if pinned || url.standardizedFileURL != currentURL?.standardizedFileURL { onOpenFile?(url, nil, pinned) }
         case .folder, .note: break
         }
     }
