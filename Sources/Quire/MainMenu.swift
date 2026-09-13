@@ -181,6 +181,13 @@ enum MainMenu {
         window.addItem(withTitle: L("最小化"), action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         window.addItem(withTitle: L("缩放"), action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         window.addItem(.separator())
+        let nextTab = window.addItem(withTitle: L("下一个标签页"), action: #selector(DocumentWindowController.selectNextTab(_:)), keyEquivalent: "]")
+        nextTab.keyEquivalentModifierMask = [.command, .shift]
+        let prevTab = window.addItem(withTitle: L("上一个标签页"), action: #selector(DocumentWindowController.selectPreviousTab(_:)), keyEquivalent: "[")
+        prevTab.keyEquivalentModifierMask = [.command, .shift]
+        window.addItem(withTitle: L("把标签页移到新窗口"), action: #selector(DocumentWindowController.moveTabToNewWindow(_:)), keyEquivalent: "")
+        window.addItem(withTitle: L("合并所有窗口"), action: #selector(DocumentWindowController.mergeAllWindows(_:)), keyEquivalent: "")
+        window.addItem(.separator())
         window.addItem(withTitle: L("前置全部窗口"), action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         main.addItem(withTitle: L("窗口"), action: nil, keyEquivalent: "").submenu = window
         NSApp.windowsMenu = window

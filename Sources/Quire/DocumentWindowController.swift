@@ -15,6 +15,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     private let splitViewController = NSSplitViewController()
     private let themedSplitView = ThemedSplitView()
     private let chromeBand = ChromeBandView()
+    private let tabStrip = TabStripController()
     /// 正文区：编辑器 + 阅读视图放在一个经典 NSSplitView 里（不用 NSSplitViewController：那套用约束握着窗格宽度，
     /// setPosition 不生效、给窗格加宽度约束会把窗口撑大，每种启动模式分出来的宽度都不一样）。折叠 = 隐藏子视图
     private let contentSplit = NSSplitView()
@@ -43,7 +44,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                               backing: .buffered, defer: false)
         window.minSize = NSSize(width: 520, height: 320)
-        window.tabbingMode = .preferred
+        window.tabbingMode = .disallowed   // 标签页自己做（TabGroups），不用系统标签组
         window.isReleasedWhenClosed = false
         super.init(window: window)
         LaunchClock.mark("  wc: window")
@@ -100,6 +101,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         // 在侧栏浮板的右缘被硬生生切断，看起来像侧栏压着标题栏
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
+        window.addTitlebarAccessoryViewController(tabStrip)
         // 工具栏行的铬色底（见 ChromeBandView）
         chromeBand.wantsLayer = true
         chromeBand.autoresizingMask = [.width, .minYMargin]
@@ -200,8 +202,12 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
 
     override func showWindow(_ sender: Any?) {
         LaunchClock.mark("showWindow")
+        let target = TabGroups.shared.currentTarget
         super.showWindow(sender)
         LaunchClock.mark("window shown")
+        // 新窗口并进当前（key）文档窗口所在的标签组；没有就自己一组
+        if let window, TabGroups.shared.group(of: window) == nil { TabGroups.shared.add(window, joining: target === window ? nil : target) }
+        tabStrip.refresh()
         markdownDocument?.session.startWatching()
         // 焦点给正文，不给侧栏筛选框（否则一打开光标就在筛选框里、方向键滚不了文档）
         if mode == .editor || mode == .split { window?.makeFirstResponder(editorViewController.textView) }
@@ -242,7 +248,23 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
 
     func windowWillClose(_ notification: Notification) {
         markdownDocument?.session.stopWatching()
+        if let window { TabGroups.shared.remove(window) }
     }
+    func windowDidMove(_ notification: Notification) { if let window { TabGroups.shared.frameDidChange(window) } }
+    func windowDidResize(_ notification: Notification) { if let window { TabGroups.shared.frameDidChange(window) } }
+    /// 状态恢复出来的窗口不走 showWindow：第一次成为 key 时并进组
+    func windowDidBecomeKey(_ notification: Notification) {
+        guard let window, TabGroups.shared.group(of: window) == nil else { return }
+        let others = TabGroups.shared.groups.first?.selected
+        TabGroups.shared.add(window, joining: others)
+        tabStrip.refresh()
+    }
+
+    // MARK: - 标签页（窗口菜单）
+    @objc func selectNextTab(_ sender: Any?) { if let window { TabGroups.shared.selectNext(from: window, offset: 1) } }
+    @objc func selectPreviousTab(_ sender: Any?) { if let window { TabGroups.shared.selectNext(from: window, offset: -1) } }
+    @objc func moveTabToNewWindow(_ sender: Any?) { if let window { TabGroups.shared.detach(window) } }
+    @objc func mergeAllWindows(_ sender: Any?) { if let window { TabGroups.shared.mergeAll(into: window) } }
 
     deinit {
         if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
@@ -267,19 +289,8 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     /// 在窗口显示前读它会给窗口造一个自己的标签组，之后打开的文档就各开各的窗口，再也合不成标签
     private func layoutChromeBand() {
         guard let window, let content = window.contentView else { return }
-        let total = content.bounds.height - window.contentLayoutRect.maxY
-        var tabBar: CGFloat = 0
-        if (window.tabbedWindows?.count ?? 0) > 1 {
-            tabBar = 28
-            if let frame = window.contentView?.superview?.subviews.compactMap({ Self.findAccessoryClip(in: $0) }).first { tabBar = frame.height }
-        }
-        let h = max(0, total - tabBar)
+        let h = max(0, content.bounds.height - window.contentLayoutRect.maxY)   // 整个标题栏（工具栏行 + 标签条）
         chromeBand.frame = NSRect(x: 0, y: content.bounds.height - h, width: content.bounds.width, height: h)
-    }
-    private static func findAccessoryClip(in v: NSView) -> NSRect? {
-        if String(describing: type(of: v)) == "NSTitlebarAccessoryClipView" { return v.frame }
-        for s in v.subviews { if let r = findAccessoryClip(in: s) { return r } }
-        return nil
     }
     nonisolated(unsafe) private var chromeObservers: [NSObjectProtocol] = []
     private func observeChromeLayout() {
@@ -396,14 +407,13 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         guard let window else { return }
         let sidebarCollapsed = splitViewController.splitViewItems.first?.isCollapsed ?? false
         let wasFull = window.styleMask.contains(.fullScreen)
-        let tabBarVisible = window.tabGroup?.isTabBarVisible ?? false
         immersiveSaved = ImmersiveSaved(mode: mode, sidebarCollapsed: sidebarCollapsed, toolbarVisible: window.toolbar?.isVisible ?? true,
                                         rulers: editorAdded ? editorViewController.scrollView.rulersVisible : Preferences.shared.editorLineNumbers,
-                                        wordCountHidden: wordCount.isHidden, enteredFullScreen: !wasFull, hidTabBar: tabBarVisible)
+                                        wordCountHidden: wordCount.isHidden, enteredFullScreen: !wasFull, hidTabBar: false)
         mode = .editor
         if !sidebarCollapsed { setSidebarCollapsed(true, animated: false) }
         window.toolbar?.isVisible = false
-        if tabBarVisible { window.toggleTabBar(nil) }
+        tabStrip.suppressed = true
         editorViewController.scrollView.rulersVisible = false
         wordCount.isHidden = true
         editorViewController.textView.immersiveWidth = session.style.maxContentWidth
@@ -422,7 +432,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         editorViewController.scrollView.rulersVisible = saved.rulers
         wordCount.isHidden = saved.wordCountHidden
         window.toolbar?.isVisible = saved.toolbarVisible
-        if saved.hidTabBar, window.tabGroup?.isTabBarVisible == false { window.toggleTabBar(nil) }
+        tabStrip.suppressed = false
         if !saved.sidebarCollapsed, isSidebarCollapsed { setSidebarCollapsed(false, animated: false) }
         mode = saved.mode
         if restoreFullScreen, saved.enteredFullScreen, window.styleMask.contains(.fullScreen) { window.toggleFullScreen(nil) }
