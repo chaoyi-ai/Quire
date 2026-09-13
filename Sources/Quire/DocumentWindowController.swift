@@ -14,6 +14,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
     private var fileURLObserver: NSKeyValueObservation?
     private let splitViewController = NSSplitViewController()
     private let themedSplitView = ThemedSplitView()
+    private let chromeBand = ChromeBandView()
     /// 正文区：编辑器 + 阅读视图放在一个经典 NSSplitView 里（不用 NSSplitViewController：那套用约束握着窗格宽度，
     /// setPosition 不生效、给窗格加宽度约束会把窗口撑大，每种启动模式分出来的宽度都不一样）。折叠 = 隐藏子视图
     private let contentSplit = NSSplitView()
@@ -99,6 +100,12 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         // 在侧栏浮板的右缘被硬生生切断，看起来像侧栏压着标题栏
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
+        // 工具栏行的铬色底（见 ChromeBandView）
+        chromeBand.wantsLayer = true
+        chromeBand.autoresizingMask = [.width, .minYMargin]
+        window.contentView?.addSubview(chromeBand, positioned: .above, relativeTo: nil)
+        layoutChromeBand()
+        observeChromeLayout()
         // 窗口底色 = 主题背景（标题栏 / 工具栏区透出来的就是它），主题一变就跟。放在这里而不是 showWindow：
         // 状态恢复 / 标签页合并出来的窗口不一定走 showWindow，那样窗口会一直是系统灰，切主题也不跟
         applyWindowBackground()
@@ -242,6 +249,7 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         if let prefsObserver { NotificationCenter.default.removeObserver(prefsObserver) }
         if let selectionObserver { NotificationCenter.default.removeObserver(selectionObserver) }
         if let sidebarResizeObserver { NotificationCenter.default.removeObserver(sidebarResizeObserver) }
+        chromeObservers.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
     /// 窗口自己的背景也用主题色：macOS 26 的侧栏是一块带圆角、向内缩进的浮板，浮板外面那圈（圆角外侧、左边和底部的缝）
@@ -251,6 +259,36 @@ final class DocumentWindowController: NSWindowController, NSToolbarDelegate, NSW
         window?.backgroundColor = ThemeManager.shared.currentStyle.background
         themedSplitView.dividerTint = ThemeManager.shared.currentStyle.border
         themedSplitView.needsDisplay = true
+        chromeBand.layer?.backgroundColor = ChromeColors.elevated(ThemeManager.shared.currentStyle.background).cgColor
+    }
+
+    /// 工具栏行的高度 = 标题栏总高 − 系统标签栏（显示时）。标签栏的高度从标题栏里它的 clip view 读（私有类名，只读；读不到按 28）。
+    /// 判断有没有标签栏用 tabbedWindows（多于一个标签就一定显示，系统不允许藏）——**不要碰 window.tabGroup**：
+    /// 在窗口显示前读它会给窗口造一个自己的标签组，之后打开的文档就各开各的窗口，再也合不成标签
+    private func layoutChromeBand() {
+        guard let window, let content = window.contentView else { return }
+        let total = content.bounds.height - window.contentLayoutRect.maxY
+        var tabBar: CGFloat = 0
+        if (window.tabbedWindows?.count ?? 0) > 1 {
+            tabBar = 28
+            if let frame = window.contentView?.superview?.subviews.compactMap({ Self.findAccessoryClip(in: $0) }).first { tabBar = frame.height }
+        }
+        let h = max(0, total - tabBar)
+        chromeBand.frame = NSRect(x: 0, y: content.bounds.height - h, width: content.bounds.width, height: h)
+    }
+    private static func findAccessoryClip(in v: NSView) -> NSRect? {
+        if String(describing: type(of: v)) == "NSTitlebarAccessoryClipView" { return v.frame }
+        for s in v.subviews { if let r = findAccessoryClip(in: s) { return r } }
+        return nil
+    }
+    nonisolated(unsafe) private var chromeObservers: [NSObjectProtocol] = []
+    private func observeChromeLayout() {
+        // 标签栏的出现 / 消失没有专门通知：新标签会成为 key 窗口、关掉的会 willClose——这两个够了；窗口尺寸变了也重排
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.willCloseNotification, NSWindow.didResizeNotification] {
+            chromeObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { DispatchQueue.main.async { self?.layoutChromeBand() } }
+            })
+        }
     }
 
     /// 侧栏折叠 / 展开（普通 split item 不能用 NSSplitViewController.toggleSidebar，那只认 .sidebar 行为的项）

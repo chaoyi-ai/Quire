@@ -260,11 +260,14 @@ enum Block: Hashable {
 
 **一切铬色都从主题背景推导，不用任何系统材质色。** 这样切主题时铬和正文永远同步，不会出现灰带、硬缝或"侧栏压标题"。
 
+**铬是一整块（0.9.1）**：工具栏行、系统标签栏、侧栏用同一个"抬高一级"的色调，正文是主题背景色。系统标签栏是唯一改不了颜色的系统件——它在窗口底色上叠约 9.5% 黑（浅色）/ 8% 白（深色），所以这个"一级"就按它校准（`ChromeColors.elevated`，sRGB 线性合成），标签栏一出现自然落在同一色阶；标签栏底下必须是主题背景色（侧栏的铬色从安全区之下才开始），否则它一边深一边浅。工具栏行由 `ChromeBandView` 铺色（标题栏透明，本来透出的是正文色）。
+
 | 部件 | 颜色 | 说明 |
 |---|---|---|
 | 窗口背景（`window.backgroundColor`） | = 主题 `background` | 透明标题栏 / 工具栏区透出来的就是它 |
-| 侧栏 | 主题背景 深色提亮 6% / 浅色压暗 3%，**不透明**；贴窗口左缘、全高 | 普通 split item（ADR-17），与正文之间是 1 pt 主题 `border` 色分隔线（`ThemedSplitView.drawDivider`） |
-| 标题栏 / 工具栏 | 透明（`titlebarAppearsTransparent`，无分隔线） | 所以看到的就是窗口背景；图标按钮不带底座，只保留模式分段控件的胶囊 |
+| 侧栏 | `ChromeColors.elevated(背景)`，**不透明**；贴窗口左缘，铬色从安全区之下开始（标题栏 / 标签栏底下是主题背景色） | 普通 split item（ADR-17），与正文之间是 1 pt 主题 `border` 色分隔线（`ThemedSplitView.drawDivider`） |
+| 工具栏行 | `ChromeColors.elevated(背景)`（`ChromeBandView`，只盖工具栏行、不盖标签栏） | 标题栏透明；标签栏那行由系统在主题背景上叠色，正好落到同一色阶 |
+| 标题栏 | 透明（`titlebarAppearsTransparent`，无分隔线） | 图标按钮不带底座，只保留模式分段控件的胶囊 |
 | 字数胶囊 | 主题背景 深色提亮 8% / 浅色压暗 4%，alpha 0.9 | 在 `effectiveAppearance` 下解 cgColor |
 | 正文 | 从安全区之下开始 | 铬坐在实心主题色上，正文不钻到铬底下 |
 

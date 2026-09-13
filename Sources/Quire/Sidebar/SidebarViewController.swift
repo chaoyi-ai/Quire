@@ -32,16 +32,15 @@ final class SidebarViewController: NSViewController, NSSearchFieldDelegate, NSMe
     nonisolated(unsafe) private var settingsObserver: NSObjectProtocol?
     private var lastRules: Preferences.SidebarRules?
     private let themeTint = NSView()
+    private let containerBackground = NSView()
     nonisolated(unsafe) private var themeObserver: NSObjectProtocol?
 
     /// 侧栏底色跟主题走（见 loadView 里的说明）
     private func applyThemeTint() {
-        let bg = ThemeManager.shared.currentStyle.background.usingColorSpace(.sRGB) ?? .windowBackgroundColor
-        let luminance = 0.2126 * bg.redComponent + 0.7152 * bg.greenComponent + 0.0722 * bg.blueComponent
-        let isDark = luminance < 0.5
-        let tint = isDark ? bg.blended(withFraction: 0.06, of: .white) : bg.blended(withFraction: 0.03, of: .black)
         // 完全不透明：透窗材质会把后面的亮窗口（Finder、通知）透出来，在深色主题里像一条条发白的带子
-        themeTint.layer?.backgroundColor = (tint ?? bg).cgColor
+        let bg = ThemeManager.shared.currentStyle.background
+        containerBackground.layer?.backgroundColor = bg.cgColor
+        themeTint.layer?.backgroundColor = ChromeColors.elevated(bg).cgColor
     }
 
     override func loadView() {
@@ -51,11 +50,18 @@ final class SidebarViewController: NSViewController, NSSearchFieldDelegate, NSMe
         container.state = .followsWindowActiveState
         // 系统的侧栏材质在深色下是中灰（≈#2a2b2f），而深色主题的正文是近黑（GitHub Dark #0d1117）——两边一硬切。
         // 铺一层从主题背景推出来的"抬高一级"的颜色（深色提亮 6%、浅色压暗 3%）
+        // 两层：整块先铺主题背景（安全区之上、标题栏 / 标签栏底下那段要和正文同色——系统标签栏是在底色上叠一层灰，
+        // 底色不一致它就一边深一边浅），铬色只从安全区（标签栏之下）开始
+        containerBackground.wantsLayer = true
+        containerBackground.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(containerBackground)
         themeTint.wantsLayer = true
         themeTint.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(themeTint)
         NSLayoutConstraint.activate([
-            themeTint.topAnchor.constraint(equalTo: container.topAnchor), themeTint.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            containerBackground.topAnchor.constraint(equalTo: container.topAnchor), containerBackground.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            containerBackground.leadingAnchor.constraint(equalTo: container.leadingAnchor), containerBackground.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            themeTint.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor), themeTint.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             themeTint.leadingAnchor.constraint(equalTo: container.leadingAnchor), themeTint.trailingAnchor.constraint(equalTo: container.trailingAnchor),
         ])
         applyThemeTint()
