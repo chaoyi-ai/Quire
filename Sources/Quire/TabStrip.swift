@@ -10,6 +10,7 @@ final class TabStripView: NSView {
 
     struct Item: Equatable {
         var title: String
+        var path: String?
         var edited: Bool
         var ephemeral: Bool
         var selected: Bool
@@ -20,6 +21,8 @@ final class TabStripView: NSView {
     var onPin: ((Int) -> Void)?
     var onNew: (() -> Void)?
     var onMove: ((Int, Int) -> Void)?
+    /// 右键：由工作区给菜单（固定 / 关闭 / 关闭其他 / 在 Finder 中显示 / 复制路径）——窗口标题隐藏了，⌘点标题看路径的习惯由这里接住
+    var onContextMenu: ((Int) -> NSMenu?)?
 
     private var hoverIndex: Int?
     private var hoverClose = false
@@ -103,7 +106,7 @@ final class TabStripView: NSView {
         let idx = index(at: p)
         let close = idx.map { closeRect($0).contains(p) } ?? false
         if idx != hoverIndex || close != hoverClose { hoverIndex = idx; hoverClose = close; needsDisplay = true }
-        toolTip = idx.map { items[$0].title } ?? (plusRect.contains(p) ? L("新建标签页") : nil)
+        toolTip = idx.map { items[$0].path ?? items[$0].title } ?? (plusRect.contains(p) ? L("新建标签页") : nil)
     }
     override func mouseExited(with event: NSEvent) { hoverIndex = nil; hoverClose = false; needsDisplay = true }
     override func mouseDown(with event: NSEvent) {
@@ -122,6 +125,11 @@ final class TabStripView: NSView {
         if from != to { onMove?(from, to); draggingIndex = to }
     }
     override func mouseUp(with event: NSEvent) { draggingIndex = nil }
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let p = convert(event.locationInWindow, from: nil)
+        guard let i = index(at: p) else { return nil }
+        return onContextMenu?(i)
+    }
     override func otherMouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         if event.buttonNumber == 2, let i = index(at: p) { onClose?(i) }

@@ -121,6 +121,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         tabStrip.onClose = { [weak self] i in if let t = self?.tabs[safe: i] { self?.closeTab(t) } }
         tabStrip.onPin = { [weak self] i in if let t = self?.tabs[safe: i] { self?.pin(t) } }
         tabStrip.onMove = { [weak self] from, to in self?.moveTab(from: from, to: to) }
+        tabStrip.onContextMenu = { [weak self] i in self?.tabMenu(for: i) }
         tabStrip.onNew = { [weak self] in
             self?.window?.makeKeyAndOrderFront(nil)
             NSDocumentController.shared.newDocument(nil)
@@ -342,7 +343,34 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     }
 
     private func refreshStrip() {
-        tabStrip.items = tabs.map { .init(title: $0.title, edited: $0.document.isDocumentEdited, ephemeral: $0.isEphemeral, selected: $0 === current) }
+        tabStrip.items = tabs.map { .init(title: $0.title, path: $0.document.fileURL?.path, edited: $0.document.isDocumentEdited, ephemeral: $0.isEphemeral, selected: $0 === current) }
+    }
+
+    /// 标签右键菜单
+    private func tabMenu(for i: Int) -> NSMenu? {
+        guard let tab = tabs[safe: i] else { return nil }
+        let menu = NSMenu()
+        func add(_ title: String, _ action: @escaping () -> Void) {
+            let item = menu.addItem(withTitle: title, action: #selector(runMenuBlock(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = MenuBlock(action)
+        }
+        if tab.isEphemeral { add(L("固定标签页")) { [weak self] in self?.pin(tab) } }
+        add(L("关闭标签页")) { [weak self] in self?.closeTab(tab) }
+        if tabs.count > 1 { add(L("关闭其他标签页")) { [weak self] in self?.closeOtherTabs(keeping: tab) } }
+        if let url = tab.document.fileURL {
+            menu.addItem(.separator())
+            add(L("在 Finder 中显示")) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            add(L("复制路径")) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(url.path, forType: .string) }
+        }
+        return menu
+    }
+    private final class MenuBlock { let run: () -> Void; init(_ r: @escaping () -> Void) { run = r } }
+    @objc private func runMenuBlock(_ sender: NSMenuItem) { (sender.representedObject as? MenuBlock)?.run() }
+
+    /// 关闭其他标签：逐个询问未存储的
+    func closeOtherTabs(keeping keep: DocumentTab) {
+        let others = tabs.filter { $0 !== keep }
+        askThenClose(others) { [weak self] _ in if let self, self.tabs.contains(where: { $0 === keep }) { self.select(keep) } }
     }
 
     // MARK: - 标签页（窗口菜单）

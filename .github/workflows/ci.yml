@@ -7,19 +7,31 @@ on:
 
 jobs:
   build-test:
-    runs-on: macos-15
+    # 主门禁：macos-15 / Xcode 16.4（release.sh 只认这个）。第二条腿跟着新工具链（本机已是 Xcode 27），只提醒不阻塞
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            xcode: /Applications/Xcode_16.4.app
+            advisory: false
+          - runner: macos-26
+            xcode: /Applications/Xcode_26.app
+            advisory: true
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.advisory }}
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app || sudo xcode-select -s /Applications/Xcode.app
+        run: sudo xcode-select -s ${{ matrix.xcode }} || sudo xcode-select -s /Applications/Xcode.app
       - name: Swift version
         run: swift --version
       - name: Cache SwiftPM
         uses: actions/cache@v4
         with:
           path: .build
-          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
-          restore-keys: spm-${{ runner.os }}-
+          key: spm-${{ matrix.runner }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: spm-${{ matrix.runner }}-
       - name: Build (release)
         run: swift build -c release
       - name: Test
@@ -37,6 +49,7 @@ jobs:
           test -f dist/Quire.app/Contents/Resources/Metadata.appintents/extract.actionsdata
           swift --version
       - uses: actions/upload-artifact@v4
+        if: ${{ !matrix.advisory }}
         with:
           name: Quire.app
           path: dist/Quire.app

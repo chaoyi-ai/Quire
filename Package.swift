@@ -63,6 +63,10 @@ let package = Package(
             name: "QuireRenderTests",
             dependencies: ["QuireRender"]
         ),
+        .testTarget(
+            name: "QuireAppTests",
+            dependencies: ["Quire"]
+        ),
     ],
     swiftLanguageModes: [.v6]
 )
