@@ -9,9 +9,26 @@ cd "$(dirname "$0")/.."
 CONFIG=${1:-release}
 APP=${2:-dist/Quire.app}
 ARCH=$(uname -m); [ "$ARCH" = "arm64" ] || ARCH=x86_64
-B=".build/${ARCH}-apple-macosx/$CONFIG"
 WORK=".build/appintents"
 rm -rf "$WORK"; mkdir -p "$WORK"
+# 两种 SwiftPM 布局：≤ Swift 6.2 是 .build/<arch>-apple-macosx/<config>（模块在 Modules/、C 目标有生成的 module.modulemap）；
+# Swift 6.4 起 swift-build 走 XCBuild，产物在 .build/out/Products/<Config>（.build/<config> 是它的符号链接，.swiftmodule 直接在里面），
+# 中间文件在 .build/out/Intermediates.noindex，C 目标没有 modulemap（XCBuild 用 VFS 覆盖）——自己生成一份
+MAPS=()
+if [ -d ".build/${ARCH}-apple-macosx/$CONFIG" ]; then
+  B=".build/${ARCH}-apple-macosx/$CONFIG"
+  MODS="$B/Modules"
+  ACCESSOR="$B/Quire.build/DerivedSources/resource_bundle_accessor.swift"
+  for m in $(find "$B" -name module.modulemap 2>/dev/null | grep -v "Tests\|QuickLook\|qtmp"); do MAPS+=("$m"); done
+else
+  B=".build/$CONFIG"
+  MODS="$B"
+  CAP="$(python3 -c "print('$CONFIG'.capitalize())")"
+  ACCESSOR=$(find ".build/out/Intermediates.noindex/Quire.build/$CAP" -path "*Quire-p.build*" -name resource_bundle_accessor.swift | head -1)
+  [ -n "$ACCESSOR" ] || { echo "appintents: 找不到 resource_bundle_accessor.swift（先 swift build -c $CONFIG）"; exit 1 }
+  printf 'module CQuireAttr {\n  umbrella header "%s/Sources/CQuireAttr/include/CQuireAttr.h"\n  export *\n}\n' "$PWD" > "$WORK/CQuireAttr.modulemap"
+  MAPS+=("$WORK/CQuireAttr.modulemap")
+fi
 # 工具链以 xcode-select 选中的为准（CI 上 /Applications/Xcode.app 可能是另一个版本）
 TOOLCHAIN="$(cd "$(dirname "$(xcrun --find swiftc)")/../.." && pwd)"
 PROTOS_SRC="$TOOLCHAIN/usr/share/swift/SwiftConstantValues/AppIntents.json"
@@ -27,13 +44,13 @@ JSON
 fi
 
 args=()
-for m in $(find "$B" .build/checkouts -name module.modulemap 2>/dev/null | grep -v "Tests\|QuickLook\|qtmp"); do args+=(-Xcc -fmodule-map-file=$m); done
+for m in $(find .build/checkouts -name module.modulemap 2>/dev/null | grep -v "Tests\|QuickLook\|qtmp") "${MAPS[@]}"; do args+=(-Xcc -fmodule-map-file=$m); done
 SDK="$(xcrun --show-sdk-path --sdk macosx)"
 swiftc -typecheck -wmo -swift-version 6 -module-name Quire -target "${ARCH}-apple-macos14.0" -sdk "$SDK" \
-  -I "$B/Modules" -Xcc -I.build/checkouts/swift-cmark/src/include -Xcc -I.build/checkouts/swift-cmark/extensions/include "${args[@]}" \
+  -I "$MODS" -Xcc -I.build/checkouts/swift-cmark/src/include -Xcc -I.build/checkouts/swift-cmark/extensions/include "${args[@]}" \
   -Xfrontend -const-gather-protocols-file -Xfrontend "$WORK/protocols.json" \
   -emit-const-values-path "$WORK/Quire.swiftconstvalues" \
-  $(find Sources/Quire -name '*.swift') "$B/Quire.build/DerivedSources/resource_bundle_accessor.swift" 2>&1 | grep -E "error:" && { echo "appintents: typecheck 失败"; exit 1 } || true
+  $(find Sources/Quire -name '*.swift') "$ACCESSOR" 2>&1 | grep -E "error:" && { echo "appintents: typecheck 失败"; exit 1 } || true
 [ -f "$WORK/Quire.swiftconstvalues" ] || { echo "appintents: 没有 const values"; exit 1 }
 
 find Sources/Quire -name '*.swift' > "$WORK/sources.txt"   # 递归：Sidebar/ 等子目录也算
