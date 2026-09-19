@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.1 — 2026-09-19
+
+- 标签右键菜单：固定标签页 / 关闭标签页 / 关闭其他标签页 / 在 Finder 中显示 / 复制路径；标签的提示是完整路径（窗口标题隐藏后，⌘点标题看路径的习惯由这里接住）。
+- 测试：新增 `QuireAppTests`，覆盖工作区窗口模型——标签增删选、临时标签替换与固定、`document` 随当前标签换挂、关闭时的标签摘除、文件进当前工作区还是另开窗口、状态存取编码。
+- 构建：`scripts/appintents_metadata.sh` 兼容 Swift 6.4 的 SwiftPM 布局（XCBuild：产物在 `.build/out`，C 目标没有生成的 module map）；在 macOS 27 / Xcode 27 上验证通过。CI 加一条 macos-26 的提示性（不阻塞）跑腿。
+- 决定：Quick Look 预览扩展（#55）不做——纯 SwiftPM 组装的 .appex 系统不登记，唯一路径是加 Xcode 工程，与 ADR-7 相悖。
+
 ## 0.10.0 — 2026-09-13
 
 - **工作区窗口**（M9，ADR-18 改写；调研与模型见 docs/research/window-chrome.md）。此前的窗口结构一直在"一份文档一个窗口"上打补丁：标签条横跨侧栏、侧栏顶穿标题栏、侧栏一点文件就开新窗。现在按 Nova / Xcode 的结构重做：
