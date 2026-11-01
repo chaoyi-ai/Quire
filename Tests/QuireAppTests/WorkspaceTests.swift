@@ -384,6 +384,95 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(other.tabs.count, 3, "问完了就能合并")
     }
 
+    /// 脏标记靠撤销组关闭驱动，打字又合并在同一个撤销组里：存储之后接着打的字要重新标脏，否则不再自动保存、关闭时直接丢
+    func testTypingAfterAutosaveMarksEditedAndIsSavedOnClose() async throws {
+        let a = try await openFile("a.md")
+        a.ws.setModeEditor(nil)
+        let tv = try XCTUnwrap(a.ws.editorViewController.textView)
+        tv.setSelectedRange(NSRange(location: (tv.string as NSString).length, length: 0))
+        /// 和输入法打字一样的调用；撤销组在 run loop 转一圈之后才关
+        func type(_ text: String) async throws {
+            tv.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        try await type("one ")
+        XCTAssertTrue(a.doc.isDocumentEdited)
+        a.doc.autosave(withImplicitCancellability: false) { _ in }
+        try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertEqual(try disk(a.url), "# a\n\ntext\none ")
+
+        try await type("two")
+        XCTAssertTrue(a.doc.isDocumentEdited, "存储之后接着打的字要重新标脏")
+        await waitForWindowClose(of: a.ws) { a.ws.closeCurrentTab(nil) }
+        XCTAssertEqual(try disk(a.url), "# a\n\ntext\none two", "关闭时写盘")
+    }
+
+    /// 撤销不走 didChangeText：文档源码要跟上屏幕，否则全选删除、⌘Z、关闭写进磁盘的是空文件
+    func testUndoOfADeleteIsWhatGetsSaved() async throws {
+        let a = try await openFile("a.md")
+        a.ws.setModeEditor(nil)
+        let tv = try XCTUnwrap(a.ws.editorViewController.textView)
+        let undo = try XCTUnwrap(a.doc.undoManager)
+        tv.selectAll(nil)
+        tv.delete(nil)
+        try await Task.sleep(for: .milliseconds(50))   // 撤销组在 run loop 转一圈之后才关
+        XCTAssertEqual(a.doc.source, "")
+        a.doc.autosave(withImplicitCancellability: false) { _ in }
+        try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertEqual(try disk(a.url), "")
+
+        undo.undo()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(tv.string, "# a\n\ntext\n")
+        XCTAssertEqual(a.doc.source, tv.string, "撤销后文档源码要跟上")
+        undo.redo()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(a.doc.source, "", "重做同样")
+        undo.undo()
+        try await Task.sleep(for: .milliseconds(50))
+        await waitForWindowClose(of: a.ws) { a.ws.closeCurrentTab(nil) }
+        XCTAssertEqual(try disk(a.url), "# a\n\ntext\n", "写进磁盘的是屏幕上的内容")
+    }
+
+    /// 打开 a.md，在编辑模式打几个字（撤销栈上有东西），切到混合模式并激活第一块，在块里打字
+    private func editInHybridAfterEditor() async throws -> (a: (doc: MarkdownDocument, ws: WorkspaceWindowController, url: URL), editor: NSTextView, hybrid: HybridTextView) {
+        let a = try await openFile("a.md")
+        a.ws.setModeEditor(nil)
+        let tv: NSTextView = try XCTUnwrap(a.ws.editorViewController.textView)
+        tv.setSelectedRange(NSRange(location: (tv.string as NSString).length, length: 0))
+        tv.insertText("typed", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(a.doc.undoManager?.canUndo, true)
+        a.ws.setModeHybrid(nil)
+        let hybrid = try XCTUnwrap(a.ws.readerViewController.textView as? HybridTextView)
+        try await failingOnDeadlock { while !hybrid.activate(block: 0) { try await Task.sleep(for: .milliseconds(20)) } }
+        hybrid.insertText("XYZ", replacementRange: NSRange(location: hybrid.activeRange.location + 3, length: 0))
+        XCTAssertTrue(a.doc.source.contains("XYZ"))
+        return (a, tv, hybrid)
+    }
+
+    /// 混合模式没有自己的撤销，⌘Z 走文档的 undoManager：不能让它改隐藏的编辑器、再把编辑器的旧文本同步回文档
+    func testUndoCannotDropHybridEdits() async throws {
+        let (a, _, _) = try await editInHybridAfterEditor()
+        XCTAssertEqual(a.doc.undoManager?.canUndo, false, "编辑器落后于文档之后，它的撤销作废")
+        a.doc.undoManager?.undo()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(a.doc.source.contains("XYZ"))
+        XCTAssertTrue(a.doc.source.contains("typed"))
+    }
+
+    /// 块没走 onDeactivate 就被收起（主题变化等）之后切回编辑器：编辑器要跟上文档，否则接着打字会盖掉混合模式的改动
+    func testEditorCatchesUpWhenHybridBlockWasDroppedWithoutCommit() async throws {
+        let (a, tv, hybrid) = try await editInHybridAfterEditor()
+        hybrid.setRendered(try XCTUnwrap(hybrid.rendered), style: hybrid.style)   // 主题变化时走的就是这条路
+        XCTAssertNil(hybrid.activeBlock)
+        a.ws.setModeEditor(nil)
+        XCTAssertEqual(tv.string, a.doc.source)
+        tv.insertText("more", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(a.doc.source.contains("XYZ"), "混合模式的改动不能被盖掉")
+        XCTAssertTrue(a.doc.source.contains("more"))
+    }
+
     /// 沉浸写作里关掉当前标签：换上来的标签可能还没有编辑器，退出沉浸不能碰它
     func testExitingImmersiveAfterClosingCurrentTabWithoutEditor() async throws {
         let toggle = try XCTUnwrap(class_getInstanceMethod(NSWindow.self, #selector(NSWindow.toggleFullScreen(_:))))

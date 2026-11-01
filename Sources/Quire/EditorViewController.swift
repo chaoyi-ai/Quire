@@ -12,6 +12,7 @@ final class EditorViewController: NSViewController {
     nonisolated(unsafe) private var boundsObserver: NSObjectProtocol?
     nonisolated(unsafe) private var themeObserver: NSObjectProtocol?
     nonisolated(unsafe) private var prefsObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var undoObservers: [NSObjectProtocol] = []
     /// 编辑器滚动回调（顶部行号）
     var onScroll: ((Int) -> Void)?
     private var lastSyncedScrollY: CGFloat = .nan
@@ -84,6 +85,16 @@ final class EditorViewController: NSViewController {
             self.session.sourceDidChangeDebounced(src)
             self.onEdit?()
         }
+        // 撤销 / 重做是 AppKit 直接改 NSTextStorage，不走 didChangeText：不同步的话文档源码还是撤销之前的，
+        // 存储或关闭写进磁盘的就不是屏幕上的内容（全选删除、等自动保存、⌘Z、关闭 = 空文件）
+        for name in [Notification.Name.NSUndoManagerDidUndoChange, .NSUndoManagerDidRedoChange] {
+            undoObservers.append(NotificationCenter.default.addObserver(forName: name, object: session.document?.undoManager, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.textView.source != self.session.document?.source else { return }
+                    self.textView.onTextChange?()
+                }
+            })
+        }
         textView.onCharactersEdited = { [weak self] range, delta, isPaste in
             guard let self, let doc = self.session.document else { return }
             doc.recordEdit(range: range, delta: delta, isPaste: isPaste)
@@ -122,6 +133,7 @@ final class EditorViewController: NSViewController {
         if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
         if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
         if let prefsObserver { NotificationCenter.default.removeObserver(prefsObserver) }
+        for o in undoObservers { NotificationCenter.default.removeObserver(o) }
     }
 
     /// 文档 URL 变化（存储为）

@@ -207,6 +207,15 @@ class MarkdownDocument: NSDocument {
         unsafeBitCast(target.method(for: selector), to: Reply.self)(target, selector, self, true, contextInfo)
     }
 
+    /// 每次存储开始时断开打字的撤销合并（TextEdit 也这样做）。脏标记靠撤销组关闭驱动，连续打字却一直合并在同一个撤销组里：
+    /// 不断开的话，存储把文档标干净之后接着打的字不再标脏、不再自动保存，关闭时也不问，这段文字就丢了
+    override func changeCountToken(for saveOperation: NSDocument.SaveOperationType) -> Any {
+        MainActor.assumeIsolated {
+            if let tab = workspace?.tab(for: self), tab.hasEditorPane { tab.editor?.textView.breakUndoCoalescing() }
+        }
+        return super.changeCountToken(for: saveOperation)
+    }
+
     override func updateChangeCount(_ change: NSDocument.ChangeType) {
         let was = isDocumentEdited
         super.updateChangeCount(change)

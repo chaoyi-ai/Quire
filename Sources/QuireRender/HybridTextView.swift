@@ -260,7 +260,7 @@ public final class HybridTextView: ReaderTextView, NSTextStorageDelegate {
         if old < diff.oldChanged.lowerBound { newIndex = old }
         else if old >= diff.oldChanged.upperBound { newIndex = old + (diff.newChanged.count - diff.oldChanged.count) }
         else { newIndex = nil }
-        if let n = newIndex, n < doc.blocks.count, activate(block: n, caretAt: caretOffset), n == old {
+        if let n = newIndex, n < doc.blocks.count, activate(block: n, caretAt: caretOffset), old < diff.oldChanged.lowerBound {
             // 这块在改动区之前：行号不受影响，沿用本视图维护的行范围（用户可能已在块里加减了行，rendered 里的是旧的）。
             // 在改动区之后的块行号已整体平移，以新 rendered 的为准
             activeLines = keptLines

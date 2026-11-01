@@ -119,6 +119,31 @@ final class HybridRerenderTests: XCTestCase {
     }
 
     /// 编辑块 1 → 立刻点到块 2 → 块 1 的重渲染这时才到：块 2 应保持激活、光标不丢
+    /// 改动区之后的块行号要跟着平移：块数没变（一个换一个）时也一样，否则下一击写到错误的行上（"End" 被盖掉）
+    func testRerenderUpdatesLinesOfBlockAfterALineCountChange() {
+        let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
+        let style = RenderStyle(theme: theme)
+        let parser = MarkdownParser(), renderer = DocumentRenderer(style: style)
+        let src = "- a\n- b\n- c\n\nPara\n\nEnd\n"
+        let view = HybridTextView(style: style)
+        let sv = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 400)); sv.documentView = view
+        let r0 = renderer.render(parser.parse(src))
+        view.source = src; view.setRendered(r0, style: style); view.isHybridEnabled = true
+        let newSrc = "- a\n\nPara\n\nEnd\n"
+        view.source = newSrc   // 列表删掉了两行、已提交，重渲染还没到
+        XCTAssertTrue(view.activate(block: 1))   // 用户已经点到 Para（这时块表还是旧的）
+        let (r1, diff) = renderer.render(parser.parse(newSrc), reusing: r0)
+        XCTAssertEqual(diff.oldChanged, 0..<1)
+        XCTAssertEqual(diff.newChanged.count, 1, "块数没变：一个换一个")
+        view.replaceBlocks(with: r1, diff: diff, previous: r0)   // 重渲染到达
+        XCTAssertEqual(view.activeBlock, 1)
+        XCTAssertEqual(view.activeSource, "Para\n")
+        var lines: ClosedRange<Int>?
+        view.onSourceEdit = { _, _, l in lines = l }
+        view.insertText("!", replacementRange: NSRange(location: view.activeRange.location + 4, length: 0))
+        XCTAssertEqual(lines, 3...3, "Para 现在在第 3 行")
+    }
+
     func testAsyncRerenderKeepsNewlyActivatedBlock() {
         let theme = ThemeStore.loadBuiltIn().theme(id: "github-light")!
         let style = RenderStyle(theme: theme)

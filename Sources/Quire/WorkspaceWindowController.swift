@@ -860,6 +860,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         // 混合模式：阅读视图可点击进入源码态
         let hybrid = readerViewController.textView as? HybridTextView
         hybrid?.isHybridEnabled = (mode == .hybrid)
+        // 编辑器露出来时以文档为准：混合模式的块可能没走 onDeactivate 就被收起（主题变化、块太多时整篇重渲染），编辑器就落后了，接着打字会盖掉混合模式的改动。没落后时是空操作
+        if showEditor, let cur = current, cur.hasEditorPane { cur.editor?.replaceSource(cur.document.source) }
         if mode == .hybrid { wireHybrid() }
         if showEditor, let w = window, w.isVisible { w.makeFirstResponder(editorViewController.textView) }
         if mode == .hybrid, let w = window, w.isVisible { w.makeFirstResponder(readerViewController.textView) }
@@ -888,6 +890,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             guard let hybrid, let tab else { return }
             // 以前整篇 split("\n") + join：1 MB 每击键 ≈ 5 ms。现在只在本次激活的第一击算一次块的 UTF-16 区间，之后按区间替换
             guard let (joined, newLineCount) = tab.hybridSplicer.replace(lines: lines, in: tab.session.source, with: text) else { return }
+            // 从这一击起隐藏的编辑器落后于文档，它留在 undoManager 上的撤销全部作废（混合模式自己没有撤销，离开块时 replaceSource 本来也要清）。
+            // 留着的话 ⌘Z 改的是隐藏的编辑器，它的旧文本再同步回文档，这一段混合模式的改动就没了
+            tab.document.undoManager?.removeAllActions()
             tab.document.setSourceFromEditor(joined, tracked: false)
             tab.document.updateChangeCount(.changeDone)
             tab.session.updateSourceWithoutRendering(joined)
