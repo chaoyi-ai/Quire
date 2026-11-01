@@ -9,9 +9,14 @@ final class WorkspaceTests: XCTestCase {
     private var tmp: URL!
     nonisolated(unsafe) private static var booted = false
 
-    override func setUp() async throws {
+    /// 同一个测试进程只能建一次（所有测试类都走这里）：macOS 26 上再建一个 QuireDocumentController，共享控制器就变回系统默认的
+    static func bootApp() {
         // 和 main.swift 一样的顺序：先建 QuireDocumentController（NSApplication.shared 会顺手建默认的文档控制器）
-        if !Self.booted { _ = QuireDocumentController(); _ = NSApplication.shared; Self.booted = true }
+        if !booted { _ = QuireDocumentController(); _ = NSApplication.shared; booted = true }
+    }
+
+    override func setUp() async throws {
+        Self.bootApp()
         XCTAssertTrue(NSDocumentController.shared is QuireDocumentController, "QuireDocumentController 必须是共享控制器（在任何 NSDocumentController.shared 之前建）")
         tmp = FileManager.default.temporaryDirectory.appendingPathComponent("quire-ws-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
