@@ -171,7 +171,7 @@ enum SidebarRowStyle {
         v.floatsGroupRows = false
         v.indentationPerLevel = 16
         v.indentationMarkerFollowsCell = true
-        v.autoresizesOutlineColumn = true
+        v.autoresizesOutlineColumn = false   // 列宽只跟侧栏走。开着它每展开深一层列就宽一个缩进，而侧栏没有横向滚动条：行尾的省略号和高亮圆角都跑到可视区外
         v.allowsEmptySelection = true
         v.usesAutomaticRowHeights = false
         v.focusRingType = .none
