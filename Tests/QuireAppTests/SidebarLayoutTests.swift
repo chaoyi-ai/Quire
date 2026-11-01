@@ -18,11 +18,9 @@ final class SidebarLayoutTests: XCTestCase {
     ])
     private var tmp: URL!
     private var longFile: URL { tmp.appendingPathComponent(Self.longStem + ".md") }
-    nonisolated(unsafe) private static var booted = false
 
     override func setUp() async throws {
-        // 启动顺序同 WorkspaceTests：先建 QuireDocumentController，再 NSApplication.shared
-        if !Self.booted { _ = QuireDocumentController(); _ = NSApplication.shared; Self.booted = true }
+        WorkspaceTests.bootApp()
         tmp = FileManager.default.temporaryDirectory.appendingPathComponent("quire-sidebar-\(UUID().uuidString)")
         let deep = tmp.appendingPathComponent("notes/deep")
         try FileManager.default.createDirectory(at: deep, withIntermediateDirectories: true)
