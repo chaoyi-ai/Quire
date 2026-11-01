@@ -145,7 +145,7 @@ final class QuireDocumentController: NSDocumentController {
 /// Markdown 文档：读 / 写 / 自动保存；源码变化通过 DocumentSession 驱动渲染。
 struct UncheckedSendableBox<T>: @unchecked Sendable { let value: T; init(_ v: T) { value = v } }
 
-final class MarkdownDocument: NSDocument {
+class MarkdownDocument: NSDocument {
     /// 原始源码（编辑器与磁盘的唯一真相）。NSDocument.read(from:) 在 SDK 里是 nonisolated（实际主线程调用），故 unsafe 标注
     nonisolated(unsafe) private(set) var source: String = ""
     nonisolated(unsafe) private(set) var encoding: String.Encoding = .utf8
@@ -196,6 +196,15 @@ final class MarkdownDocument: NSDocument {
     override func canClose(withDelegate delegate: Any, shouldClose shouldCloseSelector: Selector?, contextInfo: UnsafeMutableRawPointer?) {
         MainActor.assumeIsolated { if let ws = workspace, let t = ws.tab(for: self), ws.current !== t { ws.select(t) } }
         super.canClose(withDelegate: delegate, shouldClose: shouldCloseSelector, contextInfo: contextInfo)
+    }
+
+    /// 窗口要关：直接放行，询问归 WorkspaceWindowController.windowShouldClose（窗口是多文档的，它逐个标签问）。
+    /// 默认实现会先问挂着的这份文档，而且 windowShouldClose 是在这个询问的回调里被调到的——那时文档的序列化活动还没结束，
+    /// 再对同一份文档 canClose 就要等这个活动结束，自己等自己，主线程永远卡死
+    override func shouldCloseWindowController(_ windowController: NSWindowController, delegate: Any?, shouldClose shouldCloseSelector: Selector?, contextInfo: UnsafeMutableRawPointer?) {
+        guard let target = delegate as? NSObject, let selector = shouldCloseSelector else { return }
+        typealias Reply = @convention(c) (NSObject, Selector, NSDocument, Bool, UnsafeMutableRawPointer?) -> Void
+        unsafeBitCast(target.method(for: selector), to: Reply.self)(target, selector, self, true, contextInfo)
     }
 
     override func updateChangeCount(_ change: NSDocument.ChangeType) {

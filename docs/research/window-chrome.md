@@ -54,7 +54,7 @@ Apple 26 的官方口径（WWDC25-356）：铬"浮在内容之上"、去掉自�
 
 ## 4. 实施计划（M9「工作区窗口」，替换 0.9.2 的 TabGroups）——0.10.0 已完成
 
-- [x] `WorkspaceWindowController`：持有 `[DocumentTab]`（NSDocument + DocumentSession + 阅读 / 编辑窗格 + 模式 + 滚动位置）；`current` 切换时换挂 `document`、换 contentSplit 的子视图、更新标题 / 脏标记 / 侧栏选中；关闭标签走 `canClose(withDelegate:)`；关窗口逐个询问未存储的文档
+- [x] `WorkspaceWindowController`：持有 `[DocumentTab]`（NSDocument + DocumentSession + 阅读 / 编辑窗格 + 模式 + 滚动位置）；`current` 切换时换挂 `document`、换 contentSplit 的子视图、更新标题 / 脏标记 / 侧栏选中；关闭标签走 `canClose(withDelegate:)`；关窗口逐个询问未存储的文档，都同意才开始关，取消时所有标签都留着（询问只走 `windowShouldClose`，文档层 `shouldCloseWindowController` 放行；0.10.2 之前两边都问，同一份文档重入 `canClose` 会死锁）
 - [x] `NSDocumentController` 子类：打开文件时若 key 窗口是工作区且文件在其根内 → 作为标签打开（临时 / 固定按来源），否则新窗口；`makeWindowControllers` 不再每文档一窗
 - [x] 标签条 `TabStripView` 移到正文列顶部（paneHost 之内，不再是标题栏附件）；临时标签（斜体）状态
 - [x] 工具栏左段与侧栏同宽：自定义 spacer item 的宽度跟随侧栏宽度（折叠时 0）；标题 / 模式段在右段居中
@@ -62,7 +62,7 @@ Apple 26 的官方口径（WWDC25-356）：铬"浮在内容之上"、去掉自�
 - [x] 沉浸模式：隐藏标签条与侧栏，退出恢复
 - [x] 状态恢复：按窗口恢复根目录 + 标签列表 + 当前标签 + 模式 + 窗口位置（自己存 `WorkspaceState`，窗口 `isRestorable = false`；未命名文档不恢复）
 - [x] 删除 `TabGroups`（0.9.2 的过渡方案）；DESIGN.md ADR-18 改写为本文的模型
-- [x] 验证矩阵：单标签 / 多标签、侧栏折叠、切换主题、双栏、沉浸、关闭有改动的标签、关窗口、状态恢复——每项截图 + 像素测量（工具栏行 / 标签条 / 侧栏三者同色、正文不被遮）
+- [x] 验证矩阵：单标签 / 多标签、侧栏折叠、切换主题、双栏、沉浸、关闭有改动的标签、关窗口、状态恢复——每项截图 + 像素测量（工具栏行 / 标签条 / 侧栏三者同色、正文不被遮）。更正：这轮的「关窗口」没走到 `performClose`，所以没发现它会卡死；现在由 QuireAppTests 的关闭用例覆盖
 
 ## 参考
 

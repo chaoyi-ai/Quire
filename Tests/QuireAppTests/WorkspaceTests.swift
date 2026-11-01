@@ -5,7 +5,7 @@ import QuireCore
 import QuireRender
 
 /// 工作区窗口模型（ADR-18）：标签的增删选、临时标签替换 / 固定、document 换挂、文档控制器的去向判断、状态存取。
-/// 在 xctest 进程里真建窗口（不显示到屏幕的也能建），不弹任何 sheet（只用没改过的文档）。
+/// 在 xctest 进程里真建窗口（不显示到屏幕的也能建），不弹任何 sheet（只用没改过的文档，或改过但有文件、就地自动保存的文档；要取消就用 ScriptedDocument 替面板回答）。
 @MainActor
 final class WorkspaceTests: XCTestCase {
     private var tmp: URL!
@@ -26,9 +26,13 @@ final class WorkspaceTests: XCTestCase {
     }
 
     override func tearDown() async throws {
-        // 关掉本测试开的所有文档 / 窗口（都没改过，不会问）
-        for ws in WorkspaceWindowController.all { ws.window?.close() }
+        // 关掉本测试开的所有文档（文档 close 不问；最后一个文档带走窗口）。不能先直接关多标签的窗口：
+        // AppKit 会把窗口挂着的文档关掉，标签换挂到下一个，留下一个没窗口的工作区，下一个测试的文件会被路由进去
         for doc in NSDocumentController.shared.documents { doc.close() }
+        for ws in WorkspaceWindowController.all { ws.window?.close() }
+        // 关掉的窗口要等这一轮 autorelease 池放掉才从 NSApp 的窗口表里消失
+        for _ in 0..<50 where !WorkspaceWindowController.all.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertTrue(WorkspaceWindowController.all.isEmpty, "本测试留下了工作区")
         try? FileManager.default.removeItem(at: tmp)
     }
 
@@ -128,6 +132,281 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(ws.tabs.count, 2)
         XCTAssertTrue(ws.current.document === c, "关掉中间的标签，选中右边的邻居")
         _ = a
+    }
+
+    // MARK: 关闭（走 performClose 的真路径：AppKit 先问当前文档，tearDown 的 window.close() 碰不到这里）
+
+    /// 主线程死锁时 XCTest 的超时也等不到（它同样在主线程上），只能从后台让进程带着说明崩掉，否则整轮测试永远挂着
+    private func failingOnDeadlock(_ body: () async throws -> Void) async rethrows {
+        let watchdog = DispatchWorkItem { @Sendable in fatalError("关闭死锁：主线程 30 s 没回来") }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: watchdog)
+        defer { watchdog.cancel() }
+        try await body()
+    }
+
+    private func waitForWindowClose(of ws: WorkspaceWindowController, _ close: () -> Void) async {
+        await failingOnDeadlock {
+            let closed = expectation(forNotification: NSWindow.willCloseNotification, object: ws.window)
+            close()
+            await fulfillment(of: [closed], timeout: 20)
+        }
+    }
+
+    private func openFile(_ name: String, in ws: WorkspaceWindowController? = nil) async throws -> (doc: MarkdownDocument, ws: WorkspaceWindowController, url: URL) {
+        let url = tmp.appendingPathComponent(name)
+        let opened = await open(url, in: ws, ephemeral: false)
+        let doc = try XCTUnwrap(opened)
+        return (doc, try XCTUnwrap(doc.workspace), url)
+    }
+
+    private func isOpen(_ doc: NSDocument) -> Bool { NSDocumentController.shared.documents.contains(doc) }
+    private func disk(_ url: URL) throws -> String { try String(contentsOf: url, encoding: .utf8) }
+
+    func testCloseLastTabOfCleanFileClosesWindow() async throws {
+        let a = try await openFile("a.md")
+        await waitForWindowClose(of: a.ws) { a.ws.closeCurrentTab(nil) }
+        XCTAssertFalse(isOpen(a.doc))
+    }
+
+    func testCloseLastTabOfUntouchedNewDocumentClosesWindow() async {
+        let (ws, doc) = makeWorkspace()
+        await waitForWindowClose(of: ws) { ws.closeCurrentTab(nil) }
+        XCTAssertFalse(isOpen(doc))
+    }
+
+    func testCloseLastTabOfEditedFileSavesItAndClosesWindow() async throws {
+        let a = try await openFile("a.md")
+        a.doc.replaceContents("# edited a\n")
+        await waitForWindowClose(of: a.ws) { a.ws.closeCurrentTab(nil) }
+        XCTAssertFalse(isOpen(a.doc))
+        XCTAssertEqual(try disk(a.url), "# edited a\n", "关之前改动要落盘")
+    }
+
+    func testCloseWindowWithSeveralTabsSavesEveryEditedOne() async throws {
+        let a = try await openFile("a.md")
+        let b = try await openFile("b.md", in: a.ws)
+        let c = try await openFile("c.md", in: a.ws)
+        a.doc.replaceContents("# edited a\n")
+        b.doc.replaceContents("# edited b\n")
+        a.ws.select(try XCTUnwrap(a.ws.tab(for: b.doc)))
+        await waitForWindowClose(of: a.ws) { a.ws.window?.performClose(nil) }
+        for d in [a.doc, b.doc, c.doc] { XCTAssertFalse(isOpen(d)) }
+        XCTAssertEqual(try disk(a.url), "# edited a\n", "后台标签的改动也要落盘")
+        XCTAssertEqual(try disk(b.url), "# edited b\n", "当前标签的改动要落盘")
+    }
+
+    func testCloseRequestedTwiceInARowStillClosesOnce() async throws {
+        let a = try await openFile("a.md")
+        a.doc.replaceContents("# edited a\n")
+        await waitForWindowClose(of: a.ws) {
+            a.ws.closeCurrentTab(nil)
+            a.ws.closeCurrentTab(nil)
+        }
+        XCTAssertFalse(isOpen(a.doc))
+        XCTAssertEqual(try disk(a.url), "# edited a\n")
+    }
+
+    func testCloseEditedTabAmongSeveralSavesItAndKeepsWindow() async throws {
+        let a = try await openFile("a.md")
+        let b = try await openFile("b.md", in: a.ws)
+        a.doc.replaceContents("# edited a\n")
+        let tab = try XCTUnwrap(a.ws.tab(for: a.doc))
+        try await failingOnDeadlock {
+            a.ws.closeTab(tab)
+            while a.ws.tabs.count > 1 { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        XCTAssertTrue(a.ws.current.document === b.doc)
+        XCTAssertFalse(isOpen(a.doc))
+        XCTAssertEqual(try disk(a.url), "# edited a\n")
+    }
+
+    // MARK: 取消（未存储面板在 xctest 进程里点不了：只替换回答这一步，标签、窗口、关闭都走真路径）
+
+    /// later = 先不回答，等测试调 reply（相当于面板开着）
+    private final class ScriptedDocument: MarkdownDocument {
+        enum Answer { case yes, no, later }
+        nonisolated(unsafe) var answer = Answer.yes
+        nonisolated(unsafe) var asked = 0
+        nonisolated(unsafe) var reply: ((Bool) -> Void)?
+
+        override func canClose(withDelegate delegate: Any, shouldClose shouldCloseSelector: Selector?, contextInfo: UnsafeMutableRawPointer?) {
+            asked += 1
+            let target = delegate as! NSObject, selector = shouldCloseSelector!
+            typealias Reply = @convention(c) (NSObject, Selector, NSDocument, Bool, UnsafeMutableRawPointer?) -> Void
+            let send: (Bool) -> Void = { [unowned self] ok in unsafeBitCast(target.method(for: selector), to: Reply.self)(target, selector, self, ok, contextInfo) }
+            switch answer {
+            case .yes: send(true)
+            case .no: send(false)
+            case .later: reply = send
+            }
+        }
+    }
+
+    private func scripted(in ws: WorkspaceWindowController, _ answer: ScriptedDocument.Answer = .yes) -> ScriptedDocument {
+        let d = ScriptedDocument()
+        d.answer = answer
+        NSDocumentController.shared.addDocument(d)
+        ws.addTab(d, ephemeral: false)
+        return d
+    }
+
+    /// 有文件的文档要等自动保存完才答复，轮到下一个标签之前要等
+    private func waitUntilAsked(_ doc: ScriptedDocument) async throws {
+        try await failingOnDeadlock { while doc.asked == 0 { try await Task.sleep(for: .milliseconds(20)) } }
+    }
+
+    func testCancelWhileClosingWindowKeepsEveryTab() async throws {
+        let a = try await openFile("a.md")
+        a.doc.replaceContents("# edited a\n")
+        let cancels = scripted(in: a.ws, .no)
+        let after = scripted(in: a.ws)
+        a.ws.window?.performClose(nil)
+        try await waitUntilAsked(cancels)
+        XCTAssertEqual(after.asked, 0, "取消之后不再往下问")
+        XCTAssertEqual(a.ws.tabs.count, 3, "先问过的标签也留着")
+        for d in [a.doc, cancels, after] as [MarkdownDocument] { XCTAssertTrue(isOpen(d)) }
+        XCTAssertEqual(a.ws.window?.isVisible, true)
+        XCTAssertTrue(a.ws.current.document === cancels, "停在取消的那个标签上")
+        XCTAssertEqual(try disk(a.url), "# edited a\n", "问的时候有文件的改动已经存了")
+
+        // 再关一次：从头问，这次都同意就真关
+        cancels.answer = .yes
+        await waitForWindowClose(of: a.ws) { a.ws.window?.performClose(nil) }
+        XCTAssertEqual(cancels.asked, 2)
+        XCTAssertEqual(after.asked, 1)
+        for d in [a.doc, cancels, after] as [MarkdownDocument] { XCTAssertFalse(isOpen(d)) }
+    }
+
+    func testCancelWhileClosingOtherTabsKeepsEveryTab() {
+        let (ws, keep) = makeWorkspace()
+        let agrees = scripted(in: ws)
+        let cancels = scripted(in: ws, .no)
+        let keepTab = ws.tab(for: keep)!
+        ws.closeOtherTabs(keeping: keepTab)
+        XCTAssertEqual(agrees.asked, 1)
+        XCTAssertEqual(cancels.asked, 1)
+        XCTAssertEqual(ws.tabs.count, 3, "先同意的标签也留着")
+        XCTAssertTrue(isOpen(agrees))
+        XCTAssertTrue(ws.current === keepTab)
+
+        cancels.answer = .yes
+        ws.closeOtherTabs(keeping: keepTab)
+        XCTAssertEqual(ws.tabs.count, 1)
+        XCTAssertFalse(isOpen(agrees))
+        XCTAssertFalse(isOpen(cancels))
+        XCTAssertTrue(ws.current === keepTab)
+    }
+
+    func testCancelClosingOneOfSeveralTabsKeepsIt() {
+        let (ws, _) = makeWorkspace()
+        let cancels = scripted(in: ws, .no)
+        ws.closeTab(ws.tab(for: cancels)!)
+        XCTAssertEqual(ws.tabs.count, 2)
+        XCTAssertTrue(isOpen(cancels))
+        XCTAssertTrue(ws.current.document === cancels)
+    }
+
+    /// 回调只有一格：面板开着时再来一轮询问，会把这个面板的答案交给下一个还没回答的文档
+    func testCloseRequestedWhileAPanelIsUpIsIgnored() async throws {
+        let (ws, first) = makeWorkspace()
+        let panelUp = scripted(in: ws, .later)
+        let next = scripted(in: ws)
+        let firstTab = ws.tab(for: first)!, nextTab = ws.tab(for: next)!
+        ws.window?.performClose(nil)
+        try await waitUntilAsked(panelUp)
+
+        ws.window?.performClose(nil)
+        ws.closeTab(nextTab)
+        ws.closeOtherTabs(keeping: firstTab)
+        XCTAssertEqual(panelUp.asked, 1, "同一份文档不问第二遍")
+        XCTAssertEqual(next.asked, 0, "面板还没回答，不往下问")
+        XCTAssertTrue(ws.current.document === panelUp, "面板挂着的标签不能被切走")
+        XCTAssertEqual(ws.tabs.count, 3)
+
+        await waitForWindowClose(of: ws) { panelUp.reply?(true) }
+        XCTAssertEqual(panelUp.asked, 1)
+        XCTAssertEqual(next.asked, 1)
+        for d in [first, panelUp, next] as [MarkdownDocument] { XCTAssertFalse(isOpen(d)) }
+    }
+
+    func testTabOpenedWhileAPanelIsUpSurvivesWindowClose() async throws {
+        let (ws, first) = makeWorkspace()
+        let panelUp = scripted(in: ws, .later)
+        ws.window?.performClose(nil)
+        try await waitUntilAsked(panelUp)
+        let newcomer = scripted(in: ws)
+        panelUp.reply?(true)
+        XCTAssertFalse(isOpen(first))
+        XCTAssertFalse(isOpen(panelUp))
+        XCTAssertTrue(isOpen(newcomer), "没问过的标签不能跟着关")
+        XCTAssertEqual(newcomer.asked, 0)
+        XCTAssertEqual(ws.tabs.count, 1)
+        XCTAssertTrue(ws.current.document === newcomer)
+        XCTAssertNotNil(ws.window)
+    }
+
+    func testTabMovedAwayWhileAPanelIsUpIsNotClosed() async throws {
+        let (ws, keep) = makeWorkspace()
+        let panelUp = scripted(in: ws, .later)
+        let moved = untitled()
+        let movedTab = ws.addTab(moved, ephemeral: false)
+        let keepTab = ws.tab(for: keep)!
+        ws.closeOtherTabs(keeping: keepTab)
+        try await waitUntilAsked(panelUp)
+        ws.detach(movedTab)
+        let other = WorkspaceWindowController(document: moved, root: nil)
+        panelUp.reply?(true)
+        XCTAssertFalse(isOpen(panelUp))
+        XCTAssertTrue(isOpen(moved), "询问期间移走的标签已经不归这个窗口关")
+        XCTAssertTrue(moved.workspace === other)
+    }
+
+    func testMergeAllWindowsWaitsForAnAskInAnotherWindow() async throws {
+        let a = try await openFile("a.md")
+        let panelUp = scripted(in: a.ws, .later)
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("quire-other-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let x = dir.appendingPathComponent("x.md")
+        try "# x\n".write(to: x, atomically: true, encoding: .utf8)
+        let opened = await open(x, in: nil, ephemeral: false)
+        let other = try XCTUnwrap(opened?.workspace)
+        XCTAssertFalse(other === a.ws)
+
+        a.ws.window?.performClose(nil)
+        try await waitUntilAsked(panelUp)
+        other.mergeAllWindows(nil)
+        XCTAssertEqual(a.ws.tabs.count, 2, "面板开着，不能把它的标签搬走")
+        XCTAssertEqual(other.tabs.count, 1)
+
+        panelUp.reply?(false)
+        other.mergeAllWindows(nil)
+        XCTAssertEqual(other.tabs.count, 3, "问完了就能合并")
+    }
+
+    /// 沉浸写作里关掉当前标签：换上来的标签可能还没有编辑器，退出沉浸不能碰它
+    func testExitingImmersiveAfterClosingCurrentTabWithoutEditor() async throws {
+        let toggle = try XCTUnwrap(class_getInstanceMethod(NSWindow.self, #selector(NSWindow.toggleFullScreen(_:))))
+        let original = method_getImplementation(toggle)
+        method_setImplementation(toggle, imp_implementationWithBlock({ (_: NSWindow, _: Any?) in } as @convention(block) (NSWindow, Any?) -> Void))   // 测试里不真的进全屏
+        defer { method_setImplementation(toggle, original) }
+        let savedMode = UserDefaults.standard.object(forKey: "view.mode")
+        defer { UserDefaults.standard.set(savedMode, forKey: "view.mode") }
+        UserDefaults.standard.set(WorkspaceWindowController.Mode.reader.rawValue, forKey: "view.mode")   // 新标签没有编辑器
+        let a = try await openFile("a.md")
+        let b = try await openFile("b.md", in: a.ws)
+        a.ws.select(try XCTUnwrap(a.ws.tab(for: a.doc)))
+        a.ws.toggleImmersive(nil)
+        XCTAssertTrue(a.ws.isImmersive)
+        let closing = try XCTUnwrap(a.ws.tab(for: a.doc))
+        try await failingOnDeadlock {
+            a.ws.closeTab(closing)
+            while a.ws.tabs.count > 1 { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        XCTAssertTrue(a.ws.current.document === b.doc)
+        XCTAssertFalse(a.ws.hasEditorPane)
+        a.ws.toggleImmersive(nil)
+        XCTAssertFalse(a.ws.isImmersive)
     }
 
     // MARK: 标签条的鼠标（直接把事件交给视图：没有窗口时 locationInWindow 就是视图坐标）

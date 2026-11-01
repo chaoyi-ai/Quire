@@ -298,28 +298,33 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     func closeTab(_ tab: DocumentTab) {
         guard tabs.contains(where: { $0 === tab }) else { return }
         if tabs.count == 1 { window?.performClose(nil); return }
-        select(tab)
-        askThenClose([tab]) { _ in }
+        askToClose([tab]) { [weak self] ok in if ok { self?.closeDocuments(of: [tab]) } }
     }
     @objc func closeCurrentTab(_ sender: Any?) { if let cur = current { closeTab(cur) } }
 
-    /// 逐个询问未存储的文档（切到那个标签让 sheet 挂对窗口），都同意才 done(true)。除最后一个外，同意的顺手关掉
+    /// 逐个询问未存储的文档（切到那个标签让 sheet 挂对窗口）：都同意才 done(true)，有一个取消就 done(false)。
+    /// 这里不关任何文档，都问完才由调用方关：取消时所有标签都还在。
+    /// 回调只有一格，同一时间只能有一轮询问（第二轮会接走第一轮的答案，还没回答的文档就被当成同意了），已经在问时新的关闭请求直接忽略
     private var docCloseCallback: ((Bool) -> Void)?
-    private func askThenClose(_ remaining: [DocumentTab], keepLast: Bool = false, done: @escaping (Bool) -> Void) {
+    private func askToClose(_ remaining: [DocumentTab], done: @escaping (Bool) -> Void) {
+        guard docCloseCallback == nil else { return }
         guard let tab = remaining.first else { done(true); return }
-        guard tabs.contains(where: { $0 === tab }) else { askThenClose(Array(remaining.dropFirst()), keepLast: keepLast, done: done); return }
+        guard tabs.contains(where: { $0 === tab }) else { askToClose(Array(remaining.dropFirst()), done: done); return }
         select(tab)
         docCloseCallback = { [weak self] ok in
             guard let self else { return }
             guard ok else { done(false); return }
-            if !(keepLast && self.tabs.count == 1) { tab.document.close() }
-            self.askThenClose(Array(remaining.dropFirst()), keepLast: keepLast, done: done)
+            self.askToClose(Array(remaining.dropFirst()), done: done)
         }
         tab.document.canClose(withDelegate: self, shouldClose: #selector(document(_:shouldClose:contextInfo:)), contextInfo: nil)
     }
     @objc private func document(_ doc: NSDocument, shouldClose: Bool, contextInfo: UnsafeMutableRawPointer?) {
         let cb = docCloseCallback; docCloseCallback = nil
         cb?(shouldClose)
+    }
+    /// 关掉问过的标签。询问可能开着很久，其间被移到别的窗口的（打开文件夹时）已经不归这里管，不能关
+    private func closeDocuments(of asked: [DocumentTab]) {
+        for tab in asked where tabs.contains(where: { $0 === tab }) { tab.document.close() }
     }
 
     /// 文档要关了（MarkdownDocument.close）：把它的标签摘掉。最后一个标签不摘——窗口跟着文档一起关（NSDocument 的默认路径）
@@ -387,10 +392,14 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     private final class MenuBlock { let run: () -> Void; init(_ r: @escaping () -> Void) { run = r } }
     @objc private func runMenuBlock(_ sender: NSMenuItem) { (sender.representedObject as? MenuBlock)?.run() }
 
-    /// 关闭其他标签：逐个询问未存储的
+    /// 关闭其他标签：逐个询问未存储的，都同意才关，有一个取消就全部留着
     func closeOtherTabs(keeping keep: DocumentTab) {
         let others = tabs.filter { $0 !== keep }
-        askThenClose(others) { [weak self] _ in if let self, self.tabs.contains(where: { $0 === keep }) { self.select(keep) } }
+        askToClose(others) { [weak self] ok in
+            guard let self else { return }
+            if self.tabs.contains(where: { $0 === keep }) { self.select(keep) }
+            if ok { self.closeDocuments(of: others) }
+        }
     }
 
     // MARK: - 标签页（窗口菜单）
@@ -411,6 +420,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     }
     /// 「合并所有窗口」：别的工作区的标签全并进这个窗口（根目录保持本窗口的）
     @objc func mergeAllWindows(_ sender: Any?) {
+        // 有窗口正开着 sheet（或正在问）：搬走它的标签、关掉它，sheet 就成了孤儿，询问永远结束不了，之后崩溃或卡死
+        guard Self.all.allSatisfy({ $0.docCloseCallback == nil && $0.window?.attachedSheet == nil }) else { NSSound.beep(); return }
         for other in Self.all where other !== self {
             for t in other.tabs { other.detach(t); addTab(t.document, ephemeral: false, select: false) }
             other.closeApproved = true
@@ -507,12 +518,17 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
 
     // MARK: - 窗口
 
-    /// 关窗口：逐个问过所有未存储的标签，都同意才关（NSWindowController 默认只问自己挂着的那一份）
+    /// 关窗口：逐个问过所有未存储的标签，都同意才关，有一个取消就全部留着。这是关窗口唯一的询问入口（AppKit 默认只问窗口挂着的那一份，已在 MarkdownDocument.shouldCloseWindowController 放行）
     private var closeApproved = false
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if closeApproved || tabs.isEmpty { return true }
-        askThenClose(tabs, keepLast: true) { [weak self] ok in
+        let asked = tabs
+        askToClose(asked) { [weak self] ok in
             guard ok, let self else { return }
+            // 询问期间开进来的标签（URL scheme、从 Finder 打开、新建）没问过，不能跟着关：只关问过的，窗口留给它们
+            if self.tabs.contains(where: { t in !asked.contains { $0 === t } }) { self.closeDocuments(of: asked); return }
+            // 最后问的那个是当前标签，它留给窗口带走（NSDocument 的默认路径），其余的先关
+            for tab in self.tabs where tab !== self.current { tab.document.close() }
             self.closeApproved = true
             self.window?.close()
         }
@@ -685,9 +701,12 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         immersiveSaved = nil
         suppressWidthAdjust = true
         defer { suppressWidthAdjust = false }
-        editorViewController.textView.onEscape = nil
-        editorViewController.textView.immersiveWidth = 0
-        editorViewController.scrollView.rulersVisible = saved.rulers
+        // 沉浸时可能关掉了当前标签，换上来的标签不一定有编辑器（editorViewController 会现建一个没加载的）
+        if hasEditorPane {
+            editorViewController.textView.onEscape = nil
+            editorViewController.textView.immersiveWidth = 0
+            editorViewController.scrollView.rulersVisible = saved.rulers
+        }
         wordCount.isHidden = saved.wordCountHidden
         window.toolbar?.isVisible = saved.toolbarVisible
         if !saved.sidebarCollapsed, isSidebarCollapsed { setSidebarCollapsed(false, animated: false) }
