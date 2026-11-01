@@ -1,6 +1,8 @@
 import XCTest
 import AppKit
 @testable import Quire
+import QuireCore
+import QuireRender
 
 /// 工作区窗口模型（ADR-18）：标签的增删选、临时标签替换 / 固定、document 换挂、文档控制器的去向判断、状态存取。
 /// 在 xctest 进程里真建窗口（不显示到屏幕的也能建），不弹任何 sheet（只用没改过的文档）。
@@ -128,6 +130,53 @@ final class WorkspaceTests: XCTestCase {
         _ = a
     }
 
+    // MARK: 标签条的鼠标（直接把事件交给视图：没有窗口时 locationInWindow 就是视图坐标）
+
+    private func click(_ strip: TabStripView, at p: NSPoint, count: Int = 1) {
+        func event(_ type: NSEvent.EventType) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: count, pressure: 1)!
+        }
+        strip.mouseMoved(with: event(.mouseMoved))
+        strip.mouseDown(with: event(.leftMouseDown))
+        strip.mouseUp(with: event(.leftMouseUp))
+    }
+
+    private func strip(width: CGFloat, titles: [String]) -> TabStripView {
+        let s = TabStripView(frame: NSRect(x: 0, y: 0, width: width, height: TabStripView.height))
+        s.items = titles.enumerated().map { TabStripView.Item(title: $1, path: nil, ephemeral: false, selected: $0 == 0) }
+        return s
+    }
+
+    func testTabStripKeepsItsDragsAwayFromTheWindow() {
+        XCTAssertFalse(strip(width: 400, titles: ["a", "b"]).mouseDownCanMoveWindow, "否则窗口服务器直接拖窗口，这里收不到 mouseDragged")
+    }
+
+    func testPlusStaysInsideANarrowStripWithALongLoneTitle() {
+        let s = strip(width: 150, titles: [String(repeating: "很长的文件名", count: 10)])
+        var created = 0
+        s.onNew = { created += 1 }
+        click(s, at: NSPoint(x: 140, y: 14))
+        XCTAssertEqual(created, 1, "+ 要留在条内点得到")
+    }
+
+    func testDoubleClickOnCloseIsOneClose() {
+        let s = strip(width: 400, titles: ["a", "b", "c"])
+        var closed: [Int] = [], pinned: [Int] = []
+        s.onClose = { closed.append($0) }
+        s.onPin = { pinned.append($0) }
+        // 三个标签时单元宽 122，标题居中，× 紧贴标题左边（35–51）
+        click(s, at: NSPoint(x: 43, y: 14))
+        XCTAssertEqual(closed, [0])
+        s.items.removeFirst()
+        click(s, at: NSPoint(x: 43, y: 14), count: 2)   // 第二下落在挪过来的标签上
+        XCTAssertEqual(closed, [0])
+        XCTAssertEqual(pinned, [], "不算双击固定")
+        // 两个标签时单元宽 184：× 在 66–82，这里是标题右边的空处
+        click(s, at: NSPoint(x: 150, y: 14), count: 1)
+        click(s, at: NSPoint(x: 150, y: 14), count: 2)
+        XCTAssertEqual(pinned, [0], "正常的双击照常固定")
+    }
+
     func testDetachAndMerge() {
         let (ws, _) = makeWorkspace(root: tmp)
         let b = untitled()
@@ -178,6 +227,75 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertFalse(doc?.workspace === ws, "根外的文件另开工作区")
         XCTAssertEqual(doc?.workspace?.rootURL?.standardizedFileURL, other.standardizedFileURL)
         XCTAssertEqual(ws.tabs.count, 1)
+    }
+
+    // MARK: 标签名
+
+    func testDuplicateTitlesAreDisambiguated() {
+        let a = URL(fileURLWithPath: "/w/a/README.md"), b = URL(fileURLWithPath: "/w/b/README.md")
+        let n1 = URL(fileURLWithPath: "/w/notes.md"), n2 = URL(fileURLWithPath: "/w/notes.markdown")
+        let t = WorkspaceWindowController.disambiguatedTitles([("README", a), ("README", b), ("notes", n1), ("notes", n2), ("THEMES", URL(fileURLWithPath: "/w/THEMES.md")), ("Untitled", nil)])
+        XCTAssertEqual(t, ["README — a", "README — b", "notes.md", "notes.markdown", "THEMES", "Untitled"])
+        // 大小写不同也算重名
+        XCTAssertEqual(WorkspaceWindowController.disambiguatedTitles([("Readme", a), ("README", b)]), ["Readme — a", "README — b"])
+    }
+
+    func testTabTitleDropsMarkdownExtensionLikeSidebar() {
+        let (ws, _) = makeWorkspace(root: tmp)
+        let doc = MarkdownDocument()
+        doc.fileURL = tmp.appendingPathComponent("a.md")
+        NSDocumentController.shared.addDocument(doc)
+        let tab = ws.addTab(doc, ephemeral: false)
+        XCTAssertEqual(tab.title, "a")
+        XCTAssertEqual(tab.title, FileTreeController.displayName(tmp.appendingPathComponent("a.md"), ambiguous: false))
+    }
+
+    // MARK: 铬的墨阶（DESIGN.md §8.1）
+
+    private func rgb(_ c: NSColor) -> [Int] {
+        let s = c.usingColorSpace(.sRGB)!
+        return [s.redComponent, s.greenComponent, s.blueComponent].map { Int(($0 * 255).rounded()) }
+    }
+
+    /// 选中底板 = 同一行里系统分段控件的选中段（macOS 27.0.1 实测：Claude Dark (50,50,49)）；浅色主题故意深一档
+    func testSelectedPlateMatchesSystemSegmentInDarkThemes() {
+        let dark = NSColor(srgbRed: 0x14 / 255, green: 0x14 / 255, blue: 0x13 / 255, alpha: 1)   // Claude Dark 背景
+        let plate = rgb(ChromeColors.ink(dark, ChromeStep.selected(dark: true)))
+        for (a, b) in zip(plate, [50, 50, 49]) { XCTAssertEqual(a, b, accuracy: 1) }
+        let light = NSColor(srgbRed: 0xFA / 255, green: 0xF9 / 255, blue: 0xF5 / 255, alpha: 1)   // Claude Light 背景
+        let chrome = ChromeColors.elevated(light), lp = ChromeColors.ink(light, ChromeStep.selected(dark: false))
+        XCTAssertLessThan(rgb(lp)[0], rgb(chrome)[0], "浅色主题里选中底板比铬深（和系统选中段同方向）")
+    }
+
+    /// 所有内置主题：铬上的次要标题 ≥ 4.5:1；选中标题在底板上 ≥ 4.5:1；状态都朝同一方向（深色变亮、浅色变暗）
+    func testChromeInkLadderReadableInEveryBuiltInTheme() {
+        let themes = ThemeStore.loadBuiltIn().themes
+        XCTAssertGreaterThanOrEqual(themes.count, 12)
+        for theme in themes {
+            let bg = RenderStyle(theme: theme).background
+            let dark = ChromeColors.isDark(bg)
+            let chrome = ChromeColors.elevated(bg)
+            let plate = ChromeColors.ink(bg, ChromeStep.selected(dark: dark))
+            let secondary = ChromeColors.ink(bg, ChromeStep.secondaryText(dark: dark))
+            let primary = ChromeColors.ink(bg, ChromeStep.primaryText)
+            XCTAssertGreaterThanOrEqual(ChromeColors.contrast(secondary, chrome), 4.5, "\(theme.id) 次要标题")
+            XCTAssertGreaterThanOrEqual(ChromeColors.contrast(primary, plate), 4.5, "\(theme.id) 选中标题")
+            let lum = { (c: NSColor) in self.rgb(c).reduce(0, +) }
+            if dark { XCTAssertGreaterThan(lum(plate), lum(chrome), "\(theme.id) 深色主题：选中变亮") }
+            else { XCTAssertLessThan(lum(plate), lum(chrome), "\(theme.id) 浅色主题：选中变暗") }
+            XCTAssertGreaterThan(ChromeColors.contrast(plate, chrome), ChromeColors.contrast(ChromeColors.ink(bg, ChromeStep.hoverFill), chrome), "\(theme.id) 悬停底比选中弱")
+        }
+    }
+
+    func testTabTextInsetIsContinuous() {
+        XCTAssertEqual(TabStripView.textInset(plateWidth: 192), 22)
+        XCTAssertEqual(TabStripView.textInset(plateWidth: 82), 21)
+        XCTAssertEqual(TabStripView.textInset(plateWidth: 52), 6)
+        var prev = TabStripView.textInset(plateWidth: 20)
+        for w in stride(from: 21, through: 240, by: 1) {
+            let v = TabStripView.textInset(plateWidth: CGFloat(w))
+            XCTAssertLessThanOrEqual(abs(v - prev), 0.5 + 1e-9); prev = v
+        }
     }
 
     // MARK: 状态

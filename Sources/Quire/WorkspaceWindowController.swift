@@ -19,8 +19,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     /// 正文区：编辑器 + 阅读视图放在一个经典 NSSplitView 里（不用 NSSplitViewController：那套用约束握着窗格宽度，
     /// setPosition 不生效、给窗格加宽度约束会把窗口撑大，每种启动模式分出来的宽度都不一样）。折叠 = 隐藏子视图
     private let contentSplit = ThemedSplitView()
-    private let contentColumn: ContentColumnView
-    private var tabStrip: TabStripView { contentColumn.strip }
+    /// 标签条是工具栏里的一项（工具栏行 = 标签行，见 Item.tabs）：顶部只有一行铬
+    private let tabStrip = TabStripView()
     private let paneHost = NSViewController()
     private var modeControl: NSSegmentedControl?
     private let wordCount = WordCountView(frame: .zero)
@@ -28,6 +28,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     nonisolated(unsafe) private var prefsObserver: NSObjectProtocol?
     nonisolated(unsafe) private var themeObserver: NSObjectProtocol?
     nonisolated(unsafe) private var editedObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var chromeStateObservers: [NSObjectProtocol] = []
+    nonisolated(unsafe) private var contrastObserver: NSObjectProtocol?
     private var isSyncingScroll = false
 
     // 当前标签的快捷访问（旧代码都按"一个窗口一份文档"写，这几个名字保住它们）
@@ -55,7 +57,6 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
 
     init(document: MarkdownDocument, root: URL?, ephemeral: Bool = false) {
         sidebarViewController = SidebarViewController()
-        contentColumn = ContentColumnView(split: contentSplit)
         LaunchClock.mark("  wc: view controllers")
 
         // 不用 fullSizeContentView：内容视图从工具栏行之下开始，侧栏自然从工具栏行之下开始（规则 3）；
@@ -86,7 +87,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         contentSplit.isVertical = true
         contentSplit.dividerStyle = .thin
         contentSplit.delegate = self
-        paneHost.view = contentColumn
+        paneHost.view = ContentColumnView(split: contentSplit)
         let contentItem = NSSplitViewItem(viewController: paneHost)
         contentItem.minimumThickness = 280
         splitViewController.addSplitViewItem(sidebar)
@@ -107,13 +108,14 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false
         window.toolbar = toolbar
-        window.toolbarStyle = .unified
+        window.toolbarStyle = .unifiedCompact   // 一行：红绿灯 + 侧栏钮 | 标签 | 模式与右侧按钮
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
         applyWindowBackground()
         themeObserver = NotificationCenter.default.addObserver(forName: ThemeManager.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.applyWindowBackground() }
         }
+        observeChromeState()
         LaunchClock.mark("  wc: toolbar")
 
         // 标签条
@@ -183,6 +185,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
 
     deinit {
         for o in [themeObserver, prefsObserver, selectionObserver, sidebarResizeObserver, editedObserver] { if let o { NotificationCenter.default.removeObserver(o) } }
+        chromeStateObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        if let contrastObserver { NSWorkspace.shared.notificationCenter.removeObserver(contrastObserver) }
     }
 
     override func showWindow(_ sender: Any?) {
@@ -343,7 +347,23 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     }
 
     private func refreshStrip() {
-        tabStrip.items = tabs.map { .init(title: $0.title, path: $0.document.fileURL?.path, edited: $0.document.isDocumentEdited, ephemeral: $0.isEphemeral, selected: $0 === current) }
+        let titles = Self.disambiguatedTitles(tabs.map { ($0.title, $0.document.fileURL) })
+        tabStrip.items = tabs.enumerated().map { i, t in .init(title: titles[i], path: t.document.fileURL?.path, ephemeral: t.isEphemeral, selected: t === current) }
+    }
+
+    /// 标签名去重：名字相同（不分大小写）的标签——同一文件夹里的（notes.md / notes.markdown）显示完整文件名，
+    /// 不同文件夹的（两个 README）后面加" — 上级文件夹名"。其余照旧（和侧栏同一条命名规则）
+    nonisolated static func disambiguatedTitles(_ entries: [(title: String, url: URL?)]) -> [String] {
+        var counts: [String: Int] = [:]
+        for e in entries { counts[e.title.lowercased(), default: 0] += 1 }
+        return entries.enumerated().map { i, e in
+            guard counts[e.title.lowercased(), default: 0] > 1, let url = e.url else { return e.title }
+            let dir = url.deletingLastPathComponent().standardizedFileURL
+            let sameFolder = entries.enumerated().contains { j, o in
+                j != i && o.title.lowercased() == e.title.lowercased() && o.url?.deletingLastPathComponent().standardizedFileURL == dir
+            }
+            return sameFolder ? url.lastPathComponent : "\(e.title) — \(dir.lastPathComponent)"
+        }
     }
 
     /// 标签右键菜单
@@ -511,7 +531,36 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         contentSplit.dividerTint = ThemeManager.shared.currentStyle.border
         contentSplit.needsDisplay = true
         tabStrip.needsDisplay = true
+        refreshChromeState()
     }
+
+    /// 自绘的铬（标签条、主题图标）跟着窗口状态变：窗口不在前台时变淡，系统「增强对比度」时加强——系统控件自己会这样，自绘的要手动跟。
+    /// 以本窗口和 App 的激活状态为准，不看标签条自己的 window（全屏时它可能在单独的工具栏窗口里）
+    func refreshChromeState() {
+        let active = (window?.isMainWindow ?? false) && NSApp.isActive
+        let ic = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        tabStrip.isActive = active
+        tabStrip.increaseContrast = ic
+        // 主题菜单项：NSMenuToolbarItem 把模板图标画成主文字色，比旁边的工具栏图标亮一截；给它一张按同一墨阶上好色的图。
+        // 窗口失焦时系统自己会把它和旁边的图标一起调淡（实测），这里不再减半，否则淡两次
+        if let item = window?.toolbar?.items.first(where: { $0.itemIdentifier == Item.theme }) {
+            let bg = ThemeManager.shared.currentStyle.background
+            let t = ic ? 0.70 : ChromeStep.glyph(dark: ChromeColors.isDark(bg))
+            item.image = Self.toolbarSymbol("paintpalette", L("主题"), color: ChromeColors.ink(bg, t))
+        }
+    }
+    private func observeChromeState() {
+        for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
+            chromeStateObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshChromeState() }
+            })
+        }
+        contrastObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshChromeState() }
+        }
+    }
+    func windowDidBecomeMain(_ notification: Notification) { refreshChromeState() }
+    func windowDidResignMain(_ notification: Notification) { refreshChromeState() }
 
     /// 侧栏折叠 / 展开（普通 split item 不能用 NSSplitViewController.toggleSidebar，那只认 .sidebar 行为的项）
     var isSidebarCollapsed: Bool { splitViewController.splitViewItems.first?.isCollapsed ?? false }
@@ -623,7 +672,6 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         mode = .editor
         if !sidebarCollapsed { setSidebarCollapsed(true, animated: false) }
         window.toolbar?.isVisible = false
-        contentColumn.stripHidden = true
         editorViewController.scrollView.rulersVisible = false
         wordCount.isHidden = true
         editorViewController.textView.immersiveWidth = session.style.maxContentWidth
@@ -642,7 +690,6 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         editorViewController.scrollView.rulersVisible = saved.rulers
         wordCount.isHidden = saved.wordCountHidden
         window.toolbar?.isVisible = saved.toolbarVisible
-        contentColumn.stripHidden = false
         if !saved.sidebarCollapsed, isSidebarCollapsed { setSidebarCollapsed(false, animated: false) }
         mode = saved.mode
         if restoreFullScreen, saved.enteredFullScreen, window.styleMask.contains(.fullScreen) { window.toggleFullScreen(nil) }
@@ -1043,6 +1090,13 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     private static func toolbarSymbol(_ name: String, _ label: String) -> NSImage {
         (NSImage(systemSymbolName: name, accessibilityDescription: label) ?? NSImage()).withSymbolConfiguration(.init(pointSize: 14, weight: .regular)) ?? NSImage()
     }
+    /// 同上，但按给定颜色上好色（非模板图）
+    private static func toolbarSymbol(_ name: String, _ label: String, color: NSColor) -> NSImage {
+        let cfg = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular).applying(.init(paletteColors: [color]))
+        let img = (NSImage(systemSymbolName: name, accessibilityDescription: label) ?? NSImage()).withSymbolConfiguration(cfg) ?? NSImage()
+        img.isTemplate = false
+        return img
+    }
 
     // MARK: - NSToolbarDelegate
 
@@ -1053,11 +1107,13 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         static let appearance = NSToolbarItem.Identifier("appearance")
         static let layout = NSToolbarItem.Identifier("readingLayout")
         static let sidebarSeparator = NSToolbarItem.Identifier("sidebarSeparator")
+        static let tabs = NSToolbarItem.Identifier("tabs")
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        // 左段（侧栏钮）| 跟随侧栏分隔线的分隔项 | 右段：模式居中，版式 / 外观 / 主题靠右
-        [Item.sidebar, Item.sidebarSeparator, .flexibleSpace, Item.mode, .flexibleSpace, Item.layout, Item.appearance, Item.theme]
+        // 一行三组：左段（侧栏钮，与侧栏同宽）| 标签（伸缩）| 右段：模式分段 ·（固定间隔）· 版式 / 外观 / 主题
+        // 模式是"这一篇怎么看"，后三个是"整个 App 长什么样"：中间留一个固定间隔，不让 7 个图标连成一串
+        [Item.sidebar, Item.sidebarSeparator, Item.tabs, Item.mode, .space, Item.layout, Item.appearance, Item.theme]
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         toolbarDefaultItemIdentifiers(toolbar)
@@ -1065,6 +1121,22 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         switch id {
+        case Item.tabs:
+            // 标签条占满侧栏右边、模式控件左边的全部空间（宽度靠约束伸缩：低抗拉伸、最小宽度）
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.label = L("标签页")
+            item.isBordered = false
+            tabStrip.translatesAutoresizingMaskIntoConstraints = false
+            tabStrip.setContentHuggingPriority(.init(1), for: .horizontal)
+            tabStrip.setContentCompressionResistancePriority(.init(250), for: .horizontal)
+            NSLayoutConstraint.activate([
+                tabStrip.heightAnchor.constraint(equalToConstant: TabStripView.height),
+                tabStrip.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
+                { let c = tabStrip.widthAnchor.constraint(equalToConstant: 10_000); c.priority = .init(2); return c }(),
+            ])
+            item.view = tabStrip
+            item.visibilityPriority = .high
+            return item
         case Item.sidebarSeparator:
             // 系统的 sidebarTrackingSeparator 只认 .sidebar 行为的 split item；显式指定分栏视图 + 分隔线序号就能跟普通项
             return NSTrackingSeparatorToolbarItem(identifier: id, splitView: themedSplitView, dividerIndex: 0)
@@ -1083,7 +1155,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
                 Self.toolbarSymbol("doc.richtext", L("阅读")),
                 Self.toolbarSymbol("chevron.left.forwardslash.chevron.right", L("编辑")),
                 Self.toolbarSymbol("rectangle.split.2x1", L("分栏")),
-                Self.toolbarSymbol("square.and.pencil", L("混合")),
+                Self.toolbarSymbol("pencil.line", L("混合")),   // 不用 square.and.pencil：那是系统标准的"新建 / 撰写"图标，紧挨着标签的 + 会读成"新文档"
             ], trackingMode: .selectOne, target: self, action: #selector(modeChanged(_:)))
             control.setToolTip(L("阅读（⌘1）"), forSegment: 0)
             control.setToolTip(L("编辑（⌘2）"), forSegment: 1)
@@ -1098,8 +1170,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             // 下拉菜单式工具栏项：点一下弹主题列表（菜单内容每次打开时由 Handler.menuNeedsUpdate 重建）
             let item = NSMenuToolbarItem(itemIdentifier: id)
             item.label = L("主题"); item.toolTip = L("选择主题")
-            item.image = Self.toolbarSymbol("paintpalette", L("主题"))
-            item.showsIndicator = true
+            item.image = Self.toolbarSymbol("paintpalette", L("主题"))   // refreshChromeState() 换成上好色的版本
+            item.showsIndicator = false   // 不要下拉箭头：系统按主文字色画它，整行就它一个最亮；点图标照样弹菜单
             item.isBordered = false   // 与旁边的图标按钮一致（都不带底座）
             let menu = MainMenu.buildThemeMenu()
             menu.delegate = MainMenu.Handler.shared
@@ -1133,6 +1205,27 @@ extension WorkspaceWindowController {
     func splitView(_ splitView: NSSplitView, shouldHideDividerAt dividerIndex: Int) -> Bool {
         splitView.arrangedSubviews.contains { $0.isHidden }   // 单栏时不画分隔线
     }
+}
+
+/// 正文列：只装正文分栏，在 layout() 里手动给它 frame。
+/// 不能让分栏直接当 split item 的视图、也不能给它 autoresizing 跟随：NSSplitView 给两个窗格的是固定宽度的自动转换约束，
+/// 分栏一旦被约束到容器两边，这两个固定宽度之和就会把容器——连带窗口——撑宽（双栏启动时每启动一次窗口宽一截）。
+/// 手动给 frame 时分栏的自动约束是"右侧留白可伸缩"，推不动容器（0.10.0 的写法，0.10.2 去掉标签条时一度丢了）
+@MainActor
+final class ContentColumnView: NSView {
+    let split: NSSplitView
+    init(split: NSSplitView) {
+        self.split = split
+        super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        addSubview(split)
+    }
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+    override func layout() {
+        super.layout()
+        split.frame = bounds
+    }
+    override func resize(withOldSuperviewSize oldSize: NSSize) { super.resize(withOldSuperviewSize: oldSize); needsLayout = true }
+    override func setFrameSize(_ newSize: NSSize) { super.setFrameSize(newSize); needsLayout = true }
 }
 
 /// 主题色分隔线的 split view（外层 侧栏|正文、内层 编辑器|阅读 都用）：分隔线颜色跟主题的 border 走（系统的 separatorColor 在深色主题里是一条发白的线）
