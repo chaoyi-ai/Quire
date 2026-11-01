@@ -298,6 +298,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     func closeTab(_ tab: DocumentTab) {
         guard tabs.contains(where: { $0 === tab }) else { return }
         if tabs.count == 1 { window?.performClose(nil); return }
+        guard window?.attachedSheet == nil else { NSSound.beep(); return }   // canClose 要等 sheet 答完，主线程一等 sheet 就再也答不了（performClose 自己会拦）
         askToClose([tab]) { [weak self] ok in if ok { self?.closeDocuments(of: [tab]) } }
     }
     @objc func closeCurrentTab(_ sender: Any?) { if let cur = current { closeTab(cur) } }
@@ -394,6 +395,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
 
     /// 关闭其他标签：逐个询问未存储的，都同意才关，有一个取消就全部留着
     func closeOtherTabs(keeping keep: DocumentTab) {
+        guard window?.attachedSheet == nil else { NSSound.beep(); return }
         let others = tabs.filter { $0 !== keep }
         askToClose(others) { [weak self] ok in
             guard let self else { return }
@@ -877,9 +879,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         guard let cur = current else { return }
         cur.readingTracker.documentChanged(cur.session.parsed, source: cur.session.parsedSource)
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            let top = self.readerViewController.textView.topVisibleBlockIndex() ?? 0
-            self.wordCount.update(chapter: self.current.readingTracker.progress(at: top))
+            guard let self, let cur = self.current else { return }   // 这一轮里标签可能已经全摘走了（合并窗口）
+            let top = cur.reader.textView.topVisibleBlockIndex() ?? 0
+            self.wordCount.update(chapter: cur.readingTracker.progress(at: top))
         }
     }
     /// 混合模式的回写：击键只更新文档源码（不重渲染），离开块时重解析 + 按 diff 重渲染

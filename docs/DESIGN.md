@@ -278,9 +278,10 @@ enum Block: Hashable {
 
 ## 9. 文件监控与重载
 
-- `DispatchSource.makeFileSystemObjectSource`（`.write .rename .delete`）；编辑器保存时用 atomic write 触发 rename，要重新 open fd。
+- `DispatchSource.makeFileSystemObjectSource`（`.write .rename .delete .extend .attrib`）；编辑器保存时用 atomic write 触发 rename，要重新 open fd。事件只说明"可能变了"（自己刚写的、touch、Finder 标签、备份工具都会响）：和最近一次读到、写下或采用的字节一样，就不算外部修改。
 - 重载保留滚动位置（按可见首块的 `contentHash` **就近**定位——文档里可能有内容相同的重复块，不能取第一个匹配）。
-- 有未保存改动时磁盘文件被改：不静默覆盖也不静默忽略，弹 sheet 让用户选"重新载入（丢弃改动）/ 保留我的改动"；同一份磁盘内容只问一次。
+- 有未保存改动时磁盘文件被改：不静默覆盖也不静默忽略，弹 sheet 让用户选"重新载入（丢弃改动）/ 保留我的改动"；同一份磁盘内容只问一次，同一时间只有一个 sheet。"重新载入"载入点按钮这一刻磁盘上的版本。sheet 进文档的活动队列（`performActivity`），自动保存排在它后面：否则存储失败的系统提示挂不出来又不结束，之后存储、关闭、退出都卡死。
+- 修改时间要和字节同一时刻取，先取时间再读字节：`fileModificationDate` 是 NSDocument 存储前的最后一道检查，记下没读到的那次写入的时间，下次存储就会把它静默盖掉。
 
 ## 10. 目录结构
 

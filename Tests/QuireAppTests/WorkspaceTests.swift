@@ -9,6 +9,7 @@ import QuireRender
 @MainActor
 final class WorkspaceTests: XCTestCase {
     private var tmp: URL!
+    private var hangWatchdog: DispatchWorkItem?
     nonisolated(unsafe) private static var booted = false
 
     /// 同一个测试进程只能建一次（所有测试类都走这里）：macOS 26 上再建一个 QuireDocumentController，共享控制器就变回系统默认的
@@ -18,6 +19,10 @@ final class WorkspaceTests: XCTestCase {
     }
 
     override func setUp() async throws {
+        // 主线程挂住时（死锁，或者弹了没人点的模态窗口）XCTest 的超时也等不到，整轮测试永远挂着：只能从后台让进程带着说明崩掉
+        let watchdog = DispatchWorkItem { @Sendable in fatalError("测试 120 s 没结束：主线程死锁，或者弹了没人点的模态窗口") }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 120, execute: watchdog)
+        hangWatchdog = watchdog
         Self.bootApp()
         XCTAssertTrue(NSDocumentController.shared is QuireDocumentController, "QuireDocumentController 必须是共享控制器（在任何 NSDocumentController.shared 之前建）")
         tmp = FileManager.default.temporaryDirectory.appendingPathComponent("quire-ws-\(UUID().uuidString)")
@@ -26,6 +31,7 @@ final class WorkspaceTests: XCTestCase {
     }
 
     override func tearDown() async throws {
+        defer { hangWatchdog?.cancel() }
         // 关掉本测试开的所有文档（文档 close 不问；最后一个文档带走窗口）。不能先直接关多标签的窗口：
         // AppKit 会把窗口挂着的文档关掉，标签换挂到下一个，留下一个没窗口的工作区，下一个测试的文件会被路由进去
         for doc in NSDocumentController.shared.documents { doc.close() }
@@ -138,7 +144,7 @@ final class WorkspaceTests: XCTestCase {
 
     /// 主线程死锁时 XCTest 的超时也等不到（它同样在主线程上），只能从后台让进程带着说明崩掉，否则整轮测试永远挂着
     private func failingOnDeadlock(_ body: () async throws -> Void) async rethrows {
-        let watchdog = DispatchWorkItem { @Sendable in fatalError("关闭死锁：主线程 30 s 没回来") }
+        let watchdog = DispatchWorkItem { @Sendable in fatalError("主线程 30 s 没回来：死锁，或者弹了没人点的模态窗口") }
         DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: watchdog)
         defer { watchdog.cancel() }
         try await body()
@@ -228,6 +234,9 @@ final class WorkspaceTests: XCTestCase {
         nonisolated(unsafe) var answer = Answer.yes
         nonisolated(unsafe) var asked = 0
         nonisolated(unsafe) var reply: ((Bool) -> Void)?
+        nonisolated(unsafe) var conflicts = 0
+
+        override func promptReloadConflict() { conflicts += 1 }
 
         override func canClose(withDelegate delegate: Any, shouldClose shouldCloseSelector: Selector?, contextInfo: UnsafeMutableRawPointer?) {
             asked += 1
@@ -496,6 +505,261 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertFalse(a.ws.hasEditorPane)
         a.ws.toggleImmersive(nil)
         XCTAssertFalse(a.ws.isImmersive)
+    }
+
+    // MARK: 外部修改
+
+    /// touch、Finder 标签、备份工具只动属性，监视器同样会响：内容没变就不是外部修改，不能问"已被其他程序修改，要不要丢弃改动"
+    func testAttributeOnlyChangeWithUnsavedEditsIsNotAConflict() async throws {
+        let a = try await openFile("a.md")
+        a.doc.replaceContents("# edited a\n")
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: 5)], ofItemAtPath: a.url.path)
+        a.doc.reloadFromDisk()   // 监视器响了走的就是这里
+        XCTAssertNil(a.ws.window?.attachedSheet, "内容没变，不该问")
+        // 修改时间也要跟上：否则 NSDocument 按自己记的时间认为文件被改了，改动存不下去
+        a.doc.autosave(withImplicitCancellability: false) { _ in }
+        try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertNil(a.ws.window?.attachedSheet, "存储也不该问")
+        XCTAssertEqual(try disk(a.url), "# edited a\n")
+    }
+
+    /// 内容真的变了、又有未保存改动：还是要问；同一份磁盘内容只问一次，改回去再改成这份算又一次外部修改
+    func testRealExternalChangeWithUnsavedEditsStillAsks() throws {
+        let url = tmp.appendingPathComponent("a.md")
+        let opened = try disk(url)
+        let doc = ScriptedDocument()
+        doc.fileURL = url
+        NSDocumentController.shared.addDocument(doc)
+        try doc.read(from: Data(contentsOf: url), ofType: QuireDocumentController.markdownType)
+        doc.replaceContents("# mine\n")
+        doc.reloadFromDisk()
+        XCTAssertEqual(doc.conflicts, 0, "磁盘没变")
+        try "# theirs\n".write(to: url, atomically: true, encoding: .utf8)
+        doc.reloadFromDisk()
+        doc.reloadFromDisk()
+        XCTAssertEqual(doc.conflicts, 1)
+        XCTAssertEqual(doc.source, "# mine\n", "问之前不动")
+        try opened.write(to: url, atomically: true, encoding: .utf8)
+        doc.reloadFromDisk()
+        XCTAssertEqual(doc.conflicts, 1, "磁盘回到了打开时的版本")
+        try "# theirs\n".write(to: url, atomically: true, encoding: .utf8)
+        doc.reloadFromDisk()
+        XCTAssertEqual(doc.conflicts, 2)
+        doc.updateChangeCount(.changeCleared)
+    }
+
+    /// sheet 挂上来（挂不上来由看门狗收场）
+    private func visibleSheet(on ws: WorkspaceWindowController) async throws -> NSWindow {
+        let window = try XCTUnwrap(ws.window)
+        try await failingOnDeadlock { while window.attachedSheet?.isVisible != true { try await Task.sleep(for: .milliseconds(20)) } }
+        return try XCTUnwrap(window.attachedSheet)
+    }
+    private func buttons(in view: NSView) -> [NSButton] { view.subviews.flatMap { ($0 as? NSButton).map { [$0] } ?? buttons(in: $0) } }
+    private func click(_ title: String, on ws: WorkspaceWindowController) async throws {
+        let sheet = try await visibleSheet(on: ws)
+        try XCTUnwrap(buttons(in: try XCTUnwrap(sheet.contentView)).first { $0.title == title }).performClick(nil)
+        try await failingOnDeadlock { while ws.window?.sheets.contains(sheet) == true { try await Task.sleep(for: .milliseconds(20)) } }
+    }
+    private func keepChanges(on ws: WorkspaceWindowController) async throws { try await click(L("保留我的改动"), on: ws) }
+    private func reloadFromDisk(on ws: WorkspaceWindowController) async throws { try await click(L("重新载入（丢弃改动）"), on: ws) }
+
+    /// sheet 开着时外部又改回打开时的版本（git stash 再 pop）：载入的是磁盘上现在的这版。
+    /// 以前载入弹窗时那份、又记下现在的修改时间，下次存储把磁盘静默盖掉
+    func testReloadAnswerLoadsTheVersionOnDiskNow() async throws {
+        let a = try await openFile("a.md")
+        a.doc.session.stopWatching()   // 只看这里调的：监视器晚到的事件会替没写对的地方补救
+        let opened = try disk(a.url)
+        a.doc.replaceContents("# mine\n")
+        try "# stashed\n".write(to: a.url, atomically: true, encoding: .utf8)
+        a.doc.reloadFromDisk()
+        _ = try await visibleSheet(on: a.ws)
+        try opened.write(to: a.url, atomically: true, encoding: .utf8)
+        a.doc.reloadFromDisk()
+        try await reloadFromDisk(on: a.ws)
+        XCTAssertEqual(a.doc.source, opened)
+        XCTAssertFalse(a.doc.isDocumentEdited)
+        a.doc.replaceContents(opened + "typed\n")
+        a.doc.autosave(withImplicitCancellability: false) { _ in }
+        try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertEqual(try disk(a.url), opened + "typed\n")
+    }
+
+    /// sheet 开着时磁盘又变了：不叠第二个 sheet；保留改动就接着问最新的这版（只问一次），重新载入就载入最新的
+    func testFurtherExternalChangeWhileAsking() async throws {
+        let a = try await openFile("a.md")
+        a.doc.session.stopWatching()   // 只看这里调的：监视器晚到的事件会替没写对的地方补救
+        func external(_ text: String) throws {
+            try text.write(to: a.url, atomically: true, encoding: .utf8)
+            a.doc.reloadFromDisk()
+        }
+        a.doc.replaceContents("# mine\n")
+        try external("# one\n")
+        _ = try await visibleSheet(on: a.ws)
+        try external("# two\n")
+        try external("# three\n")
+        XCTAssertEqual(a.ws.window?.sheets.count, 1)
+        try await keepChanges(on: a.ws)
+        XCTAssertEqual(a.doc.source, "# mine\n")
+        _ = try await visibleSheet(on: a.ws)
+        try await keepChanges(on: a.ws)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertNil(a.ws.window?.attachedSheet)
+        try external("# four\n")
+        _ = try await visibleSheet(on: a.ws)
+        try external("# five\n")
+        try await reloadFromDisk(on: a.ws)
+        XCTAssertEqual(a.doc.source, "# five\n")
+        XCTAssertEqual(try disk(a.url), "# five\n")
+        XCTAssertFalse(a.doc.isDocumentEdited)
+        XCTAssertNil(a.ws.window?.attachedSheet)
+    }
+
+    /// sheet 开着时自动保存的定时器到了（打字后 15 s）：要排在 sheet 后面。
+    /// 以前不排队，存储失败的系统提示挂不出来又不结束，回答之后关闭、存储、退出都卡死，只能强退，改动也没了
+    func testAutosaveDuringConflictPromptWaitsForTheAnswer() async throws {
+        let a = try await openFile("a.md")
+        a.doc.replaceContents("# mine\n")
+        try "# theirs\n".write(to: a.url, atomically: true, encoding: .utf8)
+        a.doc.reloadFromDisk()
+        _ = try await visibleSheet(on: a.ws)
+        a.doc.autosave(withDelegate: nil, didAutosave: nil, contextInfo: nil)   // 定时器走的就是这里
+        try await Task.sleep(for: .milliseconds(200))
+        try await keepChanges(on: a.ws)
+        // 轮到自动保存：文件确实被改过，系统会问（第一个选项是 Save Anyway）。各系统版本问不问、什么时候问不必一样，出现了才答
+        for _ in 0..<100 where a.ws.window?.attachedSheet?.isVisible != true { try await Task.sleep(for: .milliseconds(20)) }
+        if let sheet = a.ws.window?.attachedSheet, sheet.isVisible {
+            a.ws.window?.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+            try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+            XCTAssertEqual(try disk(a.url), "# mine\n", "改动不能丢")
+        }
+        let tab = try XCTUnwrap(a.ws.tab(for: a.doc))
+        try await failingOnDeadlock {
+            a.ws.closeTab(tab)   // 卡死就卡在这里
+            while isOpen(a.doc) {
+                if let sheet = a.ws.window?.attachedSheet, sheet.isVisible { a.ws.window?.endSheet(sheet, returnCode: .alertFirstButtonReturn) }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+    }
+
+    /// sheet 开着时要关闭、存储（⌘W、quire://append 都可能走到）：canClose、save 都要等 sheet 答完，主线程一等 sheet 就再也答不了，所以一律拒绝；答完之后照常
+    func testCloseAndSaveAreRefusedWhileAsking() async throws {
+        let a = try await openFile("a.md")
+        _ = try await openFile("b.md", in: a.ws)
+        let tab = try XCTUnwrap(a.ws.tab(for: a.doc))
+        a.ws.select(tab)
+        let save = NSMenuItem(title: "", action: #selector(NSDocument.save(_:)), keyEquivalent: "")
+        a.doc.replaceContents("# mine\n")
+        XCTAssertTrue(a.doc.validateUserInterfaceItem(save))
+        try "# theirs\n".write(to: a.url, atomically: true, encoding: .utf8)
+        a.doc.reloadFromDisk()
+        let prompt = try await visibleSheet(on: a.ws)
+        XCTAssertFalse(a.doc.validateUserInterfaceItem(save))
+        try await failingOnDeadlock {
+            a.ws.closeTab(tab)
+            a.ws.closeOtherTabs(keeping: tab)
+            XCTAssertFalse(URLScheme.appendText("x", to: a.url, external: false))
+        }
+        XCTAssertEqual(a.ws.window?.attachedSheet, prompt)
+        XCTAssertEqual(a.ws.tabs.count, 2)
+        XCTAssertTrue(a.ws.current === tab)
+        XCTAssertEqual(a.doc.source, "# mine\n")
+        try await reloadFromDisk(on: a.ws)
+        XCTAssertEqual(a.doc.source, "# theirs\n")
+        a.ws.closeTab(tab)
+        try await failingOnDeadlock { while a.ws.tabs.count > 1 { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertFalse(isOpen(a.doc))
+    }
+
+    /// 问题排在别的活动后面（比如系统的存储询问），轮到时已经没有未保存改动：不问，文档跟着磁盘走
+    func testQueuedPromptIsDroppedWhenNothingIsLeftToLose() async throws {
+        let a = try await openFile("a.md")
+        a.doc.replaceContents("# mine\n")
+        nonisolated(unsafe) var finishEarlierActivity: (() -> Void)?
+        a.doc.performActivity(withSynchronousWaiting: false) { done in finishEarlierActivity = done }
+        try await failingOnDeadlock { while finishEarlierActivity == nil { try await Task.sleep(for: .milliseconds(20)) } }
+        try "# theirs\n".write(to: a.url, atomically: true, encoding: .utf8)
+        a.doc.reloadFromDisk()
+        XCTAssertNil(a.ws.window?.attachedSheet)
+        a.doc.updateChangeCount(.changeCleared)
+        try XCTUnwrap(finishEarlierActivity)()
+        try await failingOnDeadlock { while a.doc.source != "# theirs\n" { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertNil(a.ws.window?.attachedSheet)
+    }
+
+    /// CRLF 文件被外部改过、重新载入之后还是 CRLF：否则下次存储把整个文件的换行都改了
+    func testExternalChangeKeepsCRLF() async throws {
+        let url = tmp.appendingPathComponent("crlf.md")
+        try "one\r\ntwo\r\n".write(to: url, atomically: true, encoding: .utf8)
+        let a = try await openFile("crlf.md")
+        try "one\r\ntwo\r\nthree\r\n".write(to: url, atomically: true, encoding: .utf8)
+        a.doc.reloadFromDisk()
+        XCTAssertEqual(a.doc.source, "one\ntwo\nthree\n")
+        a.doc.replaceContents("one\ntwo\nthree\nfour\n")
+        a.doc.autosave(withImplicitCancellability: false) { _ in }
+        try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertEqual(try disk(url), "one\r\ntwo\r\nthree\r\nfour\r\n")
+    }
+
+    /// 外部改了又改回去（切分支再切回来）：每次都要跟上。比较用的字节不跟着更新的话，改回去时会被当成"没变"，文档停在中间那版，下次存储还会盖回磁盘
+    func testExternalChangeAndBackIsFollowed() async throws {
+        let a = try await openFile("a.md")
+        func external(_ text: String) throws {
+            try text.write(to: a.url, atomically: true, encoding: .utf8)
+            a.doc.reloadFromDisk()
+            XCTAssertEqual(a.doc.source, text)
+        }
+        // 打开时读到的那版
+        let opened = try disk(a.url)
+        try external("# theirs\n")
+        try external(opened)
+        // 自己写下去的那版
+        a.doc.replaceContents("# mine\n")
+        a.doc.autosave(withImplicitCancellability: false) { _ in }
+        try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        try external("# theirs again\n")
+        try external("# mine\n")
+    }
+
+    /// 就地改写（不是替换文件）也要看得出来：留着比较的字节不能跟着文件变。
+    /// 文件要够大：14 字节以内的 Data 就存在结构体里，怎么都不会跟着变，测不出来
+    func testInPlaceExternalWriteIsNoticed() async throws {
+        let url = tmp.appendingPathComponent("big.md")
+        let body = String(repeating: "text\n", count: 20_000)
+        try body.write(to: url, atomically: true, encoding: .utf8)
+        let a = try await openFile("big.md")
+        // 长度不变，不截断
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.write(contentsOf: Data("TEXT\n".utf8))
+        try handle.close()
+        a.doc.reloadFromDisk()
+        XCTAssertTrue(a.doc.source.hasPrefix("TEXT\ntext\n"))
+        // 截断后重写
+        try Data(body.utf8).write(to: url)
+        a.doc.reloadFromDisk()
+        XCTAssertEqual(a.doc.source, body)
+    }
+
+    /// 打开之后不能留着文件映射（NSDocument 给的 Data 可能是映射）：卷卸不掉，强行卸掉后再比较字节还会崩
+    func testOpeningDoesNotKeepTheFileMapped() async throws {
+        func isMapped(_ url: URL) -> Bool {
+            let suffix = url.pathComponents.suffix(2).joined(separator: "/")   // 映射表里是解析过符号链接的路径（/private/var/…）
+            var address: UInt64 = 0
+            var info = proc_regionwithpathinfo()
+            let size = Int32(MemoryLayout<proc_regionwithpathinfo>.size)
+            while proc_pidinfo(getpid(), PROC_PIDREGIONPATHINFO, address, &info, size) == size {
+                let path = withUnsafeBytes(of: info.prp_vip.vip_path) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
+                if path.hasSuffix(suffix) { return true }
+                address = info.prp_prinfo.pri_address + info.prp_prinfo.pri_size
+            }
+            return false
+        }
+        let url = tmp.appendingPathComponent("big.md")
+        try String(repeating: "text\n", count: 20_000).write(to: url, atomically: true, encoding: .utf8)
+        let a = try await openFile("big.md")
+        // NSDocument 自己的引用要等 autorelease 池放掉
+        for _ in 0..<100 where isMapped(a.url) { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertFalse(isMapped(a.url))
     }
 
     // MARK: 标签条的鼠标（直接把事件交给视图：没有窗口时 locationInWindow 就是视图坐标）
