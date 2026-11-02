@@ -305,7 +305,7 @@ enum MainMenu {
         @objc func openHomepage(_ sender: Any?) { NSWorkspace.shared.open(URL(string: "https://github.com/chaoyi-ai/Quire")!) }
         @objc func openThemeDocs(_ sender: Any?) { NSWorkspace.shared.open(URL(string: "https://github.com/chaoyi-ai/Quire/blob/main/docs/THEMES.md")!) }
         @objc func reload(_ sender: Any?) {
-            (NSDocumentController.shared.currentDocument as? MarkdownDocument)?.reloadFromDisk()
+            (NSDocumentController.shared.currentDocument as? MarkdownDocument)?.reloadCommand()
         }
         @objc func revealInFinder(_ sender: Any?) {
             guard let url = NSDocumentController.shared.currentDocument?.fileURL else { return }

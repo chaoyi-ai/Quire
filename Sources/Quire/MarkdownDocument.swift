@@ -192,7 +192,11 @@ class MarkdownDocument: NSDocument {
         super.close()
     }
 
-    /// 关闭前的询问：切到这份文档的标签，sheet 才有窗口可挂（否则退回 app 级模态）
+    /// 文档的窗口就是工作区的窗口，标签在不在前台都一样。窗口控制器只挂在当前标签的文档上，默认实现对后台标签返回 nil：
+    /// 系统的询问就退回 app 级模态（答完文档又被标成未保存）；询问开着时等活动队列，AppKit 找不到 sheet，主线程真的死等，再也答不了
+    override var windowForSheet: NSWindow? { super.windowForSheet ?? MainActor.assumeIsolated { workspace?.window } }
+
+    /// 关闭前的询问：切到这份文档的标签，问的是它，sheet 要盖在它上面
     override func canClose(withDelegate delegate: Any, shouldClose shouldCloseSelector: Selector?, contextInfo: UnsafeMutableRawPointer?) {
         MainActor.assumeIsolated { if let ws = workspace, let t = ws.tab(for: self), ws.current !== t { ws.select(t) } }
         super.canClose(withDelegate: delegate, shouldClose: shouldCloseSelector, contextInfo: contextInfo)
@@ -220,6 +224,8 @@ class MarkdownDocument: NSDocument {
         let was = isDocumentEdited
         super.updateChangeCount(change)
         if was != isDocumentEdited { NotificationCenter.default.post(name: Self.editedStateDidChange, object: self) }
+        // 改动撤销完了：有改动时没跟的外部修改现在可以跟了。这时没有存储，系统不会再来问，不跟就一直停在旧内容
+        if was, !isDocumentEdited { Task { @MainActor [weak self] in self?.reloadFromDisk() } }
     }
     override func updateChangeCount(withToken changeCountToken: Any, for saveOperation: NSDocument.SaveOperationType) {
         let was = isDocumentEdited
@@ -330,34 +336,54 @@ class MarkdownDocument: NSDocument {
         updateChangeCount(.changeDone)
     }
 
+    /// 和磁盘比较的结论。监视器不看（事件可能什么都不代表），⌘R 按它回应
+    enum ReloadResult { case current, reloaded, unsavedEdits, conflict, unreadable }
+
     /// 外部修改后重新读取（保留编码）；字节没变就不算外部修改：监视器对自己刚写的内容、对只动属性的 touch / Finder 标签 / 备份工具都会响。
-    /// 有未保存改动时不静默覆盖：弹 sheet 让用户选择"重新载入（丢弃改动）/ 保留我的改动"；同一份磁盘内容只问一次，同一时间只有一个 sheet。
-    func reloadFromDisk() {
-        guard let disk = readDisk() else { return }
+    /// 有未保存改动时不覆盖、不写盘，也不打断：修改时间留在旧值，下一次存储被 NSDocument 拦下，由系统问一次（DESIGN §9）
+    @discardableResult
+    func reloadFromDisk() -> ReloadResult {
+        guard let disk = readDisk() else { return .unreadable }
         // 先按字节比（也避免用记录的编码去解别的编码时"看起来不同"）
         if disk.data == knownDiskData {
             fileModificationDate = disk.date
-            conflictPromptedContent = nil
-            return
+            return isDocumentEdited ? .unsavedEdits : .current
         }
-        guard let raw = String(data: disk.data, encoding: encoding), raw != sourceForDisk else { return }
+        guard let raw = String(data: disk.data, encoding: encoding) else { return .unreadable }
+        guard raw != sourceForDisk else { return .current }
         let s = raw.contains("\r\n") ? raw.replacingOccurrences(of: "\r\n", with: "\n") : raw
-        guard s != source else { return }
+        guard s != source else { return .current }
         // 自己刚写盘的（正文相同、只是多了归属块 / 尾换行）也不算外部修改
         if authorship != nil || s.contains(Authorship.marker) {
             let diskBody = Authorship.split(s).body
-            if diskBody == source || diskBody == source + "\n" { return }
+            if diskBody == source || diskBody == source + "\n" { return .current }
         }
-        if isDocumentEdited {
-            guard !conflictPromptOpen, s != conflictPromptedContent else { return }
-            conflictPromptedContent = s
-            MainActor.assumeIsolated { promptReloadConflict() }
-            return
-        }
+        if isDocumentEdited { return .conflict }
         applyReloaded(raw, disk)
+        return .reloaded
     }
-    private var conflictPromptedContent: String?
-    private var conflictPromptOpen = false
+
+    /// ⌘R：用户自己要的，和监视器不一样。和未保存改动冲突就立刻问（走存储，系统问的就是那一问），之前问过也问；做不到要有回应。返回 false = 做不到，响过一声
+    @MainActor
+    @discardableResult
+    func reloadCommand() -> Bool {
+        guard windowForSheet?.attachedSheet == nil else { NSSound.beep(); return false }   // 已经在问了
+        switch reloadFromDisk() {
+        case .current, .reloaded: return true
+        case .conflict: save(nil); return true
+        case .unsavedEdits, .unreadable: NSSound.beep(); return false
+        }
+    }
+
+    /// 文件被别的程序改过时系统问的那一问，标题换成发生了什么："未能自动保存"读着像出错了，其实是在等用户决定。
+    /// 说明文字和按钮不动，它们和恢复动作是一套的。67000 头文件里没有；哪天系统换了码，这里只是退回系统自己的标题
+    override func willPresentError(_ error: any Error) -> any Error {
+        let e = super.willPresentError(error) as NSError
+        guard e.domain == NSCocoaErrorDomain, e.code == 67000 else { return e }
+        var info = e.userInfo
+        info[NSLocalizedDescriptionKey] = String(format: L("“%@”已被其他程序修改"), fileURL?.lastPathComponent ?? displayName ?? L("文档"))
+        return NSError(domain: e.domain, code: e.code, userInfo: info)
+    }
 
     /// 磁盘上现在的字节和修改时间。先取时间再读：中间又被改的话，记下的时间比字节旧，NSDocument 下次存储时会拦住；
     /// 反过来就可能记下没读到的那次写入的时间，下次存储把它静默盖掉
@@ -377,53 +403,11 @@ class MarkdownDocument: NSDocument {
         normalizeLineEndings()
         splitAuthorship()
         let s = source
-        conflictPromptedContent = nil
         MainActor.assumeIsolated {
             session.sourceDidChange(s, reason: .externalChange)
             workspace?.documentDidReload(self, s)
             if workspace?.current?.document === self { workspace?.noteAuthorshipMismatchIfNeeded() }
         }
-    }
-
-    /// 在文档的活动队列里问（AppKit 约定的模态 UI 入口）：自动保存排在 sheet 后面。不排队的话，自动保存失败的系统提示挂不出来又不结束，之后存储、关闭、退出都卡死
-    @MainActor
-    func promptReloadConflict() {
-        conflictPromptOpen = true
-        performActivity(withSynchronousWaiting: false) { [self] done in
-            let done = UncheckedSendableBox(done)
-            MainActor.assumeIsolated {
-                // 排队期间可能已经存过了（前面是系统的"存储失败"询问时）：没有未保存改动就不用问，文档跟着磁盘走
-                guard isDocumentEdited else { conflictPromptOpen = false; done.value(); reloadFromDisk(); return }
-                let alert = NSAlert()
-                alert.messageText = L("文件在磁盘上被修改")
-                alert.informativeText = String(format: L("%@ 已被其他程序修改，而当前有未保存的改动。要重新载入磁盘上的版本吗？"), fileURL?.lastPathComponent ?? displayName ?? L("文档"))
-                alert.alertStyle = .warning
-                alert.addButton(withTitle: L("保留我的改动"))
-                alert.addButton(withTitle: L("重新载入（丢弃改动）"))
-                let answered: (NSApplication.ModalResponse) -> Void = { [self] r in
-                    conflictPromptOpen = false
-                    if r == .alertSecondButtonReturn { discardEditsAndReload() }
-                    done.value()
-                    reloadFromDisk()   // sheet 开着时磁盘可能又变了，那一版还没问过
-                }
-                if let window = windowForSheet { alert.beginSheetModal(for: window, completionHandler: answered) }
-                else { answered(alert.runModal()) }
-            }
-        }
-    }
-
-    /// 问题开着时文档的菜单命令都不可用：存储、复原、打印都要等活动队列，主线程一等 sheet 就再也答不了
-    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
-        !conflictPromptOpen && super.validateUserInterfaceItem(item)
-    }
-
-    /// 载入的是点按钮这一刻磁盘上的版本：sheet 开着时磁盘可能又变了。载入弹窗时那份、又记下现在的修改时间的话，下次存储就把现在的版本静默盖掉了
-    @MainActor
-    private func discardEditsAndReload() {
-        guard let disk = readDisk(), let raw = String(data: disk.data, encoding: encoding) else { NSSound.beep(); return }
-        applyReloaded(raw, disk)
-        updateChangeCount(.changeCleared)
-        undoManager?.removeAllActions()
     }
 
     /// 打印（⌘P / 脚本都经这里）：先把打印视图（含图片 / Mermaid）异步准备好，再走 NSDocument 的打印流程——
