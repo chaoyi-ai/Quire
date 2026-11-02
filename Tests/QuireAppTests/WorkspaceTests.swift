@@ -766,12 +766,13 @@ final class WorkspaceTests: XCTestCase {
         try await answer(.saveAnyway, on: a.ws)
         try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
         XCTAssertEqual(try disk(a.url), "# mine\n")
-        try Data([0xFF, 0xFE, 0xFD, 0x80]).write(to: a.url)
-        XCTAssertFalse(a.doc.reloadCommand(), "字节按记录的编码解不开")
-        XCTAssertEqual(a.doc.source, "# mine\n")
+        // 记下的编码解不开的字节：和打开走同一个解码器，跟上（什么字节 Latin-1 都解得开，"解不开"到不了这里）
+        try bytes(gbkNoteBytes).write(to: a.url)
+        XCTAssertTrue(a.doc.reloadCommand())
+        XCTAssertEqual(a.doc.source, gbkNote)
         try FileManager.default.removeItem(at: a.url)
         XCTAssertFalse(a.doc.reloadCommand(), "文件被删")
-        XCTAssertEqual(a.doc.source, "# mine\n")
+        XCTAssertEqual(a.doc.source, gbkNote)
     }
 
     /// CRLF 文件被外部改过、重新载入之后还是 CRLF：否则下次存储把整个文件的换行都改了
@@ -847,6 +848,285 @@ final class WorkspaceTests: XCTestCase {
         // NSDocument 自己的引用要等 autorelease 池放掉
         for _ in 0..<100 where isMapped(a.url) { try await Task.sleep(for: .milliseconds(20)) }
         XCTAssertFalse(isMapped(a.url))
+    }
+
+    // MARK: 编码（字节直接写进文件，打开、打字、存储、重载都走真路径）
+
+    private typealias Opened = (doc: MarkdownDocument, ws: WorkspaceWindowController, url: URL)
+    private var gb18030: String.Encoding { String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))) }
+    private var gbkNote: String { "# 中文标题\n\n正文\n" }
+    private var gbkNoteBytes: String { "2320d6d0cec4b1eacce20a0ad5fdcec40a" }
+
+    private func bytes(_ hex: String) -> Data {
+        var data = Data()
+        var digits = Substring(hex)
+        while !digits.isEmpty {
+            data.append(UInt8(digits.prefix(2), radix: 16)!)
+            digits = digits.dropFirst(2)
+        }
+        return data
+    }
+    private func utf16(_ text: String, bigEndian: Bool = false) -> Data {
+        let bom: [UInt8] = bigEndian ? [0xFE, 0xFF] : [0xFF, 0xFE]
+        let order: String.Encoding = bigEndian ? .utf16BigEndian : .utf16LittleEndian
+        return Data(bom) + text.data(using: order)!
+    }
+    private func openBytes(_ data: Data, named name: String = "encoded.md") async throws -> Opened {
+        try data.write(to: tmp.appendingPathComponent(name))
+        return try await openFile(name)
+    }
+    /// 和真实打字一样：切到编辑器，在文末 insertText，等自动保存写完（撤销组在 run loop 转一圈之后才关）
+    private func typeAtEndAndAutosave(_ text: String, in a: Opened) async throws {
+        a.ws.setModeEditor(nil)
+        let tv = try XCTUnwrap(a.ws.editorViewController.textView)
+        tv.setSelectedRange(NSRange(location: (tv.string as NSString).length, length: 0))
+        tv.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(a.doc.isDocumentEdited)
+        a.doc.autosave(withImplicitCancellability: false) { _ in }
+        try await failingOnDeadlock {
+            while a.doc.isDocumentEdited {
+                // 系统问"文件已被修改"说明文档没跟上磁盘：报失败、答掉，不用等看门狗把整轮带崩
+                if let window = a.ws.window, let sheet = window.attachedSheet, sheet.isVisible {
+                    XCTFail("存储时弹了提示：文档没跟上磁盘")
+                    window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+    }
+    /// 无 BOM 的字节不能当 UTF-16：奇数长度的短文会丢最后一个字节，打一个字、自动保存，文件就变成 fffe2023d0d6…（加 BOM、字节序反过来）
+    func testGBKNotesOpenAsGB18030AndKeepTheirBytes() async throws {
+        let long = String(repeating: "这是一段比较长的中文笔记，用来确认长文件也走同一条路。\n", count: 50)
+        var samples: [(String, Data)] = [
+            (gbkNote, bytes(gbkNoteBytes)),   // 奇数长度
+            ("# 中文\n\n", bytes("2320d6d0cec40a0a")),   // 偶数长度
+            (long, long.data(using: gb18030)!),
+        ]
+        // 只要有一个常用字、中文标点或假名，或者四字节序列，就算 GB18030
+        for text in ["中\n", "繁體中文\n", "「，」\n", "あいう\n", "😀 note\n"] { samples.append((text, text.data(using: gb18030)!)) }
+        for (i, (text, data)) in samples.enumerated() {
+            let a = try await openBytes(data, named: "gbk\(i).md")
+            XCTAssertEqual(a.doc.source, text)
+            XCTAssertEqual(a.doc.encoding, gb18030)
+            try await typeAtEndAndAutosave("x", in: a)
+            XCTAssertEqual(try Data(contentsOf: a.url), data + Data("x".utf8), "只多了打的那个字")
+            let again = try await openBytes(try Data(contentsOf: a.url), named: "gbk\(i)-again.md")
+            XCTAssertEqual(again.doc.source, text + "x", "存完再打开还是对的")
+        }
+    }
+
+    func testLatin1FilesOpenAsLatin1AndKeepTheirBytes() async throws {
+        let samples = [
+            "café au lait\n", "Le café est à côté de la gare.\n", "¿Qué día es hoy? Está aquí.\n", "O pão é bom e está aqui.\n",
+            // 下面这些字节同时也是合法的 GB18030（重音字母后面跟字母）：只看"解得开"会变成 Se駉r 这样的乱码
+            "Señor Núñez\n", "Größe\n", "économie\n", "A informação\n", "Éric\n", "Österreich\n", "«Été»\n",
+            String(repeating: "Der Bäcker öffnet früh, über der Tür hängt ein Schild.\n", count: 40),
+        ]
+        for (i, text) in samples.enumerated() {
+            let data = text.data(using: .isoLatin1)!
+            let a = try await openBytes(data, named: "latin\(i).md")
+            XCTAssertEqual(a.doc.source, text)
+            XCTAssertEqual(a.doc.encoding, .isoLatin1)
+            try await typeAtEndAndAutosave("x", in: a)
+            XCTAssertEqual(try Data(contentsOf: a.url), data + Data("x".utf8), "只多了打的那个字")
+        }
+    }
+
+    /// Latin-1 装不下新打的字：整个文件改存 UTF-8，一个字不丢，之后也按 UTF-8
+    func testLatin1FileSwitchesToUTF8WhenTypedTextDoesNotFit() async throws {
+        let a = try await openBytes("café au lait\n".data(using: .isoLatin1)!)
+        a.doc.session.stopWatching()
+        try await typeAtEndAndAutosave("中", in: a)
+        XCTAssertEqual(a.doc.encoding, .utf8)
+        XCTAssertEqual(try disk(a.url), "café au lait\n中")
+        a.doc.reloadFromDisk()
+        XCTAssertEqual(a.doc.source, "café au lait\n中")
+    }
+
+    func testUTF16WithBOMOpensAndStaysUTF16() async throws {
+        let text = "# 标题 😀\n\nbody\n"
+        for (name, bigEndian) in [("le.md", false), ("be.md", true)] {
+            let a = try await openBytes(utf16(text, bigEndian: bigEndian), named: name)
+            XCTAssertEqual(a.doc.source, text, name)
+            XCTAssertEqual(a.doc.encoding, .utf16, name)
+            try await typeAtEndAndAutosave("x", in: a)
+            let saved = try Data(contentsOf: a.url)
+            XCTAssertTrue(saved.starts(with: [0xFF, 0xFE]) || saved.starts(with: [0xFE, 0xFF]), "\(name)：存完还有 BOM，下次才认得出")
+            XCTAssertEqual(String(data: saved, encoding: .utf16), text + "x", name)
+        }
+    }
+
+    /// BOM 后面不是完整的 UTF-16（奇数长度、孤立代理项）：不能照 UTF-16 解，那样最后一个字节存一次就没了
+    func testBrokenUTF16AfterBOMKeepsEveryByte() async throws {
+        let samples = [("odd", bytes("fffe2300200061000a")), ("lone-surrogate", bytes("fffe230000d820006100")), ("odd-be", bytes("feff002300200a"))]
+        for (name, data) in samples {
+            let a = try await openBytes(data, named: "\(name).md")
+            XCTAssertNotEqual(a.doc.encoding, .utf16, name)
+            try await typeAtEndAndAutosave("x", in: a)
+            XCTAssertEqual(try Data(contentsOf: a.url), data + Data("x".utf8), name)
+        }
+    }
+
+    /// 猜错编码时显示是乱码，但文件不能被毁：无 BOM 的 UTF-16 不再被猜（也就不再加 BOM、反转字节序），没有常用字的 GBK 短文被当成 Latin-1 时同样字节不变
+    func testBytesNobodyCanRecognizeSurviveSaving() async throws {
+        let chinese = "# 中文标题\n\n正文第一段。\n", mixed = "# Notes 笔记\n\n- item 1 第一项\n", ascii = "# hello world\n"
+        let samples: [(String, Data)] = [
+            ("zh-le", chinese.data(using: .utf16LittleEndian)!), ("zh-be", chinese.data(using: .utf16BigEndian)!),
+            ("mixed-le", mixed.data(using: .utf16LittleEndian)!), ("mixed-be", mixed.data(using: .utf16BigEndian)!),
+            ("ascii-le", ascii.data(using: .utf16LittleEndian)!), ("ascii-be", ascii.data(using: .utf16BigEndian)!),
+            ("gbk-rare", "這個\n".data(using: gb18030)!), ("gbk-level2", "魑魅魍魉\n".data(using: gb18030)!),
+        ]
+        for (name, data) in samples {
+            let a = try await openBytes(data, named: "\(name).md")
+            XCTAssertNotEqual(a.doc.encoding, .utf16, name)
+            try await typeAtEndAndAutosave("x", in: a)
+            XCTAssertEqual(try Data(contentsOf: a.url), data + Data("x".utf8), name)
+        }
+    }
+
+    /// UTF-16 文档被别的工具改写成 UTF-8：以前用记下的 UTF-16 解成"⌠桥汬漠睯牬搊"，不问，打一个字就把乱码存下去
+    func testExternalRewriteFromUTF16ToUTF8() async throws {
+        let a = try await openBytes(utf16("# 你好\n"))
+        a.doc.session.stopWatching()   // 只看这里调的：监视器晚到的事件会替没写对的地方补救
+        XCTAssertEqual(a.doc.encoding, .utf16)
+        try Data("# hello world\n".utf8).write(to: a.url, options: .atomic)
+        a.doc.reloadFromDisk()
+        XCTAssertNil(a.ws.window?.attachedSheet)
+        XCTAssertEqual(a.doc.source, "# hello world\n")
+        XCTAssertEqual(a.doc.encoding, .utf8)
+        try await typeAtEndAndAutosave("x", in: a)
+        XCTAssertEqual(try Data(contentsOf: a.url), Data("# hello world\nx".utf8))
+    }
+
+    /// UTF-8 文档被改写成 GB18030：以前解不开就 return，干净的文档留着旧文字
+    func testExternalRewriteFromUTF8ToGB18030() async throws {
+        let a = try await openFile("a.md")
+        a.doc.session.stopWatching()
+        try bytes(gbkNoteBytes).write(to: a.url, options: .atomic)
+        a.doc.reloadFromDisk()
+        XCTAssertEqual(a.doc.source, gbkNote)
+        XCTAssertEqual(a.doc.encoding, gb18030)
+        try await typeAtEndAndAutosave("x", in: a)
+        XCTAssertEqual(try Data(contentsOf: a.url), bytes(gbkNoteBytes) + Data("x".utf8))
+    }
+
+    /// 文字没变、只是换了编码（iconv 转过）：编码也要跟上，否则下次存储又把文件转回旧编码
+    func testExternalReencodingWithSameTextIsFollowed() async throws {
+        let a = try await openBytes(utf16(gbkNote))
+        a.doc.session.stopWatching()
+        func external(_ data: Data, is encoding: String.Encoding) throws {
+            try data.write(to: a.url, options: .atomic)
+            a.doc.reloadFromDisk()
+            XCTAssertEqual(a.doc.source, gbkNote)
+            XCTAssertEqual(a.doc.encoding, encoding)
+            XCTAssertNil(a.ws.window?.attachedSheet, "文档没改过、文字也没变，没什么可问的")
+        }
+        try external(Data(gbkNote.utf8), is: .utf8)
+        try external(bytes(gbkNoteBytes), is: gb18030)
+        try external(utf16(gbkNote), is: .utf16)
+        try external(Data(gbkNote.utf8), is: .utf8)
+        try await typeAtEndAndAutosave("x", in: a)
+        XCTAssertEqual(try disk(a.url), gbkNote + "x")
+    }
+
+    /// Windows 记事本的文件（UTF-16 + CRLF）被转成 UTF-8 + LF：换行也跟着磁盘走，不能存回 CRLF
+    func testConvertingWindowsFileToUTF8LFIsFollowed() async throws {
+        let a = try await openBytes(utf16("one\r\n二\r\n"))
+        a.doc.session.stopWatching()
+        XCTAssertEqual(a.doc.source, "one\n二\n")
+        XCTAssertTrue(a.doc.usesCRLF)
+        try Data("one\n二\n".utf8).write(to: a.url, options: .atomic)
+        a.doc.reloadFromDisk()
+        XCTAssertEqual(a.doc.encoding, .utf8)
+        XCTAssertFalse(a.doc.usesCRLF)
+        try await typeAtEndAndAutosave("x", in: a)
+        XCTAssertEqual(try disk(a.url), "one\n二\nx")
+    }
+
+    /// 旧编码的文件被外部改了、编码没变：还是原来的编码，存储不转码
+    func testExternalEditOfLegacyFileKeepsItsEncoding() async throws {
+        let samples: [(String, String, String.Encoding)] = [("# 旧内容\n", gbkNote, gb18030), ("café au lait\n", "thé à la menthe\n", .isoLatin1), ("café au lait\n", "Señor Núñez\n", .isoLatin1)]
+        for (i, (before, after, encoding)) in samples.enumerated() {
+            let a = try await openBytes(before.data(using: encoding)!, named: "legacy\(i).md")
+            a.doc.session.stopWatching()
+            XCTAssertEqual(a.doc.encoding, encoding)
+            try after.data(using: encoding)!.write(to: a.url, options: .atomic)
+            a.doc.reloadFromDisk()
+            XCTAssertEqual(a.doc.source, after)
+            XCTAssertEqual(a.doc.encoding, encoding)
+            try await typeAtEndAndAutosave("x", in: a)
+            XCTAssertEqual(try Data(contentsOf: a.url), (after + "x").data(using: encoding)!)
+        }
+    }
+
+    /// 有未保存改动时 UTF-8 文档被改写成 GB18030：是冲突，文字不动，由系统问（以前解不开就 return，连 ⌘R 都没反应）；选"复原"载入解对的文字
+    func testRewriteToAnotherEncodingWithUnsavedEditsAsks() async throws {
+        let a = try await openFile("a.md")
+        a.doc.session.stopWatching()
+        a.doc.replaceContents("# mine\n")
+        try bytes(gbkNoteBytes).write(to: a.url, options: .atomic)
+        XCTAssertEqual(a.doc.reloadFromDisk(), .conflict)
+        XCTAssertEqual(a.doc.source, "# mine\n", "问之前不动")
+        timerAutosave(a.doc)
+        try await answer(.revert, on: a.ws)
+        try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertEqual(a.doc.source, gbkNote)
+        XCTAssertEqual(a.doc.encoding, gb18030)
+        try await typeAtEndAndAutosave("x", in: a)
+        XCTAssertEqual(try Data(contentsOf: a.url), bytes(gbkNoteBytes) + Data("x".utf8))
+    }
+
+    /// "复原"同样不能用记下的编码解：UTF-16 文档改写成 UTF-8 之后选它，载入的不能是乱码
+    func testRevertOnUTF16DocumentDecodesTheRewrittenUTF8() async throws {
+        let a = try await openBytes(utf16("# 你好\n"))
+        a.doc.session.stopWatching()
+        a.doc.replaceContents("# mine\n")
+        try Data("# hello world\n".utf8).write(to: a.url, options: .atomic)
+        XCTAssertEqual(a.doc.reloadFromDisk(), .conflict)
+        timerAutosave(a.doc)
+        try await answer(.revert, on: a.ws)
+        try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertEqual(a.doc.source, "# hello world\n")
+        XCTAssertEqual(a.doc.encoding, .utf8)
+        try await typeAtEndAndAutosave("x", in: a)
+        XCTAssertEqual(try Data(contentsOf: a.url), Data("# hello world\nx".utf8))
+    }
+
+    /// 询问开着时磁盘又换了编码："复原"载入的还是点按钮这一刻的版本
+    func testRevertFollowsEncodingChangedWhileAsking() async throws {
+        let a = try await openFile("a.md")
+        a.doc.session.stopWatching()
+        a.doc.replaceContents("# mine\n")
+        try Data("# one\n".utf8).write(to: a.url, options: .atomic)
+        timerAutosave(a.doc)
+        _ = try await visibleSheet(on: a.ws)
+        try bytes(gbkNoteBytes).write(to: a.url, options: .atomic)
+        XCTAssertEqual(a.doc.reloadFromDisk(), .conflict)
+        try await answer(.revert, on: a.ws)
+        try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertEqual(a.doc.source, gbkNote)
+        XCTAssertEqual(a.doc.encoding, gb18030)
+        XCTAssertNil(a.ws.window?.attachedSheet)
+    }
+
+    /// 有未保存改动时磁盘换了编码：监视器反复响也不打断，文字不动；系统问一次，"仍要保存"之后两边一致，不再问（换了编码也不能变成一直问）
+    func testOtherEncodingWithUnsavedEditsAsksOnce() async throws {
+        let a = try await openBytes(utf16("# 你好\n"))
+        a.doc.session.stopWatching()
+        a.doc.replaceContents("# mine\n")
+        try Data("# hello world\n".utf8).write(to: a.url, options: .atomic)
+        XCTAssertEqual(a.doc.reloadFromDisk(), .conflict)
+        XCTAssertEqual(a.doc.reloadFromDisk(), .conflict)
+        XCTAssertNil(a.ws.window?.attachedSheet)
+        XCTAssertEqual(a.doc.source, "# mine\n")
+        timerAutosave(a.doc)
+        try await answer(.saveAnyway, on: a.ws)
+        try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertEqual(a.doc.source, "# mine\n")
+        XCTAssertEqual(a.doc.reloadFromDisk(), .current)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertNil(a.ws.window?.attachedSheet)
     }
 
     // MARK: 标签条的鼠标（直接把事件交给视图：没有窗口时 locationInWindow 就是视图坐标）

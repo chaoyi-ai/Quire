@@ -235,16 +235,44 @@ class MarkdownDocument: NSDocument {
 
     override func fileNameExtension(forType typeName: String, saveOperation: NSDocument.SaveOperationType) -> String? { "md" }
 
-    override func read(from data: Data, ofType typeName: String) throws {
-        // UTF-8 优先；失败退回 UTF-16 / GB18030 / Latin-1（不静默丢字）
-        if let s = String(data: data, encoding: .utf8) { source = s; encoding = .utf8 }
-        else if let s = String(data: data, encoding: .utf16) { source = s; encoding = .utf16 }
-        else {
-            let gb = CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))
-            if let s = String(data: data, encoding: String.Encoding(rawValue: gb)) { source = s; encoding = String.Encoding(rawValue: gb) }
-            else if let s = String(data: data, encoding: .isoLatin1) { source = s; encoding = .isoLatin1 }
-            else { throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownStringEncodingError, userInfo: [NSLocalizedDescriptionKey: L("无法识别文件编码")]) }
+    /// 字节 → 文字 + 编码，只看字节：打开、外部修改、"重新载入"都走这里，同样的字节从哪条路进来都解成同样的文字。
+    /// UTF-8 优先；失败退回带 BOM 的 UTF-16 / GB18030 / Latin-1（不静默丢字）。
+    /// UTF-16 只认 BOM：几乎任何字节都能当成无 BOM 的大端 UTF-16 解开（奇数长度还丢掉最后一个字节），GBK 短文和 Latin-1 全被截走，存一次文件就毁了。
+    /// 代价：真正无 BOM 的 UTF-16 显示成乱码（其中大端的以前能读对），但存储时字节原样写回，不再加 BOM、反转字节序
+    nonisolated private static func decode(_ data: Data) -> (text: String, encoding: String.Encoding)? {
+        if let s = String(data: data, encoding: .utf8) { return (s, .utf8) }
+        let bigEndian = data.starts(with: [0xFE, 0xFF])
+        if bigEndian || data.starts(with: [0xFF, 0xFE]) {
+            let order: String.Encoding = bigEndian ? .utf16BigEndian : .utf16LittleEndian
+            let payload = data.dropFirst(2)
+            // 写回去要和原来一样：奇数长度（解码器会丢最后一个字节）、孤立代理项都不算 UTF-16，往下走
+            if let s = String(data: payload, encoding: order), s.data(using: order) == payload { return (s, .utf16) }
         }
+        let gb = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)))
+        if looksLikeGB18030(data), let s = String(data: data, encoding: gb) { return (s, gb) }
+        if let s = String(data: data, encoding: .isoLatin1) { return (s, .isoLatin1) }
+        return nil
+    }
+
+    /// 字节里有没有西文 Latin-1 几乎不会出现的序列：GB2312 的符号区和一级汉字（首字节 A1–A9 / B0–D7，尾字节 ≥ A1），或者四字节序列。
+    /// 只看"解得开"分不出来：重音字母后面跟字母也是合法的 GB18030（Señor → Se駉r，德语几乎都这样）。
+    /// 代价：完全没有常用字的 GBK 短文（這個）会被当成 Latin-1，显示成乱码
+    nonisolated private static func looksLikeGB18030(_ data: Data) -> Bool {
+        var bytes = data.makeIterator()
+        while let lead = bytes.next() {
+            guard lead > 0x80, let trail = bytes.next() else { continue }
+            switch (lead, trail) {
+            case (_, 0x30...0x39), (0xA1...0xA9, 0xA1...), (0xB0...0xD7, 0xA1...): return true
+            default: break
+            }
+        }
+        return false
+    }
+
+    override func read(from data: Data, ofType typeName: String) throws {
+        guard let decoded = Self.decode(data) else { throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownStringEncodingError, userInfo: [NSLocalizedDescriptionKey: L("无法识别文件编码")]) }
+        source = decoded.text
+        encoding = decoded.encoding
         // 要自己的一份：NSDocument 给的可能是文件映射，留着它卷就卸不掉，强行卸掉后再比较还会崩
         knownDiskData = Data(data)
         normalizeLineEndings()
@@ -284,7 +312,7 @@ class MarkdownDocument: NSDocument {
 
     override func data(ofType typeName: String) throws -> Data {
         let source = sourceForDisk
-        // 原编码装不下新内容（Latin-1 文件里打了个中文）：改用 UTF-8，并记住——否则下次重载会用旧编码去解 UTF-8 字节，得到乱码再写回
+        // 原编码装不下新内容（Latin-1 文件里打了个中文）：改用 UTF-8，并记住——磁盘上已经是 UTF-8 了，之后都按它写
         if source.data(using: encoding) == nil { encoding = .utf8 }
         guard let d = source.data(using: encoding) ?? source.data(using: .utf8) else {
             throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteInapplicableStringEncodingError)
@@ -339,17 +367,21 @@ class MarkdownDocument: NSDocument {
     /// 和磁盘比较的结论。监视器不看（事件可能什么都不代表），⌘R 按它回应
     enum ReloadResult { case current, reloaded, unsavedEdits, conflict, unreadable }
 
-    /// 外部修改后重新读取（保留编码）；字节没变就不算外部修改：监视器对自己刚写的内容、对只动属性的 touch / Finder 标签 / 备份工具都会响。
+    /// 外部修改后重新读取（和打开一样解码，编码跟着磁盘走）；字节没变就不算外部修改：监视器对自己刚写的内容、对只动属性的 touch / Finder 标签 / 备份工具都会响。
     /// 有未保存改动时不覆盖、不写盘，也不打断：修改时间留在旧值，下一次存储被 NSDocument 拦下，由系统问一次（DESIGN §9）
     @discardableResult
     func reloadFromDisk() -> ReloadResult {
         guard let disk = readDisk() else { return .unreadable }
-        // 先按字节比（也避免用记录的编码去解别的编码时"看起来不同"）
+        // 先按字节比
         if disk.data == knownDiskData {
             fileModificationDate = disk.date
             return isDocumentEdited ? .unsavedEdits : .current
         }
-        guard let raw = String(data: disk.data, encoding: encoding) else { return .unreadable }
+        // 解不开也不能悄悄留着旧文字（Latin-1 什么字节都解得开，实际到不了这里）
+        guard let decoded = Self.decode(disk.data) else { return .unreadable }
+        // 被别的工具换了编码：文字没变也要跟上，否则下次存储又按旧编码写回去。有未保存改动就往下走，由系统问
+        if decoded.encoding != encoding, !isDocumentEdited { applyReloaded(decoded, disk); return .reloaded }
+        let raw = decoded.text
         guard raw != sourceForDisk else { return .current }
         let s = raw.contains("\r\n") ? raw.replacingOccurrences(of: "\r\n", with: "\n") : raw
         guard s != source else { return .current }
@@ -359,7 +391,7 @@ class MarkdownDocument: NSDocument {
             if diskBody == source || diskBody == source + "\n" { return .current }
         }
         if isDocumentEdited { return .conflict }
-        applyReloaded(raw, disk)
+        applyReloaded(decoded, disk)
         return .reloaded
     }
 
@@ -394,12 +426,13 @@ class MarkdownDocument: NSDocument {
         return (data, date)
     }
 
-    /// `raw` 是解码后还没统一换行的文本：CRLF 文件要靠它记住写盘时还原。
+    /// `decoded.text` 是解码后还没统一换行的文本：CRLF 文件要靠它记住写盘时还原。
     /// 修改时间同时跟上：否则 NSDocument 按自己记的时间，下次存储时还会问"文件已被修改"
-    private func applyReloaded(_ raw: String, _ disk: (data: Data, date: Date)) {
+    private func applyReloaded(_ decoded: (text: String, encoding: String.Encoding), _ disk: (data: Data, date: Date)) {
         knownDiskData = disk.data
         fileModificationDate = disk.date
-        source = raw
+        source = decoded.text
+        encoding = decoded.encoding
         normalizeLineEndings()
         splitAuthorship()
         let s = source
