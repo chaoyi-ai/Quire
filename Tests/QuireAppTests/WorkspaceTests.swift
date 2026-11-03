@@ -1129,6 +1129,170 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertNil(a.ws.window?.attachedSheet)
     }
 
+    // MARK: 往没打开的文件追加（quire://append、快捷指令都走 appendText；追加之后走真路径重新打开）
+
+    /// 字节写进文件，不打开就追加，返回追加后的磁盘字节
+    private func appendWithoutOpening(_ text: String, to data: Data, named name: String) throws -> Data {
+        let url = tmp.appendingPathComponent(name)
+        try data.write(to: url)
+        XCTAssertNil(QuireDocumentController.shared.document(for: url), "\(name)：这里测的是没打开的文件")
+        XCTAssertTrue(URLScheme.appendText(text, to: url, external: false), name)
+        return try Data(contentsOf: url)
+    }
+    private func assertOpens(_ name: String, as text: String, encoding: String.Encoding, file: StaticString = #filePath, line: UInt = #line) async throws {
+        let a = try await openFile(name)
+        XCTAssertEqual(a.doc.source, text, name, file: file, line: line)
+        XCTAssertEqual(a.doc.encoding, encoding, name, file: file, line: line)
+    }
+
+    /// 以前一律追加 UTF-8 字节：GBK 文件变成混合编码，下次打开整篇乱码
+    func testAppendToClosedGB18030FileKeepsItsEncoding() async throws {
+        let after = try appendWithoutOpening("追加", to: bytes(gbkNoteBytes), named: "newline.md")
+        XCTAssertEqual(after, bytes(gbkNoteBytes + "d7b7bcd3"), "旧字节不动，新文字是 GBK")
+        try await assertOpens("newline.md", as: gbkNote + "追加", encoding: gb18030)
+
+        // 结尾没有换行：补的换行也按原编码写；四字节字符也装得下
+        let noNewline = try appendWithoutOpening("😀", to: "# 中文标题".data(using: gb18030)!, named: "no-newline.md")
+        XCTAssertEqual(noNewline, "# 中文标题\n😀".data(using: gb18030)!)
+        try await assertOpens("no-newline.md", as: "# 中文标题\n😀", encoding: gb18030)
+    }
+
+    func testAppendToClosedLatin1FileKeepsItsEncoding() async throws {
+        let data = "café au lait\n".data(using: .isoLatin1)!
+        XCTAssertEqual(try appendWithoutOpening("crème", to: data, named: "newline.md"), data + bytes("6372e86d65"), "旧字节不动，新文字是 Latin-1")
+        try await assertOpens("newline.md", as: "café au lait\ncrème", encoding: .isoLatin1)
+
+        let noNewline = try appendWithoutOpening("Núñez", to: "Señor".data(using: .isoLatin1)!, named: "no-newline.md")
+        XCTAssertEqual(noNewline, "Señor\nNúñez".data(using: .isoLatin1)!)
+        try await assertOpens("no-newline.md", as: "Señor\nNúñez", encoding: .isoLatin1)
+
+        // 没有常用字的短 GBK 被认成 Latin-1：追加 ASCII 时旧字节还是原样，以后还救得回来
+        let rare = "這個".data(using: gb18030)!
+        XCTAssertEqual(try appendWithoutOpening("x", to: rare, named: "rare.md"), rare + Data("\nx".utf8))
+    }
+
+    /// UTF-16 文件以前追加什么都会坏：字节对不齐，结尾的换行也认不出来（小端 LF 的最后一个字节是 00；大端的「上」、小端的「ਅ」最后一个字节是 0A）
+    func testAppendToClosedUTF16FileKeepsBOMAndByteOrder() async throws {
+        let samples: [(old: String, appended: String, expected: String, bigEndian: Bool)] = [
+            ("# 标题\n", "追加 😀", "# 标题\n追加 😀", false),
+            ("# 标题\n", "追加 😀", "# 标题\n追加 😀", true),
+            ("# 标题", "x", "# 标题\nx", false),
+            ("# 标题", "x", "# 标题\nx", true),
+            ("上", "x", "上\nx", true),
+            ("ਅ", "x", "ਅ\nx", false),
+            ("", "x", "x", false),   // 只有 BOM
+            ("", "x", "x", true),
+        ]
+        for (i, s) in samples.enumerated() {
+            let name = "utf16-\(i).md"
+            let after = try appendWithoutOpening(s.appended, to: utf16(s.old, bigEndian: s.bigEndian), named: name)
+            XCTAssertEqual(after, utf16(s.expected, bigEndian: s.bigEndian), name)
+            try await assertOpens(name, as: s.expected, encoding: .utf16)
+        }
+    }
+
+    /// Latin-1 装不下新文字：和已打开的文档存储时一样，整个文件改存 UTF-8，一个字不丢，也不留混合编码
+    func testAppendToClosedLatin1FileSwitchesToUTF8WhenTextDoesNotFit() async throws {
+        for (i, text) in ["中", "€", "😀"].enumerated() {
+            let name = "fit-\(i).md"
+            let after = try appendWithoutOpening(text, to: "café au lait\n".data(using: .isoLatin1)!, named: name)
+            XCTAssertEqual(after, Data("café au lait\n\(text)".utf8), name)
+            try await assertOpens(name, as: "café au lait\n\(text)", encoding: .utf8)
+        }
+        // 旧内容的换行原样留着，\r\n 结尾也不再补一个
+        XCTAssertEqual(try appendWithoutOpening("中", to: "café\r\n".data(using: .isoLatin1)!, named: "crlf.md"), Data("café\r\n中".utf8))
+
+        // 已知代价，和已打开时一样：没有常用字的短 GBK 被认成 Latin-1，装不下中文，旧内容就按 Latin-1 解出来的样子存下去
+        let rare = "這個\n".data(using: gb18030)!
+        let latin1 = String(data: rare, encoding: .isoLatin1)!
+        XCTAssertEqual(try appendWithoutOpening("中", to: rare, named: "rare.md"), Data((latin1 + "中").utf8))
+    }
+
+    /// 新文字装得下，但追加之后下次打开会被认成别的编码：照样整个文件改存 UTF-8，否则整篇乱码
+    func testAppendThatWouldReadAsAnotherEncodingSwitchesToUTF8() async throws {
+        // Ç Ã 的字节落在 GB18030 的常用区，整个文件又刚好都是合法的 GB18030
+        let gb = try appendWithoutOpening("INFORMAÇÃO", to: "Señor\n".data(using: .isoLatin1)!, named: "gb.md")
+        XCTAssertEqual(gb, Data("Señor\nINFORMAÇÃO".utf8))
+        try await assertOpens("gb.md", as: "Señor\nINFORMAÇÃO", encoding: .utf8)
+
+        // BOM 后面是奇数个字节，只能当 Latin-1；再多一个字节就成了完整的 UTF-16
+        let broken = bytes("fffe2300200061000a")
+        let expected = String(data: broken, encoding: .isoLatin1)! + "x"
+        XCTAssertEqual(try appendWithoutOpening("x", to: broken, named: "broken.md"), Data(expected.utf8))
+        try await assertOpens("broken.md", as: expected, encoding: .utf8)
+    }
+
+    /// UTF-8 文件还是只多新字节；Swift 里 "\r\n" 是一个字符，hasSuffix("\n") 不成立，不能因此多补一个换行
+    func testAppendToClosedUTF8FileOnlyAddsTheNewBytes() async throws {
+        let bom = bytes("efbbbf")
+        let samples: [(old: Data, expected: Data)] = [
+            (Data("a\n".utf8), Data("a\n中".utf8)),
+            (Data("a".utf8), Data("a\n中".utf8)),
+            (Data(), Data("中".utf8)),
+            (Data("a\r\n".utf8), Data("a\r\n中".utf8)),
+            (bom + Data("a\n".utf8), bom + Data("a\n中".utf8)),
+        ]
+        for (i, s) in samples.enumerated() {
+            let name = "utf8-\(i).md"
+            XCTAssertEqual(try appendWithoutOpening("中", to: s.old, named: name), s.expected, name)
+            // BOM 留不留不归这里管，只要求和直接解一样；内存里一律 LF
+            let text = try XCTUnwrap(String(data: s.expected, encoding: .utf8)).replacingOccurrences(of: "\r\n", with: "\n")
+            try await assertOpens(name, as: text, encoding: .utf8)
+        }
+    }
+
+    /// 同样的字节追加同样的文字，文档开着和没开着，磁盘上要一样（大端 UTF-16 例外：存储一直按本机字节序写，没打开时只追加，字节序不变）
+    func testAppendGivesTheSameBytesWhetherTheFileIsOpenOrNot() async throws {
+        let samples: [(old: Data, text: String)] = [
+            (bytes(gbkNoteBytes), "追加"),
+            ("# 中文标题".data(using: gb18030)!, "😀"),
+            ("café au lait\n".data(using: .isoLatin1)!, "crème"),
+            ("café au lait\n".data(using: .isoLatin1)!, "中"),
+            (utf16("# 标题"), "追加"),
+            (utf16("# 标题\n"), "x"),
+            (Data("a".utf8), "中"),
+            (Data("a\r\n".utf8), "中"),
+        ]
+        for (i, s) in samples.enumerated() {
+            let closed = try appendWithoutOpening(s.text, to: s.old, named: "closed-\(i).md")
+            let a = try await openBytes(s.old, named: "open-\(i).md")
+            try await failingOnDeadlock {
+                XCTAssertTrue(URLScheme.appendText(s.text, to: a.url, external: false))
+                while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) }
+            }
+            XCTAssertEqual(closed, try Data(contentsOf: a.url), "样本 \(i)")
+        }
+    }
+
+    /// 整篇改存 UTF-8 是替换整个文件：符号链接要写到真文件上（.atomic 会把链接换成普通文件，真文件不动），权限和扩展属性（Finder 标签就存在这里）都要留着
+    func testSwitchingClosedFileToUTF8KeepsLinkPermissionsAndAttributes() throws {
+        let fm = FileManager.default
+        let real = tmp.appendingPathComponent("real.md"), link = tmp.appendingPathComponent("link.md")
+        try "café\n".data(using: .isoLatin1)!.write(to: real)
+        try fm.setAttributes([.posixPermissions: 0o640], ofItemAtPath: real.path)
+        XCTAssertEqual(setxattr(real.path, "com.korako.quire.test", "tag", 3, 0, 0), 0)
+        try fm.createSymbolicLink(at: link, withDestinationURL: real)
+
+        XCTAssertTrue(URLScheme.appendText("中", to: link, external: false))
+
+        XCTAssertEqual(try Data(contentsOf: real), Data("café\n中".utf8), "真文件改了")
+        XCTAssertEqual(try fm.destinationOfSymbolicLink(atPath: link.path), real.path, "链接还是链接")
+        XCTAssertEqual(try fm.attributesOfItem(atPath: real.path)[.posixPermissions] as? Int, 0o640)
+        XCTAssertEqual(getxattr(real.path, "com.korako.quire.test", nil, 0, 0, 0), 3, "扩展属性还在")
+    }
+
+    /// 只读文件要报错，内容不变。直接调下一层：appendText 报错时弹模态窗口，测试里没人点
+    func testAppendToClosedReadOnlyFileThrowsAndChangesNothing() throws {
+        for (i, text) in ["x", "中"].enumerated() {
+            let url = tmp.appendingPathComponent("read-only-\(i).md")
+            let data = "café\n".data(using: .isoLatin1)!
+            try data.write(to: url)
+            try FileManager.default.setAttributes([.posixPermissions: 0o440], ofItemAtPath: url.path)
+            XCTAssertThrowsError(try URLScheme.appendToClosedFile(text, at: url), text)
+            XCTAssertEqual(try Data(contentsOf: url), data, text)
+        }
+    }
+
     // MARK: 标签条的鼠标（直接把事件交给视图：没有窗口时 locationInWindow 就是视图坐标）
 
     private func click(_ strip: TabStripView, at p: NSPoint, count: Int = 1) {

@@ -235,11 +235,11 @@ class MarkdownDocument: NSDocument {
 
     override func fileNameExtension(forType typeName: String, saveOperation: NSDocument.SaveOperationType) -> String? { "md" }
 
-    /// 字节 → 文字 + 编码，只看字节：打开、外部修改、"重新载入"都走这里，同样的字节从哪条路进来都解成同样的文字。
+    /// 字节 → 文字 + 编码，只看字节：打开、外部修改、"重新载入"、往没打开的文件追加都走这里，同样的字节从哪条路进来都解成同样的文字。
     /// UTF-8 优先；失败退回带 BOM 的 UTF-16 / GB18030 / Latin-1（不静默丢字）。
     /// UTF-16 只认 BOM：几乎任何字节都能当成无 BOM 的大端 UTF-16 解开（奇数长度还丢掉最后一个字节），GBK 短文和 Latin-1 全被截走，存一次文件就毁了。
     /// 代价：真正无 BOM 的 UTF-16 显示成乱码（其中大端的以前能读对），但存储时字节原样写回，不再加 BOM、反转字节序
-    nonisolated private static func decode(_ data: Data) -> (text: String, encoding: String.Encoding)? {
+    nonisolated static func decode(_ data: Data) -> (text: String, encoding: String.Encoding)? {
         if let s = String(data: data, encoding: .utf8) { return (s, .utf8) }
         let bigEndian = data.starts(with: [0xFE, 0xFF])
         if bigEndian || data.starts(with: [0xFF, 0xFE]) {

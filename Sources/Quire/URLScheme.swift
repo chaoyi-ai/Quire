@@ -92,22 +92,46 @@ enum URLScheme {
         }
         do {
             if FileManager.default.fileExists(atPath: url.path) {
-                let h = try FileHandle(forUpdating: url)
-                let size = try h.seekToEnd()
-                var prefix = ""
-                if size > 0 {
-                    try h.seek(toOffset: size - 1)
-                    if let last = try h.read(upToCount: 1), last != Data([0x0A]) { prefix = "\n" }
-                    _ = try h.seekToEnd()
-                }
-                try h.write(contentsOf: (prefix + text).data(using: .utf8)!)
-                try h.close()
+                try appendToClosedFile(text, at: url)
             } else {
                 try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try text.write(to: url, atomically: true, encoding: .utf8)
             }
             return true
         } catch { NSApp.presentError(error); return false }
+    }
+
+    /// 往没打开的文件追加：用打开文件时的解码器判断编码，按原编码只写新文字，旧字节一个不动。
+    /// 原编码装不下，或者追加之后读回来不是这些字（会被认成别的编码）：和已打开的文档存储时一样，整个文件改存 UTF-8，不留混合编码
+    static func appendToClosedFile(_ text: String, at url: URL) throws {
+        // 先拿写权限：只读、锁定的文件在这里就报错，不靠下面的替换来拦（macOS 27 的 replaceItemAt 也会拒绝，旧系统没验证；.atomic 写不拒绝，rename 只看目录）
+        let h = try FileHandle(forUpdating: url)
+        let data = try h.readToEnd() ?? Data()
+        guard let old = MarkdownDocument.decode(data) else {
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownStringEncodingError, userInfo: [NSLocalizedDescriptionKey: L("无法识别文件编码")])
+        }
+        // 按字节比：Swift 把 "\r\n" 当一个字符，hasSuffix("\n") 不成立
+        let endsLine = old.text.isEmpty || old.text.utf8.last == 0x0A
+        let tail = endsLine ? text : "\n" + text
+        let whole = old.text + tail
+        // decode 说的 .utf16 不分字节序，直接编码还会再写一个 BOM：字节序看文件开头
+        var encoding = old.encoding
+        if encoding == .utf16 { encoding = data.starts(with: [0xFE, 0xFF]) ? .utf16BigEndian : .utf16LittleEndian }
+        if let bytes = tail.data(using: encoding), MarkdownDocument.decode(data + bytes)?.text == whole {
+            _ = try h.seekToEnd()
+            try h.write(contentsOf: bytes)
+            try h.close()
+            return
+        }
+        try h.close()
+        // 真文件的路径：replaceItemAt 对符号链接报 ENOENT，.atomic 写会把链接换成普通文件、真文件不动。权限、扩展属性由 replaceItemAt 带过去
+        let target = url.resolvingSymlinksInPath()
+        let fm = FileManager.default
+        let dir = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: target, create: true)
+        defer { try? fm.removeItem(at: dir) }
+        let replacement = dir.appendingPathComponent(target.lastPathComponent)
+        try Data(whole.utf8).write(to: replacement)
+        _ = try fm.replaceItemAt(target, withItemAt: replacement)
     }
 
     private static func export(_ q: [String: String]) {
