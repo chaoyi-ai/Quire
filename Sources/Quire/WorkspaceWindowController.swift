@@ -245,8 +245,10 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     }
 
     /// 切到某个标签：换挂 document、换正文列的窗格、侧栏选中、标题 / 脏标记。
-    /// 这个标签在后台时没有监视器，开监视器时补上磁盘的变化
-    func select(_ tab: DocumentTab) {
+    /// 这个标签在后台时没有监视器，开监视器时补上磁盘的变化。
+    /// `catchUp: false`：不是用户切过来看（马上要关、马上要搬走）。干净的文档这时跟上磁盘，可能弹"著作归属标记已丢弃"：说的是要关掉的文档，
+    /// 或者挂在要关的窗口上没人看见，还会挡住关闭链上后面的存储面板，之后永远卡死
+    func select(_ tab: DocumentTab, catchUp: Bool = true) {
         guard tabs.contains(where: { $0 === tab }) else { return }
         let old = current
         if old === tab { return }
@@ -263,7 +265,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         refreshChapterProgress()
         refreshStrip()
         if window?.isVisible == true {
-            tab.session.startWatching()
+            tab.session.startWatching(catchUp: catchUp)
             focusContent()
         }
         if let old, old !== tab { old.session.stopWatching() }
@@ -322,7 +324,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         guard docCloseCallback == nil else { return }
         guard let tab = remaining.first else { done(true); return }
         guard tabs.contains(where: { $0 === tab }) else { askToClose(Array(remaining.dropFirst()), done: done); return }
-        select(tab)
+        // 有未保存改动的照样对磁盘：重载不弹东西，只动了属性的（touch）还能把修改时间同步了，省掉一次假警报
+        select(tab, catchUp: tab.document.isDocumentEdited)
         docCloseCallback = { [weak self] ok in
             guard let self else { return }
             guard ok else { done(false); return }
@@ -347,14 +350,14 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     }
 
     /// 把标签从工作区摘掉但不关文档（移到别的窗口 / 关闭前）：选中相邻的
-    func detach(_ tab: DocumentTab) {
+    func detach(_ tab: DocumentTab, catchUp: Bool = true) {
         guard let i = tabs.firstIndex(where: { $0 === tab }) else { return }
         tabs.remove(at: i)
         tab.fileURLObserver = nil
         tab.document.workspace = nil
         if current === tab {
             current = nil
-            if let next = tabs[safe: min(i, tabs.count - 1)] { select(next) }
+            if let next = tabs[safe: min(i, tabs.count - 1)] { select(next, catchUp: catchUp) }
             else { unmountPanes(tab); tab.document.removeWindowController(self) }
         } else {
             tab.document.removeWindowController(self)
@@ -431,6 +434,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     }
     /// 「移到新窗口」：当前标签拆出去，新窗口同一个根目录，错开一点显示
     @objc func moveTabToNewWindow(_ sender: Any?) {
+        // 询问挂在这个窗口上：文档搬走之后 windowForSheet 指向没有 sheet 的新窗口，存储、关闭、追加就死等活动队列，主线程再也答不了。
+        // sheet 开着时这个菜单项还是亮的（NSWindow 自己实现这个动作，AppKit 不拦）
+        guard docCloseCallback == nil, window?.attachedSheet == nil else { NSSound.beep(); return }
         guard tabs.count > 1, let tab = current, let window else { return }
         detach(tab)
         let ws = WorkspaceWindowController(document: tab.document, root: rootURL, ephemeral: false)
@@ -443,7 +449,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         // 有窗口正开着 sheet（或正在问）：搬走它的标签、关掉它，sheet 就成了孤儿，询问永远结束不了，之后崩溃或卡死
         guard Self.all.allSatisfy({ $0.docCloseCallback == nil && $0.window?.attachedSheet == nil }) else { NSSound.beep(); return }
         for other in Self.all where other !== self {
-            for t in other.tabs { other.detach(t); addTab(t.document, ephemeral: false, select: false) }
+            for t in other.tabs { other.detach(t, catchUp: false); addTab(t.document, ephemeral: false, select: false) }
             other.window?.close()
         }
         window?.makeKeyAndOrderFront(nil)

@@ -827,13 +827,13 @@ final class WorkspaceTests: XCTestCase {
     /// 定时器到了（打字后约 15 s）走的就是这里；文件被改过就由系统问
     private func timerAutosave(_ doc: MarkdownDocument) { doc.autosave(withDelegate: nil, didAutosave: nil, contextInfo: nil) }
 
-    /// 系统问的三个按钮，按显示顺序（标题随语言变）
+    /// 系统问的三个按钮，按加入的顺序（标题随语言变）；显示顺序不算数：对话框宽的时候竖排变横排
     private enum SystemAnswer: Int { case saveAnyway, revert, saveAs }
     private func answer(_ choice: SystemAnswer, on ws: WorkspaceWindowController) async throws {
         let sheet = try await visibleSheet(on: ws)
         let shown = buttons(in: try XCTUnwrap(sheet.contentView)).filter { !$0.title.isEmpty && !$0.isHiddenOrHasHiddenAncestor }
         XCTAssertEqual(shown.count, 3, "\(shown.map(\.title))")
-        shown[choice.rawValue].performClick(nil)
+        try XCTUnwrap(shown.first { $0.tag == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + choice.rawValue }, "\(shown.map(\.title))").performClick(nil)
         try await failingOnDeadlock { while ws.window?.sheets.contains(sheet) == true { try await Task.sleep(for: .milliseconds(20)) } }
     }
 
@@ -2230,6 +2230,22 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertNil(a.ws.window?.attachedSheet)
     }
 
+    /// 关了"自动重新载入"：改动撤销完了也不替用户载入，⌘R 才载入
+    func testUndoingEveryEditDoesNotFollowWithAutoReloadOff() async throws {
+        let saved = Preferences.shared.autoReload
+        Preferences.shared.autoReload = false
+        defer { Preferences.shared.autoReload = saved }
+        let a = try await openFile("a.md")
+        a.doc.replaceContents("# mine\n")
+        try external("# theirs\n", to: a.url)
+        a.doc.updateChangeCount(.changeUndone)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(a.doc.isDocumentEdited)
+        XCTAssertEqual(a.doc.source, "# mine\n")
+        XCTAssertTrue(a.doc.reloadCommand())
+        XCTAssertEqual(a.doc.source, "# theirs\n")
+    }
+
     /// 有未保存改动的后台标签被外部改过：切过来也不打断，文字不动，切走再切回来也一样；下一次存储由系统问（标签在不在前台都一样，见下面）
     func testDirtyBackgroundTabIsNotInterruptedWhenSelected() async throws {
         let a = try await openFile("a.md")
@@ -2307,7 +2323,7 @@ final class WorkspaceTests: XCTestCase {
     }
 
     /// 有未保存改动的后台标签被外部改过，然后要关闭。关闭会先切过去（切过去时对磁盘，这时不能问）再 canClose：只有系统那一个问题
-    ///（第一个选项是 Save Anyway；各系统版本问不问、什么时候问不必一样，出现了才答）。答完这一轮关闭不再继续，是系统的行为，这里不管
+    ///（第一个选项是 Save Anyway），问的时候切到了它。不问就是静默盖掉对方那版。答完这一轮关闭不再继续，是系统的行为，这里不管
     private func closeDirtyStaleBackgroundTab(_ close: (WorkspaceWindowController, DocumentTab) -> Void) async throws {
         let a = try await openFile("a.md")
         let b = try await openFile("b.md", in: a.ws)
@@ -2316,14 +2332,21 @@ final class WorkspaceTests: XCTestCase {
         a.doc.replaceContents("# mine\n")
         a.ws.select(try XCTUnwrap(a.ws.tab(for: b.doc)))
         try external("# theirs\n", to: a.url)
+        var asked: [NSWindow] = []
         try await failingOnDeadlock {
             close(a.ws, tabA)
             for _ in 0..<150 where a.doc.isDocumentEdited {
-                if let sheet = a.ws.window?.attachedSheet, sheet.isVisible { a.ws.window?.endSheet(sheet, returnCode: .alertFirstButtonReturn) }
+                if let sheet = a.ws.window?.attachedSheet, sheet.isVisible, !asked.contains(sheet) {
+                    asked.append(sheet)
+                    XCTAssertTrue(a.ws.current === tabA, "问的时候要切到它")
+                    a.ws.window?.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+                }
                 try await Task.sleep(for: .milliseconds(20))
             }
         }
-        if !a.doc.isDocumentEdited { XCTAssertEqual(try disk(a.url), "# mine\n", "选了 Save Anyway") }
+        XCTAssertEqual(asked.count, 1)
+        XCTAssertFalse(a.doc.isDocumentEdited)
+        XCTAssertEqual(try disk(a.url), "# mine\n", "选了 Save Anyway")
     }
 
     func testClosingDirtyStaleBackgroundTabAsksOnce() async throws {
@@ -2379,6 +2402,114 @@ final class WorkspaceTests: XCTestCase {
         try await answer(.revert, on: a.ws)
         try await failingOnDeadlock { while docY.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
         XCTAssertEqual(docY.source, "# theirs\n")
+    }
+
+    /// 改过、只被 touch 过的后台标签要关闭：切过去时对磁盘，修改时间跟上，不问（否则是假警报，这一轮关闭还停下来）
+    func testTouchedDirtyBackgroundTabClosesWithoutAsking() async throws {
+        let a = try await openFile("a.md")
+        let b = try await openFile("b.md", in: a.ws)
+        let tabA = try XCTUnwrap(a.ws.tab(for: a.doc))
+        a.ws.select(tabA)
+        a.doc.replaceContents("# mine\n")
+        a.ws.select(try XCTUnwrap(a.ws.tab(for: b.doc)))
+        try touch(a.url)
+        try await failingOnDeadlock {
+            a.ws.closeTab(tabA)
+            for _ in 0..<250 where isOpen(a.doc) {
+                if let window = a.ws.window, let sheet = window.attachedSheet, sheet.isVisible {
+                    XCTFail("只被 touch 过：假警报")
+                    window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        XCTAssertEqual(try disk(a.url), "# mine\n")
+    }
+
+    /// 带著作归属块的文件，外部改了正文（哈希对不上）：跟上磁盘时会弹"著作归属标记已丢弃"
+    private func withAuthorship(_ body: String) -> String { Authorship(spans: [.init(author: "me", start: 0, length: 3)]).embed(into: body) }
+    private func editBodyExternally(_ url: URL) throws {
+        try external(try disk(url).replacingOccurrences(of: "body", with: "theirs"), to: url)
+    }
+
+    /// 关干净的后台标签：关的时候不跟磁盘。跟了的话通知说的是已经关掉的文档，还会挡住关闭链上后面的存储面板，之后永远卡死
+    func testClosingCleanStaleBackgroundTabShowsNoAuthorshipNotice() async throws {
+        try external(withAuthorship("# a\n\nbody\n"), to: tmp.appendingPathComponent("a.md"))
+        let a = try await openFile("a.md")
+        _ = try await openFile("b.md", in: a.ws)
+        try editBodyExternally(a.url)
+        a.ws.closeTab(try XCTUnwrap(a.ws.tab(for: a.doc)))
+        try await Task.sleep(for: .milliseconds(500))
+        let notice = a.ws.window?.attachedSheet
+        if let notice { a.ws.window?.endSheet(notice) }
+        XCTAssertEqual(a.ws.tabs.count, 1)
+        XCTAssertNil(notice, "通知说的是已经关掉的文档")
+    }
+
+    /// 合并窗口摘标签时不跟磁盘：通知会挂在要关的窗口上没人看见，标记还清掉了。留到用户切到它的时候
+    func testMergingKeepsTheAuthorshipNoticeForTheSelection() async throws {
+        let a = try await openFile("a.md")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("quire-other-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let x = dir.appendingPathComponent("x.md"), y = dir.appendingPathComponent("y.md")
+        try external("# x\n", to: x)
+        try external(withAuthorship("# y\n\nbody\n"), to: y)
+        let openedX = await open(x, in: nil, ephemeral: false)
+        let other = try XCTUnwrap(openedX?.workspace)
+        let openedY = await open(y, in: other, ephemeral: false)
+        let docY = try XCTUnwrap(openedY)
+        other.select(try XCTUnwrap(other.tab(for: try XCTUnwrap(openedX))))
+        try editBodyExternally(y)
+        a.ws.mergeAllWindows(nil)
+        let orphan = other.window?.attachedSheet
+        if let orphan { other.window?.endSheet(orphan) }
+        a.ws.select(try XCTUnwrap(a.ws.tab(for: docY)))
+        let notice = a.ws.window?.attachedSheet
+        if let notice { a.ws.window?.endSheet(notice) }
+        XCTAssertNil(orphan, "挂在要关的窗口上")
+        XCTAssertNotNil(notice, "切到它的时候要说")
+        XCTAssertEqual(docY.source, "# y\n\ntheirs\n")
+    }
+
+    /// 询问挂在窗口上时不能把文档从询问底下搬走：搬走之后 windowForSheet 指向没有 sheet 的新窗口，存储、关闭、追加都死等活动队列
+    func testMovingATabIsRefusedWhileItIsAsked() async throws {
+        let a = try await openFile("a.md")
+        _ = try await openFile("b.md", in: a.ws)
+        a.ws.select(try XCTUnwrap(a.ws.tab(for: a.doc)))
+        a.doc.session.stopWatching()
+        a.doc.replaceContents("# mine\n")
+        try external("# theirs\n", to: a.url)
+        timerAutosave(a.doc)
+        let sheet = try await visibleSheet(on: a.ws)
+        let window = try XCTUnwrap(a.ws.window)
+        a.ws.moveTabToNewWindow(nil)
+        XCTAssertTrue(a.doc.workspace === a.ws)
+        XCTAssertTrue(a.doc.windowForSheet === window)
+        XCTAssertEqual(window.attachedSheet, sheet)
+        window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+        try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertEqual(try disk(a.url), "# mine\n")
+    }
+
+    /// 同上，走打开文件夹：文件开在根目录更靠上的工作区里，打开它所在的文件夹本来要把它拆到新窗口
+    func testOpeningTheFolderOfATabDoesNotMoveItWhileItIsAsked() async throws {
+        let (ws, _) = makeWorkspace(root: tmp.deletingLastPathComponent())
+        let openedA = await open(tmp.appendingPathComponent("a.md"), in: ws, ephemeral: false)
+        let doc = try XCTUnwrap(openedA)
+        _ = await open(tmp.appendingPathComponent("b.md"), in: ws, ephemeral: false)
+        ws.select(try XCTUnwrap(ws.tab(for: doc)))
+        doc.session.stopWatching()
+        doc.replaceContents("# mine\n")
+        try external("# theirs\n", to: tmp.appendingPathComponent("a.md"))
+        timerAutosave(doc)
+        let sheet = try await visibleSheet(on: ws)
+        (NSDocumentController.shared as! QuireDocumentController).openFolder(tmp)
+        XCTAssertTrue(doc.workspace === ws)
+        XCTAssertEqual(ws.window?.attachedSheet, sheet)
+        ws.window?.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+        try await failingOnDeadlock { while doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
     }
 
     // MARK: 后台标签的定时自动保存
@@ -2553,10 +2684,13 @@ final class WorkspaceTests: XCTestCase {
         timerAutosave(c.doc)
         try await assertActivityQueueIsFree(c.doc)
         c.doc.updateChangeCount(.changeCleared)
+        try await Task.sleep(for: .milliseconds(100))   // 改动撤销完了，它跟上了磁盘；内容一样的写盘只能从修改时间看出来
+        let modified = try FileManager.default.attributesOfItem(atPath: c.url.path)[.modificationDate] as? Date
         a.ws.window?.endSheet(first, returnCode: .alertSecondButtonReturn)
         try await waitPastTheRetry()
         XCTAssertNil(a.ws.window?.attachedSheet)
         XCTAssertEqual(try disk(c.url), "# theirs\n")
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: c.url.path)[.modificationDate] as? Date, modified, "写了盘")
     }
 
     /// 用户取消的操作（系统也用 presentError 回这个，不显示）：窗口忙也不排队，否则之后又问一遍用户刚取消的事

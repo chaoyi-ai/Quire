@@ -264,8 +264,9 @@ final class DocumentSession {
     // MARK: - 文件监控
 
     /// 可重复调用：路径变了 / 偏好变了就换监视器；关了偏好或没有路径就停。
-    /// 监视器只报开始之后的变化：真的新开了一个就对一次磁盘，补上没在监视的这段时间（只有当前标签有监视器）
-    func startWatching() {
+    /// 监视器只报开始之后的变化：真的新开了一个就对一次磁盘，补上没在监视的这段时间（只有当前标签有监视器）。
+    /// `catchUp: false` 只给不是用户切过来看的场合，见 `WorkspaceWindowController.select`
+    func startWatching(catchUp: Bool = true) {
         guard Preferences.shared.autoReload, let url = document?.fileURL else { watcher = nil; watchedURL = nil; return }
         if watchedURL == url, watcher != nil { return }
         watchedURL = url
@@ -276,7 +277,7 @@ final class DocumentSession {
                 self.document?.reloadFromDisk()
             }
         }
-        document?.reloadFromDisk()
+        if catchUp { document?.reloadFromDisk() }
     }
 
     private var watchedURL: URL?

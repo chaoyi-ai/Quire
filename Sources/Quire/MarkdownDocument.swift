@@ -139,7 +139,8 @@ final class QuireDocumentController: NSDocumentController {
         if let preferred {
             if let doc = document(for: preferred) as? MarkdownDocument, let ws = doc.workspace, let tab = ws.tab(for: doc) {
                 // 文件已在别的工作区里开着：拆到新窗口
-                if ws.tabs.count > 1 { ws.detach(tab); WorkspaceWindowController(document: doc, root: folder).showWindow(nil) }
+                if ws.tabs.count > 1, ws.window?.attachedSheet != nil { ws.showWindow(nil) }   // 正在问：不把文档从询问底下搬走（见 moveTabToNewWindow）
+                else if ws.tabs.count > 1 { ws.detach(tab); WorkspaceWindowController(document: doc, root: folder).showWindow(nil) }
                 else { ws.sidebarViewController.setRoot(folder); ws.showWindow(nil) }
                 completionHandler?(doc, true, nil); return
             }
@@ -267,8 +268,8 @@ class MarkdownDocument: NSDocument {
         let was = isDocumentEdited
         super.updateChangeCount(change)
         if was != isDocumentEdited { NotificationCenter.default.post(name: Self.editedStateDidChange, object: self) }
-        // 改动撤销完了：有改动时没跟的外部修改现在可以跟了。这时没有存储，系统不会再来问，不跟就一直停在旧内容
-        if was, !isDocumentEdited { Task { @MainActor [weak self] in self?.reloadFromDisk() } }
+        // 改动撤销完了：有改动时没跟的外部修改现在可以跟了。这时没有存储，系统不会再来问，不跟就一直停在旧内容（关了"自动重新载入"就不替用户载入，⌘R 才跟）
+        if was, !isDocumentEdited, Preferences.shared.autoReload { Task { @MainActor [weak self] in self?.reloadFromDisk() } }
     }
     override func updateChangeCount(withToken changeCountToken: Any, for saveOperation: NSDocument.SaveOperationType) {
         let was = isDocumentEdited
