@@ -286,6 +286,10 @@ enum Block: Hashable {
 - ⌘R 是用户自己要的，和监视器不一样：没有未保存改动就跟磁盘；冲突就立刻问（走存储），之前问过也问；已经是最新就安静；文件被删或读不了、磁盘没变但有未保存改动，响一声。
 - 文档的 `windowForSheet` 永远是工作区窗口，标签在不在前台都一样（窗口控制器只挂在当前标签的文档上，默认实现对后台标签返回 nil）。否则系统的询问退回 app 级模态，答完文档又被标成未保存；询问开着时等活动队列（`quire://append`、快捷指令"追加"）主线程真的死等。有了它，等的时候 AppKit 对 sheet 转模态循环，询问还能答，答完才继续（macOS 27 实测）。
 - 修改时间要和字节同一时刻取，先取时间再读字节：`fileModificationDate` 是 NSDocument 存储前的最后一道检查，记下没读到的那次写入的时间，下次存储就会把它静默盖掉。
+- "写下"只算写成功、写的又是文档自己的文件：`data(ofType:)` 只序列化，字节先挂着，`writeSafely` 成功才转成 `knownDiskData`。提前记的话，写失败（只读、没权限）之后磁盘还是旧字节，下一个监视器事件就误报外部修改，选"重新载入"就丢了改动；只序列化不写盘的调用方也一样。导出副本（`.saveTo`）和写到自动保存目录（`.autosaveElsewhere`）不算；存储为要算，所以按操作类型判断，不按"目标 == `fileURL`"（写的时候 `fileURL` 还是旧的）。
+- Quire 现在在主线程写（`canAsynchronouslyWrite` 默认 NO），但这条路按可能在后台写来做：字节的记账有锁，`data(ofType:)` 是 `nonisolated`（不是的话后台写一进来就触发 Swift 的隔离检查崩溃）。文件已经换进去、写盘线程还没走到记账时监视器响了（防抖只有 0.15 s），磁盘和正在写的字节一样，同样不算外部修改。
+- 符号链接文档的 `fileURL` 是它指向的文件（`QuireDocumentController.followingSymlink`，只看路径最后一段；目录部分的符号链接不碰），NSDocument、监视器、字节比较、修改时间都只认真实文件，经链接和直接打开是同一份文档；相对路径的图片和链接按真实文件所在目录解析。界面（标签名、侧栏当前项、跳转历史、下次恢复）用 `MarkdownDocument.presentedURL`，还是用户点的那个路径：否则链接指向根外时，侧栏会跟着跳到那个文件夹（`currentURLDidChange`）。原因：macOS 27 上 `FileManager.replaceItem` 对最后一段是符号链接的路径报 ENOENT（相对、绝对、链接的链接都一样），NSDocument 的安全写入走它，裸子类也存不了；修改时间（`attributesOfItem`、URL 资源值）也是链接自己的，防覆盖的检查看不到真实文件的变化。**不能只在 `writeSafely` 里把目标换成真实路径**：目标和 `fileURL` 对不上时，NSDocument 会删掉真实文件再报错，新内容也没写进去（实测）。
+- ⌘S 和自动保存不改文件名：`fileNameExtension` 这两种操作给文件自己的扩展名，其他操作（存储为、导出、新文档）给 `md`。系统的 Markdown 类型只认 `md` 和 `markdown`（Info.plist 的 imported 声明赢不了），NSDocument 就地存储时会把扩展名不属于文档类型的文件改名成 `fileNameExtension` 给的扩展名：`y.txt` 成了 `y.md`，`NOTES` 成了 `NOTES.md`，`v1.2` 成了 `v1.md`，指向它的符号链接也断了；旁边已经有 `y.md` 时改名撞车，存储直接失败，自动保存还不出声。
 
 ## 10. 目录结构
 

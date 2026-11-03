@@ -12,7 +12,7 @@ enum WorkspaceState {
         let all = WorkspaceWindowController.all.reversed().compactMap { ws -> Workspace? in   // orderedWindows 前在前：存成后开的在后
             guard let window = ws.window else { return nil }
             let tabs = ws.tabs.compactMap { t -> Tab? in
-                guard let p = t.document.fileURL?.path else { return nil }   // 未命名文档不恢复（自动存储的草稿由系统管）
+                guard let p = t.document.presentedURL?.path else { return nil }   // 未命名文档不恢复（自动存储的草稿由系统管）
                 return Tab(path: p, ephemeral: t.isEphemeral, mode: t.mode.rawValue)
             }
             guard !tabs.isEmpty else { return nil }

@@ -38,11 +38,12 @@ final class QuireDocumentController: NSDocumentController {
 
     // MARK: - 打开到哪个工作区（docs/research/window-chrome.md §3）
 
-    /// 一次打开的去向：指定的工作区（nil = 新窗口，根目录 `newWindowRoot`）；`ephemeral` = 侧栏单击的临时标签
+    /// 一次打开的去向：指定的工作区（nil = 新窗口，根目录 `newWindowRoot`）；`ephemeral` = 侧栏单击的临时标签；`link` = 是经这个符号链接打开的
     struct OpenTarget {
         weak var workspace: WorkspaceWindowController?
         var newWindowRoot: URL?
         var ephemeral = false
+        var link: URL?
     }
     /// 按文件路径登记的去向：NSDocumentController 读文件是异步的，makeWindowControllers 时按 fileURL 取
     private var pendingTargets: [String: OpenTarget] = [:]
@@ -50,6 +51,14 @@ final class QuireDocumentController: NSDocumentController {
     private var pendingUntitled: OpenTarget?
 
     private static func key(_ url: URL) -> String { url.standardizedFileURL.path }
+
+    /// 路径最后一段是符号链接：文档落在它指向的文件上（DESIGN §9）。NSDocument 的安全写入走 FileManager.replaceItem，macOS 27 上它对符号链接报 ENOENT，裸 NSDocument 子类也存不了；
+    /// 修改时间（attributesOfItem、URL 资源值）也都是链接自己的，防覆盖的检查形同虚设。目录部分的符号链接不碰：不影响存储，路径也还要留在工作区根下。
+    /// 不能只在 writeSafely 里换成真实路径：NSDocument 看 fileURL 对不上，会删掉真实文件再报错
+    nonisolated static func followingSymlink(_ url: URL) -> URL {
+        guard (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil else { return url }
+        return url.resolvingSymlinksInPath()
+    }
 
     /// makeWindowControllers 取走登记的去向；没登记（Apple 事件、恢复……）就按 key 工作区推断
     func takeTarget(for doc: MarkdownDocument) -> OpenTarget {
@@ -86,14 +95,21 @@ final class QuireDocumentController: NSDocumentController {
             openFolder(url, completionHandler: completionHandler)
             return
         }
-        if let doc = document(for: url) as? MarkdownDocument, let ws = doc.workspace, let tab = ws.tab(for: doc) {
+        let file = Self.followingSymlink(url)   // 链接和它指向的文件是同一份文档
+        if let doc = document(for: file) as? MarkdownDocument, let ws = doc.workspace, let tab = ws.tab(for: doc) {
             pendingTargets[Self.key(url)] = nil
             if displayDocument { ws.select(tab); ws.showWindow(nil) }
             completionHandler(doc, true, nil)
             return
         }
-        let k = Self.key(url)
-        super.openDocument(withContentsOf: url, display: displayDocument) { [weak self] doc, already, error in
+        if file != url {
+            // 去向按链接的位置判断（链接在根内就留在这个工作区，不管它指向哪），按真实文件登记：makeWindowControllers 取的时候 fileURL 是它
+            var target = pendingTargets.removeValue(forKey: Self.key(url)) ?? OpenTarget(workspace: Self.workspace(for: url))
+            target.link = url
+            pendingTargets[Self.key(file)] = target
+        }
+        let k = Self.key(file)
+        super.openDocument(withContentsOf: file, display: displayDocument) { [weak self] doc, already, error in
             self?.pendingTargets[k] = nil
             completionHandler(doc, already, error)
         }
@@ -163,6 +179,14 @@ class MarkdownDocument: NSDocument {
     @MainActor weak var workspace: WorkspaceWindowController?
     /// 这份文档那个标签的阅读视图（导出 / 打印用）
     @MainActor var readerViewController: ReaderViewController? { workspace?.tab(for: self)?.reader }
+    /// 经符号链接打开时，用户点的那个路径（`fileURL` 是它指向的文件）
+    @MainActor private var linkURL: URL?
+    /// 界面上用的路径（标签名、侧栏的当前项、跳转历史、下次恢复）：经符号链接打开的文档还叫那个名字、留在侧栏原来的位置，不然链接指向根外时侧栏会跳走。
+    /// 链接被删、改指向，或者文档存储为别的文件之后，回到真实路径
+    @MainActor var presentedURL: URL? {
+        guard let linkURL, QuireDocumentController.followingSymlink(linkURL).standardizedFileURL.path == fileURL?.standardizedFileURL.path else { return fileURL }
+        return linkURL
+    }
     /// 脏标记变化（标签条上的圆点、临时标签固定）
     static let editedStateDidChange = Notification.Name("com.korako.quire.documentEditedStateDidChange")
 
@@ -181,8 +205,9 @@ class MarkdownDocument: NSDocument {
     override func makeWindowControllers() {
         LaunchClock.mark("makeWindowControllers begin")
         let target = (NSDocumentController.shared as! QuireDocumentController).takeTarget(for: self)
+        linkURL = target.link
         if let ws = target.workspace, ws.window != nil { ws.addTab(self, ephemeral: target.ephemeral) }
-        else { _ = WorkspaceWindowController(document: self, root: target.newWindowRoot ?? fileURL?.deletingLastPathComponent()) }
+        else { _ = WorkspaceWindowController(document: self, root: target.newWindowRoot ?? presentedURL?.deletingLastPathComponent()) }
         LaunchClock.mark("makeWindowControllers end")
     }
 
@@ -233,7 +258,11 @@ class MarkdownDocument: NSDocument {
         if was != isDocumentEdited { NotificationCenter.default.post(name: Self.editedStateDidChange, object: self) }
     }
 
-    override func fileNameExtension(forType typeName: String, saveOperation: NSDocument.SaveOperationType) -> String? { "md" }
+    override func fileNameExtension(forType typeName: String, saveOperation: NSDocument.SaveOperationType) -> String? {
+        // 就地存储时扩展名不属于这个类型的（.txt、.mdown、设置里加的 .qmd……系统的 Markdown 类型只认 md 和 markdown），NSDocument 会把文件改名成这里给的扩展名
+        if saveOperation == .saveOperation || saveOperation == .autosaveInPlaceOperation, let ownExtension = fileURL?.pathExtension { return ownExtension }
+        return "md"
+    }
 
     /// 字节 → 文字 + 编码，只看字节：打开、外部修改、"重新载入"、往没打开的文件追加都走这里，同样的字节从哪条路进来都解成同样的文字。
     /// UTF-8 优先；失败退回带 BOM 的 UTF-16 / GB18030 / Latin-1（不静默丢字）。
@@ -274,7 +303,8 @@ class MarkdownDocument: NSDocument {
         source = decoded.text
         encoding = decoded.encoding
         // 要自己的一份：NSDocument 给的可能是文件映射，留着它卷就卸不掉，强行卸掉后再比较还会崩
-        knownDiskData = Data(data)
+        let own = Data(data)
+        diskDataLock.withLock { knownDiskData = own }
         normalizeLineEndings()
         splitAuthorship()
         isNewDocument = false
@@ -310,18 +340,38 @@ class MarkdownDocument: NSDocument {
         return usesCRLF ? s.replacingOccurrences(of: "\n", with: "\r\n") : s
     }
 
-    override func data(ofType typeName: String) throws -> Data {
+    /// 只序列化：这时还没写，不能算磁盘上的内容（只把字节交给进行中的那次写盘，writeSafely 成功才转正）。`nonisolated`：写盘可能不在主线程
+    nonisolated override func data(ofType typeName: String) throws -> Data {
         let source = sourceForDisk
         // 原编码装不下新内容（Latin-1 文件里打了个中文）：改用 UTF-8，并记住——磁盘上已经是 UTF-8 了，之后都按它写
         if source.data(using: encoding) == nil { encoding = .utf8 }
         guard let d = source.data(using: encoding) ?? source.data(using: .utf8) else {
             throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteInapplicableStringEncodingError)
         }
-        knownDiskData = d
+        diskDataLock.withLock { if isWritingDisk { writingDiskData = d } }
         return d
     }
+
+    /// 写进文档自己的文件并且成功，磁盘上才是这份字节。写失败（只读、没权限、卷满）磁盘上还是旧字节，提前记下的话下一个监视器事件就误报"已被其他程序修改"，选重新载入就丢了改动。
+    /// 导出副本（.saveTo）、写到自动保存目录（.autosaveElsewhere）没动文档的文件，不记；存储为（.saveAs / .autosaveAs）写的是新文件，存完它就是 fileURL，要记（所以不能按"目标 == fileURL"判断：这时 fileURL 还是旧的）
+    override func writeSafely(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType) throws {
+        guard saveOperation != .saveToOperation, saveOperation != .autosaveElsewhereOperation else {
+            try super.writeSafely(to: url, ofType: typeName, for: saveOperation)
+            return
+        }
+        diskDataLock.withLock { isWritingDisk = true }
+        defer { diskDataLock.withLock { isWritingDisk = false; writingDiskData = nil } }
+        try super.writeSafely(to: url, ofType: typeName, for: saveOperation)
+        diskDataLock.withLock { knownDiskData = writingDiskData }
+    }
+
     /// 最近一次读到、写下或采用的磁盘字节：磁盘上还是这份，就没有外部修改
     nonisolated(unsafe) private var knownDiskData: Data?
+    /// 写盘进行中时 data(ofType:) 给出去的字节。写盘之外调 data(ofType:) 不留痕迹
+    nonisolated(unsafe) private var writingDiskData: Data?
+    nonisolated(unsafe) private var isWritingDisk = false
+    /// 管上面三个：`canAsynchronouslyWrite` 打开时写盘不在主线程，监视器的比较在主线程
+    private let diskDataLock = NSLock()
 
     /// 编辑器每次击键调用（撤销由 NSTextView 走文档 undoManager，自动标脏）。
     /// `tracked`：改动已经通过 `recordEdit` 逐次记录（源码编辑器）；false = 混合模式 / pandoc 等整体替换，按差异对齐归属区间
@@ -372,11 +422,14 @@ class MarkdownDocument: NSDocument {
     @discardableResult
     func reloadFromDisk() -> ReloadResult {
         guard let disk = readDisk() else { return .unreadable }
+        let (known, writing) = diskDataLock.withLock { (knownDiskData, writingDiskData) }
         // 先按字节比
-        if disk.data == knownDiskData {
+        if disk.data == known {
             fileModificationDate = disk.date
             return isDocumentEdited ? .unsavedEdits : .current
         }
+        // 正在写的那份已经落盘、写盘线程还没走到记账（监视器防抖只有 0.15 s）：是自己写的。修改时间 NSDocument 写完会更新
+        if disk.data == writing { return isDocumentEdited ? .unsavedEdits : .current }
         // 解不开也不能悄悄留着旧文字（Latin-1 什么字节都解得开，实际到不了这里）
         guard let decoded = Self.decode(disk.data) else { return .unreadable }
         // 被别的工具换了编码：文字没变也要跟上，否则下次存储又按旧编码写回去。有未保存改动就往下走，由系统问
@@ -429,7 +482,7 @@ class MarkdownDocument: NSDocument {
     /// `decoded.text` 是解码后还没统一换行的文本：CRLF 文件要靠它记住写盘时还原。
     /// 修改时间同时跟上：否则 NSDocument 按自己记的时间，下次存储时还会问"文件已被修改"
     private func applyReloaded(_ decoded: (text: String, encoding: String.Encoding), _ disk: (data: Data, date: Date)) {
-        knownDiskData = disk.data
+        diskDataLock.withLock { knownDiskData = disk.data }
         fileModificationDate = disk.date
         source = decoded.text
         encoding = decoded.encoding

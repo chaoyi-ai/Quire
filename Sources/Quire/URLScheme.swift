@@ -81,7 +81,7 @@ enum URLScheme {
     @discardableResult
     static func appendText(_ text: String, to url: URL, external: Bool) -> Bool {
         guard !external || trusted(url) || confirm(String(format: L("外部应用请求在文件末尾追加 %d 个字符：%@"), text.count, url.path), button: L("追加")) else { return false }
-        if let doc = QuireDocumentController.shared.document(for: url) as? MarkdownDocument {
+        if let doc = QuireDocumentController.shared.document(for: QuireDocumentController.followingSymlink(url)) as? MarkdownDocument {
             // 文档开着 sheet 时存不了：save 要等 sheet 答完，主线程一等 sheet 就再也答不了
             guard doc.windowForSheet?.attachedSheet == nil else { NSSound.beep(); return false }
             var s = doc.source

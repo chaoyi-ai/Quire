@@ -1293,6 +1293,591 @@ final class WorkspaceTests: XCTestCase {
         }
     }
 
+    // MARK: 写盘成功才算磁盘上的内容（不开窗口、没有监视器：只看这里调的 reloadFromDisk 的结论，NSDocument 的存储是真的）
+
+    private func detached(_ name: String) throws -> (doc: ScriptedDocument, url: URL) {
+        let url = tmp.appendingPathComponent(name)
+        let doc = ScriptedDocument()
+        doc.fileURL = url
+        doc.fileType = QuireDocumentController.markdownType
+        NSDocumentController.shared.addDocument(doc)
+        try doc.read(from: Data(contentsOf: url), ofType: QuireDocumentController.markdownType)
+        doc.fileModificationDate = try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+        return (doc, url)
+    }
+
+    /// 存一次，返回 NSDocument 给的错误（出错时回调也会到）
+    private func save(_ doc: MarkdownDocument, to url: URL? = nil, _ operation: NSDocument.SaveOperationType) async throws -> NSError? {
+        let target = try XCTUnwrap(url ?? doc.fileURL)
+        nonisolated(unsafe) var finished = false, result: (any Error)?
+        doc.save(to: target, ofType: QuireDocumentController.markdownType, for: operation) { error in
+            result = error
+            finished = true
+        }
+        try await failingOnDeadlock { while !finished { try await Task.sleep(for: .milliseconds(20)) } }
+        return result as NSError?
+    }
+
+    /// 只动属性的外部事件：chmod、touch、Finder 标签、备份工具，内容都没变
+    private func touch(_ url: URL) throws {
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: 5)], ofItemAtPath: url.path)
+    }
+
+    /// 文件和所在文件夹都只读：不管 NSDocument 走哪条路都写不进去（结束时还原，tearDown 才删得掉）
+    private func saveWhileReadOnly(_ doc: MarkdownDocument, _ url: URL, _ operation: NSDocument.SaveOperationType) async throws -> NSError? {
+        let fm = FileManager.default, dir = url.deletingLastPathComponent().path
+        try fm.setAttributes([.posixPermissions: 0o444], ofItemAtPath: url.path)
+        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir)
+        defer {
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir)
+            try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+        }
+        return try await save(doc, operation)
+    }
+
+    /// 写盘失败，磁盘上还是旧字节。以前序列化时就记下了新字节，之后监视器一响（权限改回来也算）就问"已被其他程序修改"，选重新载入就丢了改动
+    func testFailedSaveIsNotMistakenForAnExternalChange() async throws {
+        for (name, operation) in [("a.md", NSDocument.SaveOperationType.autosaveInPlaceOperation), ("b.md", .saveOperation)] {
+            let (doc, url) = try detached(name)
+            let opened = try disk(url)
+            doc.replaceContents("# mine\n")
+            let error = try await saveWhileReadOnly(doc, url, operation)
+            XCTAssertNotNil(error, "这个测试的前提：写不进去")
+            XCTAssertEqual(try disk(url), opened)
+            XCTAssertTrue(doc.isDocumentEdited)
+
+            try touch(url)
+            XCTAssertEqual(doc.reloadFromDisk(), .unsavedEdits, "\(name)：磁盘上还是打开时的字节，没有外部修改")
+            XCTAssertEqual(doc.source, "# mine\n")
+
+            // 能写了之后照常存
+            let retried = try await save(doc, operation)
+            XCTAssertNil(retried, "\(name)：修改时间已跟上 touch，不该再拦")
+            XCTAssertEqual(try disk(url), "# mine\n")
+        }
+    }
+
+    /// 写失败之后真的来了外部修改：还是要问。写失败的那份字节也不留着：外部恰好写成这样、文档又往后改过，同样是外部修改
+    func testRealExternalChangeAfterFailedSaveStillAsks() async throws {
+        let (doc, url) = try detached("a.md")
+        doc.replaceContents("# mine\n")
+        let error = try await saveWhileReadOnly(doc, url, .autosaveInPlaceOperation)
+        XCTAssertNotNil(error)
+        doc.replaceContents("# more\n")
+        try "# mine\n".write(to: url, atomically: true, encoding: .utf8)
+        XCTAssertEqual(doc.reloadFromDisk(), .conflict)
+        XCTAssertEqual(doc.source, "# more\n")
+    }
+
+    /// 只序列化不写盘的调用方（探针曾因此造出这个 bug 的假象）：什么都不算
+    func testSerializingWithoutWritingChangesNothing() throws {
+        let (doc, url) = try detached("a.md")
+        doc.replaceContents("# probed\n")
+        _ = try doc.data(ofType: QuireDocumentController.markdownType)
+        try touch(url)
+        XCTAssertEqual(doc.reloadFromDisk(), .unsavedEdits, "磁盘上还是打开时的字节")
+        // 序列化出来的字节也不算"正在写的"：外部恰好写成这样、文档又往后改过，就是外部修改
+        doc.replaceContents("# typed\n")
+        try "# probed\n".write(to: url, atomically: true, encoding: .utf8)
+        XCTAssertEqual(doc.reloadFromDisk(), .conflict)
+    }
+
+    /// 写完之后也一样：写盘结束，序列化就又不留痕迹了
+    func testSerializingAfterASaveChangesNothing() async throws {
+        let (doc, url) = try detached("a.md")
+        doc.replaceContents("# saved\n")
+        let error = try await save(doc, .saveOperation)
+        XCTAssertNil(error)
+        doc.replaceContents("# probed\n")
+        _ = try doc.data(ofType: QuireDocumentController.markdownType)
+        doc.replaceContents("# typed\n")
+        try "# probed\n".write(to: url, atomically: true, encoding: .utf8)
+        XCTAssertEqual(doc.reloadFromDisk(), .conflict)
+    }
+
+    /// 导出副本、写到自动保存目录：文档自己的文件没动，不算
+    func testWritingElsewhereLeavesTheDocumentsFileAlone() async throws {
+        let (doc, url) = try detached("a.md")
+        doc.replaceContents("# mine\n")
+        for (name, operation) in [("copy.md", NSDocument.SaveOperationType.saveToOperation), ("elsewhere.md", .autosaveElsewhereOperation)] {
+            let elsewhere = tmp.appendingPathComponent(name)
+            let error = try await save(doc, to: elsewhere, operation)
+            XCTAssertNil(error, name)
+            XCTAssertEqual(try disk(elsewhere), "# mine\n")
+            XCTAssertEqual(doc.fileURL, url)
+            try touch(url)
+            XCTAssertEqual(doc.reloadFromDisk(), .unsavedEdits, "\(name)：文档的文件还是打开时的字节")
+        }
+    }
+
+    /// 写成功了就是磁盘上的内容：接着打字、再来一个只动属性的事件，不是外部修改（自动保存、⌘S 同样）
+    func testSuccessfulSaveCountsAsOnDisk() async throws {
+        for (name, operation) in [("a.md", NSDocument.SaveOperationType.autosaveInPlaceOperation), ("b.md", .saveOperation)] {
+            let (doc, url) = try detached(name)
+            doc.replaceContents("# one\n")
+            let error = try await save(doc, operation)
+            XCTAssertNil(error, name)
+            doc.replaceContents("# two\n")
+            try touch(url)
+            XCTAssertEqual(doc.reloadFromDisk(), .unsavedEdits, "\(name)：磁盘上是自己刚写的那份")
+            XCTAssertEqual(doc.source, "# two\n")
+        }
+    }
+
+    /// 存储为：写的时候 fileURL 还是旧的，存完才换。按"目标 == fileURL"判断的话这里记不上
+    func testSaveAsCountsAsOnDisk() async throws {
+        let (doc, _) = try detached("a.md")
+        let other = tmp.appendingPathComponent("other.md")
+        doc.replaceContents("# one\n")
+        let error = try await save(doc, to: other, .saveAsOperation)
+        XCTAssertNil(error)
+        XCTAssertEqual(doc.fileURL?.lastPathComponent, "other.md")
+        doc.replaceContents("# two\n")
+        try touch(other)
+        XCTAssertEqual(doc.reloadFromDisk(), .unsavedEdits)
+    }
+
+    /// 在后台线程写，写到一半停住（NSDocument 默认在主线程写，`canAsynchronouslyWrite` 打开才走这条路）
+    private final class BackgroundWriteDocument: MarkdownDocument {
+        nonisolated(unsafe) var wroteOffMain = false
+        private let midWrite = DispatchSemaphore(value: 0)
+        let finishWrite = DispatchSemaphore(value: 0)
+
+        func hasReachedMidWrite() -> Bool { midWrite.wait(timeout: .now()) == .success }
+        override func canAsynchronouslyWrite(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType) -> Bool { true }
+        override func write(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType, originalContentsURL absoluteOriginalContentsURL: URL?) throws {
+            try super.write(to: url, ofType: typeName, for: saveOperation, originalContentsURL: absoluteOriginalContentsURL)
+            wroteOffMain = !Thread.isMainThread
+            midWrite.signal()
+            finishWrite.wait()
+        }
+    }
+
+    /// 写盘在后台进行时用户接着打字，监视器（防抖 0.15 s）也可能在记账之前响：磁盘上是正在写的那份，不是外部修改；写完之后才算数
+    func testExternalCheckDuringABackgroundWrite() async throws {
+        let url = tmp.appendingPathComponent("a.md")
+        let doc = BackgroundWriteDocument()
+        doc.fileURL = url
+        doc.fileType = QuireDocumentController.markdownType
+        NSDocumentController.shared.addDocument(doc)
+        try doc.read(from: Data(contentsOf: url), ofType: QuireDocumentController.markdownType)
+
+        doc.replaceContents("# one\n")
+        nonisolated(unsafe) var finished = false, result: (any Error)?
+        doc.save(to: url, ofType: QuireDocumentController.markdownType, for: .autosaveInPlaceOperation) { error in
+            result = error
+            finished = true
+        }
+        try await failingOnDeadlock { while !doc.hasReachedMidWrite() { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertTrue(doc.wroteOffMain, "这个测试的前提：写盘不在主线程")
+
+        doc.replaceContents("# two\n")
+        XCTAssertEqual(doc.reloadFromDisk(), .unsavedEdits, "还没写进去：磁盘上是打开时的字节")
+        try "# one\n".write(to: url, atomically: true, encoding: .utf8)   // 文件已经换进去、写盘线程还没走到记账的样子
+        XCTAssertEqual(doc.reloadFromDisk(), .unsavedEdits, "磁盘上是正在写的那份")
+
+        doc.finishWrite.signal()
+        try await failingOnDeadlock { while !finished { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertNil(result)
+        XCTAssertEqual(try disk(url), "# one\n")
+        try touch(url)
+        XCTAssertEqual(doc.reloadFromDisk(), .unsavedEdits, "写完了：磁盘上是自己写的")
+        XCTAssertEqual(doc.source, "# two\n", "写盘期间打的字还在")
+    }
+
+    // MARK: 符号链接文档（macOS 27 上 NSDocument 存不了符号链接路径：FileManager.replaceItem 对它报 ENOENT，裸 NSDocument 子类也一样）
+
+    @discardableResult
+    private func symlink(_ path: String, to destination: String) throws -> URL {
+        let url = tmp.appendingPathComponent(path)
+        try FileManager.default.createSymbolicLink(atPath: url.path, withDestinationPath: destination)
+        return url
+    }
+
+    private func isSamePath(_ a: URL?, _ b: URL) -> Bool { a?.resolvingSymlinksInPath().path == b.resolvingSymlinksInPath().path }
+
+    /// 真实场景：侧栏点符号链接、打字、等自动保存，或者 ⌘S。写进它指向的文件，链接本身不动；之后的 touch 也不是外部修改
+    func testSymlinkDocumentSavesToTheFileItPointsTo() async throws {
+        let link = try symlink("link.md", to: "a.md")
+        let real = tmp.appendingPathComponent("a.md")
+        let a = try await openFile("link.md")
+        a.doc.session.stopWatching()   // 只看这里调的：监视器晚到的事件会替没写对的地方补救
+        XCTAssertTrue(isSamePath(a.doc.fileURL, real), "NSDocument 拿到的是真实文件")
+
+        a.doc.replaceContents("# autosaved\n")
+        var error = try await save(a.doc, .autosaveInPlaceOperation)
+        XCTAssertNil(error, "自动保存")
+        XCTAssertEqual(try disk(real), "# autosaved\n")
+
+        a.doc.replaceContents("# saved\n")
+        error = try await save(a.doc, .saveOperation)
+        XCTAssertNil(error, "⌘S")
+        XCTAssertEqual(try disk(real), "# saved\n")
+        XCTAssertEqual(try disk(link), "# saved\n")
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path), "a.md", "链接还是原来的链接")
+
+        a.doc.replaceContents("# typing\n")
+        try touch(real)
+        a.doc.reloadFromDisk()
+        XCTAssertNil(a.ws.window?.attachedSheet, "内容没变，不该问")
+        error = try await save(a.doc, .saveOperation)
+        XCTAssertNil(error, "修改时间跟的是真实文件，不该挡住存储")
+        XCTAssertEqual(try disk(real), "# typing\n")
+    }
+
+    /// 外部改了链接指向的文件：比较按真实文件，系统照样问，"复原"载入的也是它
+    func testExternalChangeBehindASymlinkStillAsks() async throws {
+        try symlink("link.md", to: "a.md")
+        let a = try await openFile("link.md")
+        a.doc.session.stopWatching()
+        a.doc.replaceContents("# mine\n")
+        try "# theirs\n".write(to: tmp.appendingPathComponent("a.md"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(a.doc.reloadFromDisk(), .conflict)
+        timerAutosave(a.doc)
+        try await answer(.revert, on: a.ws)
+        try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertEqual(a.doc.source, "# theirs\n")
+    }
+
+    /// 界面还是用户点的那个：链接指向根外时，侧栏不能跳到那个文件夹，也不另开窗口
+    func testSymlinkToAFileOutsideTheRootStaysInTheWorkspace() async throws {
+        let fm = FileManager.default
+        let root = tmp.appendingPathComponent("root"), outside = tmp.appendingPathComponent("outside")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        let real = outside.appendingPathComponent("real.md")
+        try "# real\n".write(to: real, atomically: true, encoding: .utf8)
+        let link = try symlink("root/link.md", to: "../outside/real.md")
+
+        let (ws, _) = makeWorkspace(root: root)
+        XCTAssertTrue(ws.contains(link))
+        let opened = await open(link, in: ws, ephemeral: false)   // 侧栏点文件走的就是这里
+        let doc = try XCTUnwrap(opened)
+        XCTAssertTrue(doc.workspace === ws, "链接在根内：进这个工作区")
+        XCTAssertEqual(ws.tabs.count, 2)
+        XCTAssertTrue(isSamePath(doc.fileURL, real))
+        XCTAssertEqual(ws.tab(for: doc)?.title, "link", "标签和侧栏同名")
+        XCTAssertEqual(ws.rootURL?.standardizedFileURL, root.standardizedFileURL, "侧栏不跳")
+        XCTAssertEqual(ws.sidebarViewController.currentURL?.standardizedFileURL, link.standardizedFileURL, "侧栏的当前项是点的那个")
+
+        // 切走再切回来也一样
+        ws.select(ws.tabs[0])
+        ws.select(try XCTUnwrap(ws.tab(for: doc)))
+        XCTAssertEqual(ws.rootURL?.standardizedFileURL, root.standardizedFileURL)
+        XCTAssertEqual(ws.sidebarViewController.currentURL?.standardizedFileURL, link.standardizedFileURL)
+    }
+
+    /// 没指定去向（⌘O、拖放、wikilink、quire://）：去向按链接的位置判断，不按它指向哪
+    func testUntargetedOpenOfASymlinkFollowsTheLinksLocation() async throws {
+        let fm = FileManager.default
+        let root = tmp.appendingPathComponent("root"), outside = tmp.appendingPathComponent("outside")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        try "# real\n".write(to: outside.appendingPathComponent("real.md"), atomically: true, encoding: .utf8)
+        let link = try symlink("root/link.md", to: "../outside/real.md")
+        let (ws, _) = makeWorkspace(root: root)
+        ws.showWindow(nil)   // 没指定去向时按屏幕上的工作区判断
+
+        var result: NSDocument?
+        let done = expectation(description: "open")
+        NSDocumentController.shared.openDocument(withContentsOf: link, display: true) { doc, _, _ in
+            result = doc
+            done.fulfill()
+        }
+        await fulfillment(of: [done], timeout: 10)
+        XCTAssertTrue((result as? MarkdownDocument)?.workspace === ws)
+    }
+
+    /// 不在任何工作区的根内：另开窗口，根是链接所在的文件夹（和普通文件一样），不是它指向的文件夹
+    func testSymlinkOutsideEveryWorkspaceOpensAtTheLinksFolder() async throws {
+        let fm = FileManager.default
+        let folder = tmp.appendingPathComponent("folder"), outside = tmp.appendingPathComponent("outside")
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        try "# real\n".write(to: outside.appendingPathComponent("real.md"), atomically: true, encoding: .utf8)
+        let link = try symlink("folder/link.md", to: "../outside/real.md")
+        let opened = await open(link, in: nil, ephemeral: false)
+        let ws = try XCTUnwrap(opened?.workspace)
+        XCTAssertEqual(ws.rootURL?.standardizedFileURL, folder.standardizedFileURL)
+        XCTAssertEqual(ws.sidebarViewController.currentURL?.standardizedFileURL, link.standardizedFileURL)
+        XCTAssertFalse(SidebarSettings.recentRoots.contains { $0.standardizedFileURL == outside.standardizedFileURL }, "它指向的文件夹没开过，不进最近目录")
+    }
+
+    /// 侧栏点进链接、再点别的文件（临时标签被替换，文档关了）、后退：还是经链接回来，留在这个工作区
+    func testGoingBackReturnsThroughTheLink() async throws {
+        let fm = FileManager.default
+        let root = tmp.appendingPathComponent("root"), outside = tmp.appendingPathComponent("outside")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        try "# real\n".write(to: outside.appendingPathComponent("real.md"), atomically: true, encoding: .utf8)
+        let other = root.appendingPathComponent("other.md")
+        try "# other\n".write(to: other, atomically: true, encoding: .utf8)
+        let link = try symlink("root/link.md", to: "../outside/real.md")
+        let (ws, _) = makeWorkspace(root: root)
+        ws.showWindow(nil)   // 没指定去向时按屏幕上的工作区判断
+
+        func current(is name: String, after action: () -> Void) async throws {
+            action()
+            for _ in 0..<250 where ws.current.title != name { try await Task.sleep(for: .milliseconds(20)) }
+            XCTAssertEqual(ws.current.title, name)
+        }
+        try await current(is: "link") { ws.sidebarViewController.onOpenFile?(link, nil, false) }
+        try await current(is: "other") { ws.sidebarViewController.onOpenFile?(other, nil, false) }
+        XCTAssertEqual(ws.tabs.count, 2, "临时标签被替换")
+        try await current(is: "link") { ws.navigateBack(nil) }
+        XCTAssertEqual(ws.rootURL?.standardizedFileURL, root.standardizedFileURL, "侧栏不跳")
+        XCTAssertEqual(ws.sidebarViewController.currentURL?.standardizedFileURL, link.standardizedFileURL)
+        // 前进、关掉链接的标签、再后退：前进时记下的也是链接
+        try await current(is: "other") { ws.navigateForward(nil) }
+        let linkTab = try XCTUnwrap(ws.tabs.first { $0.title == "link" })
+        ws.closeTab(linkTab)
+        for _ in 0..<250 where ws.tabs.contains(where: { $0 === linkTab }) { try await Task.sleep(for: .milliseconds(20)) }
+        try await current(is: "link") { ws.navigateBack(nil) }
+        XCTAssertEqual(ws.rootURL?.standardizedFileURL, root.standardizedFileURL)
+    }
+
+    /// 链接指向扩展名不是 md 的文件：写进去，文件不改名（NSDocument 就地存储时会把扩展名不对的文件改名，链接就断了）
+    func testSymlinkTargetKeepsItsNameWhateverItsExtension() async throws {
+        for destination in ["NOTES", "notes.dat", "plain.txt", "other.mdown"] {
+            let real = tmp.appendingPathComponent(destination)
+            try "# real\n".write(to: real, atomically: true, encoding: .utf8)
+            let link = try symlink("\(destination)-link.md", to: destination)
+            let a = try await openFile("\(destination)-link.md")
+            a.doc.session.stopWatching()
+
+            a.doc.replaceContents("# autosaved\n")
+            let autosaveError = try await autosave(a.doc)
+            XCTAssertNil(autosaveError, destination)
+            XCTAssertTrue(isSamePath(a.doc.fileURL, real), "\(destination)：没改名")
+            XCTAssertEqual(try? disk(real), "# autosaved\n", destination)
+
+            a.doc.replaceContents("# saved\n")
+            let error = try await save(a.doc, .saveOperation)
+            XCTAssertNil(error, destination)
+            XCTAssertEqual(try? disk(real), "# saved\n", destination)
+            XCTAssertEqual(try? disk(link), "# saved\n", "\(destination)：链接没断")
+            XCTAssertTrue(isSamePath(a.doc.fileURL, real), destination)
+            XCTAssertEqual(a.doc.fileNameExtension(forType: QuireDocumentController.markdownType, saveOperation: .saveAsOperation), "md", "存储为面板的默认扩展名不变")
+        }
+    }
+
+    /// 定时器走的那条自动保存（改名发生在这里和 ⌘S 里，`save(to:)` 的目标是调用方给的，不会改名）
+    private func autosave(_ doc: MarkdownDocument) async throws -> (any Error)? {
+        nonisolated(unsafe) var finished = false, result: (any Error)?
+        doc.autosave(withImplicitCancellability: false) { error in
+            result = error
+            finished = true
+        }
+        try await failingOnDeadlock { while !finished { try await Task.sleep(for: .milliseconds(20)) } }
+        return result
+    }
+
+    /// ⌘S 走的那条路，等它写完
+    private func commandS(_ doc: MarkdownDocument) async throws {
+        doc.save(nil)
+        try await failingOnDeadlock { while doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+    }
+
+    /// 文件叫什么，存完还叫什么：自动保存和 ⌘S 分开走（第一次存储就会改名，一次只能看一条路），文件夹里不多不少
+    private func assertSavingKeepsName(_ name: String, beside neighbour: String? = nil, file: StaticString = #filePath, line: UInt = #line) async throws {
+        let fm = FileManager.default
+        for operation in ["autosave", "save"] {
+            let folder = tmp.appendingPathComponent(operation + "-" + UUID().uuidString)
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            let url = folder.appendingPathComponent(name)
+            try "# original\n".write(to: url, atomically: true, encoding: .utf8)
+            if let neighbour { try "# neighbour\n".write(to: folder.appendingPathComponent(neighbour), atomically: true, encoding: .utf8) }
+            let opened = await open(url, in: nil, ephemeral: false)
+            let doc = try XCTUnwrap(opened, name, file: file, line: line)
+            doc.session.stopWatching()
+
+            doc.replaceContents("# changed\n")
+            if operation == "autosave" {
+                let error = try await autosave(doc)
+                XCTAssertNil(error, "\(name) \(operation)", file: file, line: line)
+            } else {
+                try await commandS(doc)
+            }
+            XCTAssertEqual(doc.fileURL?.lastPathComponent, name, operation, file: file, line: line)
+            // y~.md 是 NSDocument 自动保存时的临时备份，什么时候删不归我们管
+            let files = try fm.contentsOfDirectory(atPath: folder.path).filter { !$0.contains("~") }.sorted()
+            XCTAssertEqual(files, ([name] + [neighbour].compactMap { $0 }).sorted(), "\(name) \(operation)", file: file, line: line)
+            XCTAssertEqual(try? disk(url), "# changed\n", "\(name) \(operation)", file: file, line: line)
+            if let neighbour { XCTAssertEqual(try? disk(folder.appendingPathComponent(neighbour)), "# neighbour\n", "\(name) \(operation)", file: file, line: line) }
+            XCTAssertFalse(doc.isDocumentEdited, "\(name) \(operation)", file: file, line: line)
+            doc.close()
+        }
+    }
+
+    /// 系统的 Markdown 类型只认 md 和 markdown：NSDocument 就地存储时会把别的扩展名改名成 `fileNameExtension` 给的（y.txt 第一次自动保存就成了 y.md）
+    func testSavingKeepsTheNameOfEveryMarkdownExtension() async throws {
+        for ext in QuireDocumentController.markdownExtensions.sorted() {
+            try await assertSavingKeepsName("y." + ext)
+        }
+        try await assertSavingKeepsName("README.MD")
+        try await assertSavingKeepsName("y.TXT")
+        try await assertSavingKeepsName("release.notes.txt")
+        try await assertSavingKeepsName("读 我.mkd")
+    }
+
+    /// 设置里加的扩展名（.qmd、.mdx）：加它就是为了编辑这种文件，存一次变成 .md 就全白加了
+    func testSavingKeepsTheNameOfAnExtraExtension() async throws {
+        let extras = Preferences.shared.sidebarExtraExtensions
+        defer { Preferences.shared.sidebarExtraExtensions = extras }
+        Preferences.shared.sidebarExtraExtensions = "qmd"
+        try await assertSavingKeepsName("y.qmd")
+    }
+
+    /// 没有 Markdown 扩展名的文件也能打开（`open -a`、拖到程序坞）
+    func testSavingKeepsTheNameOfAFileWithoutAMarkdownExtension() async throws {
+        for name in ["NOTES", "notes.dat", "v1.2", ".notes", "y.", "data.json"] {
+            try await assertSavingKeepsName(name)
+        }
+    }
+
+    /// y.txt 旁边已经有 y.md：以前改名撞车，自动保存一直静默失败（改动只在内存里），⌘S 报"已存在同名文件"
+    func testSavingWritesTheFileItselfWhenItsMdNamesakeExists() async throws {
+        try await assertSavingKeepsName("y.txt", beside: "y.md")
+        try await assertSavingKeepsName("NOTES", beside: "NOTES.md")
+    }
+
+    /// 存储为 .txt 之后也一样：扩展名是用户刚选的
+    func testSavedAsAnotherExtensionStaysThatWay() async throws {
+        let a = try await openFile("a.md")
+        a.doc.session.stopWatching()
+        let target = tmp.appendingPathComponent("renamed.txt")
+        let error = try await save(a.doc, to: target, .saveAsOperation)
+        XCTAssertNil(error)
+        a.doc.replaceContents("# changed\n")
+        let autosaveError = try await autosave(a.doc)
+        XCTAssertNil(autosaveError)
+        XCTAssertEqual(a.doc.fileURL?.lastPathComponent, "renamed.txt")
+        XCTAssertEqual(try? disk(target), "# changed\n")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tmp.appendingPathComponent("renamed.md").path))
+    }
+
+    /// 只有就地存储保留原名。新文档、存储为、导出没有"原来的名字"，默认还是 md
+    func testOnlySavingInPlaceKeepsTheExtension() async throws {
+        let type = QuireDocumentController.markdownType
+        let a = try await openFile("a.md")
+        try "# t\n".write(to: tmp.appendingPathComponent("y.txt"), atomically: true, encoding: .utf8)
+        let y = try await openFile("y.txt", in: a.ws)
+        for operation: NSDocument.SaveOperationType in [.saveOperation, .autosaveInPlaceOperation] {
+            XCTAssertEqual(y.doc.fileNameExtension(forType: type, saveOperation: operation), "txt")
+        }
+        for operation: NSDocument.SaveOperationType in [.saveAsOperation, .saveToOperation, .autosaveElsewhereOperation, .autosaveAsOperation] {
+            XCTAssertEqual(y.doc.fileNameExtension(forType: type, saveOperation: operation), "md")
+        }
+        let new = untitled()
+        for operation: NSDocument.SaveOperationType in [.saveOperation, .autosaveInPlaceOperation, .saveAsOperation, .saveToOperation, .autosaveElsewhereOperation, .autosaveAsOperation] {
+            XCTAssertEqual(new.fileNameExtension(forType: type, saveOperation: operation), "md")
+        }
+    }
+
+    /// 链接和它指向的文件是同一份文档：两份各改各的会互相覆盖。相对、绝对、链接的链接都一样
+    func testSymlinkAndItsTargetAreOneDocument() async throws {
+        let link = try symlink("link.md", to: "a.md")
+        let viaLink = try await openFile("link.md")
+        let direct = try await openFile("a.md", in: viaLink.ws)
+        XCTAssertTrue(direct.doc === viaLink.doc)
+        XCTAssertEqual(viaLink.ws.tabs.count, 1)
+        let b = try await openFile("b.md", in: viaLink.ws)
+        XCTAssertTrue(viaLink.ws.current.document === b.doc)
+        let again = await open(link, in: viaLink.ws, ephemeral: false)
+        XCTAssertTrue(again === viaLink.doc)
+        XCTAssertTrue(viaLink.ws.current.document === viaLink.doc, "切到已有的标签")
+        viaLink.ws.select(try XCTUnwrap(viaLink.ws.tab(for: b.doc)))
+        let absolute = try symlink("absolute.md", to: tmp.appendingPathComponent("a.md").path)
+        let chained = try symlink("chained.md", to: "link.md")
+        for other in [absolute, chained] {
+            let opened = await open(other, in: viaLink.ws, ephemeral: false)
+            XCTAssertTrue(opened === viaLink.doc, other.lastPathComponent)
+        }
+        XCTAssertEqual(viaLink.ws.tabs.count, 2)
+    }
+
+    /// quire://append 给的是链接路径：要找到开着的文档，而不是绕过它直接改文件
+    func testAppendThroughASymlinkGoesToTheOpenDocument() async throws {
+        let link = try symlink("link.md", to: "a.md")
+        let a = try await openFile("a.md")
+        a.doc.session.stopWatching()
+        XCTAssertTrue(URLScheme.appendText("appended", to: link, external: false))
+        XCTAssertTrue(a.doc.source.hasSuffix("appended"), "开着的文档跟上")
+        try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertTrue(try disk(tmp.appendingPathComponent("a.md")).hasSuffix("appended"))
+    }
+
+    /// 文档不再是这个链接指向的文件（存储为、链接被删或改指向）：界面回到真实路径，不留过期的名字
+    func testNameFollowsTheFileOnceTheLinkNoLongerPointsToIt() async throws {
+        let link = try symlink("link.md", to: "a.md")
+        let a = try await openFile("link.md")
+        a.doc.session.stopWatching()
+        let tab = try XCTUnwrap(a.ws.tab(for: a.doc))
+        XCTAssertEqual(tab.title, "link")
+
+        try FileManager.default.removeItem(at: link)
+        try symlink("link.md", to: "b.md")
+        XCTAssertEqual(tab.title, "a", "链接改指向别的文件")
+        try FileManager.default.removeItem(at: link)
+        try symlink("link.md", to: "a.md")
+        XCTAssertEqual(tab.title, "link")
+
+        let other = tmp.appendingPathComponent("other.md")
+        let error = try await save(a.doc, to: other, .saveAsOperation)
+        XCTAssertNil(error)
+        XCTAssertEqual(tab.title, "other", "存储为之后是新文件")
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path), "a.md", "链接和原文件不受影响")
+    }
+
+    /// 下次启动恢复的也是用户点的那个路径：否则链接指向根外时，恢复一次侧栏就跳走了
+    func testWorkspaceStateRemembersTheLink() async throws {
+        let key = "workspaces.restore"
+        let saved = UserDefaults.standard.object(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+        let link = try symlink("link.md", to: "a.md")
+        _ = try await openFile("link.md")
+        WorkspaceState.save()
+        let data = try XCTUnwrap(UserDefaults.standard.data(forKey: key))
+        let workspaces = try JSONDecoder().decode([WorkspaceState.Workspace].self, from: data)
+        XCTAssertEqual(workspaces.first?.tabs.first?.path, link.path)
+    }
+
+    /// 符号链接目录里的文件照常：目录部分不影响存储，路径也还要在工作区根下（`contains`、标签名都靠它）
+    func testFileInsideASymlinkedFolderKeepsItsPath() async throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: tmp.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        try "# x\n".write(to: tmp.appendingPathComponent("sub/x.md"), atomically: true, encoding: .utf8)
+        try symlink("folder", to: "sub")
+        let url = tmp.appendingPathComponent("folder/x.md")
+        let opened = await open(url, in: nil, ephemeral: false)
+        let doc = try XCTUnwrap(opened)
+        doc.session.stopWatching()
+        XCTAssertEqual(doc.fileURL?.path, url.path)
+        doc.replaceContents("# edited\n")
+        let error = try await save(doc, .saveOperation)
+        XCTAssertNil(error)
+        XCTAssertEqual(try disk(tmp.appendingPathComponent("sub/x.md")), "# edited\n")
+    }
+
+    /// 坏链接（指向不存在的文件、绕成环）：打开要报错，不能挂住或开出一份空文档
+    func testBrokenSymlinksFailToOpen() async throws {
+        let dangling = try symlink("dangling.md", to: "missing.md")
+        try symlink("loop-b.md", to: "loop-a.md")
+        let loop = try symlink("loop-a.md", to: "loop-b.md")
+        for url in [dangling, loop] {
+            var opened: NSDocument?, failure: (any Error)?
+            let done = expectation(description: url.lastPathComponent)
+            NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { doc, _, error in
+                opened = doc
+                failure = error
+                done.fulfill()
+            }
+            await fulfillment(of: [done], timeout: 10)
+            XCTAssertNil(opened, url.lastPathComponent)
+            XCTAssertNotNil(failure, url.lastPathComponent)
+        }
+    }
+
     // MARK: 标签条的鼠标（直接把事件交给视图：没有窗口时 locationInWindow 就是视图坐标）
 
     private func click(_ strip: TabStripView, at p: NSPoint, count: Int = 1) {

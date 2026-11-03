@@ -151,7 +151,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         }
         sidebarViewController.onOpenFile = { [weak self] url, line, pinned in
             guard let self else { return }
-            NavigationHistory.shared.push(current: self.markdownDocument?.fileURL, to: url)
+            NavigationHistory.shared.push(current: self.markdownDocument?.presentedURL, to: url)
             self.open(url, ephemeral: !pinned, line: line)
         }
         selectionObserver = NotificationCenter.default.addObserver(forName: NSTextView.didChangeSelectionNotification, object: nil, queue: .main) { [weak self] n in
@@ -254,7 +254,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         if document !== tab.document { tab.document.addWindowController(self) }
         window?.isDocumentEdited = tab.document.isDocumentEdited
         mountPanes(tab)
-        sidebarViewController.currentURL = tab.document.fileURL
+        sidebarViewController.currentURL = tab.document.presentedURL
         sidebarViewController.outline = tab.session.parsed.outline
         wordCount.tracker = tab.readingTracker
         wordCount.update(stats: tab.session.stats)
@@ -353,7 +353,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     }
 
     private func refreshStrip() {
-        let titles = Self.disambiguatedTitles(tabs.map { ($0.title, $0.document.fileURL) })
+        let titles = Self.disambiguatedTitles(tabs.map { ($0.title, $0.document.presentedURL) })
         tabStrip.items = tabs.enumerated().map { i, t in .init(title: titles[i], path: t.document.fileURL?.path, ephemeral: t.isEphemeral, selected: t === current) }
     }
 
@@ -465,7 +465,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         tab.fileURLObserver = doc.observe(\.fileURL, options: [.new]) { [weak self, weak tab] doc, _ in
             Task { @MainActor [weak self, weak tab] in
                 guard let self, let tab else { return }
-                if tab === self.current { self.sidebarViewController.currentURL = doc.fileURL }
+                if tab === self.current { self.sidebarViewController.currentURL = doc.presentedURL }
                 tab.editor?.documentURLDidChange(doc.fileURL)
                 // 未命名文档首次存储 / 存储为：监视新路径、相对图片按新目录解析
                 tab.reader.textView.baseURL = doc.fileURL
@@ -1062,13 +1062,13 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             let a = NSAlert(); a.messageText = String(format: L("找不到「%@」"), name); a.informativeText = L("侧栏根目录下没有同名的 Markdown 文件。"); a.runModal()
             return false
         }
-        NavigationHistory.shared.push(current: markdownDocument?.fileURL, to: index.url(for: rel))
+        NavigationHistory.shared.push(current: markdownDocument?.presentedURL, to: index.url(for: rel))
         FileOpener.open([index.url(for: rel)])
         return true
     }
 
-    @objc func navigateBack(_ sender: Any?) { NavigationHistory.shared.back(from: markdownDocument?.fileURL) }
-    @objc func navigateForward(_ sender: Any?) { NavigationHistory.shared.forward(from: markdownDocument?.fileURL) }
+    @objc func navigateBack(_ sender: Any?) { NavigationHistory.shared.back(from: markdownDocument?.presentedURL) }
+    @objc func navigateForward(_ sender: Any?) { NavigationHistory.shared.forward(from: markdownDocument?.presentedURL) }
 
     /// 快速打开 ⌘P：侧栏根目录（没有则文档所在目录）里模糊匹配文件名
     @objc func quickOpen(_ sender: Any?) {

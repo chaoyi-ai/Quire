@@ -31,7 +31,7 @@ final class DocumentTab {
 
     /// 标签上的名字：和侧栏同一条规则（`FileTreeController.displayName`：Markdown 文件不带扩展名）；未命名文档用系统给的名字
     var title: String {
-        if let url = document.fileURL { return FileTreeController.displayName(url, ambiguous: false) }
+        if let url = document.presentedURL { return FileTreeController.displayName(url, ambiguous: false) }
         return document.displayName ?? "Untitled"
     }
     var hasEditorPane: Bool { editorAdded && (editor?.isViewLoaded ?? false) }
