@@ -457,7 +457,7 @@ final class WorkspaceTests: XCTestCase {
     /// 恢复是一个标签一个标签异步开的，第一个标签一开窗口就出来了，这时用户可以关它。
     /// 以前后面的标签还往这个窗口里加：它自己又显示出来，再关的时候也不问了
     func testWindowClosedDuringRestoreStaysClosed() async throws {
-        let names = (0..<8).map { "t\($0).md" }
+        let names = (0..<40).map { "t\($0).md" }   // 够多才赶得上"恢复途中"（CI 上窗口出来得慢）；一关恢复就停手，不会真的开这么多
         for n in names { try "# \(n)\n".write(to: tmp.appendingPathComponent(n), atomically: true, encoding: .utf8) }
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("quire-next-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -470,7 +470,8 @@ final class WorkspaceTests: XCTestCase {
             XCTAssertTrue(WorkspaceState.restoreIfNeeded())
             var restoring: WorkspaceWindowController?
             try await failingOnDeadlock {
-                while restoring == nil { restoring = WorkspaceWindowController.all.first; await Task.yield() }
+                // 从文档拿：文档一开窗口控制器就建好了，orderedWindows 要等窗口真的摆上去（macOS 26 的 CI 上那时候标签已经全开完了）
+                while restoring == nil { restoring = NSDocumentController.shared.documents.lazy.compactMap { ($0 as? MarkdownDocument)?.workspace }.first; await Task.yield() }
             }
             let ws = try XCTUnwrap(restoring)
             XCTAssertLessThan(ws.tabs.count, names.count, "要在恢复途中关")
