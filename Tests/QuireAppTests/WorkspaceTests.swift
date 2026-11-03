@@ -1980,7 +1980,8 @@ final class WorkspaceTests: XCTestCase {
             XCTAssertEqual(try? disk(url), "# changed\n", "\(name) \(operation)", file: file, line: line)
             if let neighbour { XCTAssertEqual(try? disk(folder.appendingPathComponent(neighbour)), "# neighbour\n", "\(name) \(operation)", file: file, line: line) }
             XCTAssertFalse(doc.isDocumentEdited, "\(name) \(operation)", file: file, line: line)
-            doc.close()
+            // 不在这里关，tearDown 统一关：NSDocument 存完之后在后台线程保留旧版本，最后读 windowControllers（不加锁），
+            // 紧接着关（摘窗口控制器）在 macOS 15 上撞过 NSRangeException，整轮测试一起崩
         }
     }
 
