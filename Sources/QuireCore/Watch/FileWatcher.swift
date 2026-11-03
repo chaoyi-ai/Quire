@@ -26,7 +26,10 @@ public final class FileWatcher: @unchecked Sendable {
         start()
     }
 
-    deinit { stop() }
+    deinit {
+        stop()
+        debounce?.cancel()   // 放掉就不再回调。这一句不放进 stop：重新打开也走 stop，那时排着的通知还要发
+    }
 
     private var retryCount = 0
 
@@ -39,7 +42,7 @@ public final class FileWatcher: @unchecked Sendable {
             retryCount += 1
             let delay = min(8, 0.5 * Double(1 << min(retryCount, 4)))
             queue.asyncAfter(deadline: .now() + delay) { [weak self] in
-                guard let self else { return }
+                guard let self, self.fd < 0 else { return }   // 可能同时有几路在重试：已经打开了就别再开，那个 source 和 fd 就再也关不掉了
                 self.start()
                 if self.fd >= 0 { self.fire() }   // 回来了：内容大概率变了
             }
@@ -51,17 +54,31 @@ public final class FileWatcher: @unchecked Sendable {
             guard let self else { return }
             let flags = src.data
             self.fire()
-            if flags.contains(.rename) || flags.contains(.delete) {
-                // 文件被替换：稍后重新打开（新文件可能还没落盘）
-                self.queue.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                    guard let self else { return }
-                    self.stop(); self.start()
-                }
-            }
+            if flags.contains(.rename) || flags.contains(.delete) { self.reopenSoon() }
+        }
+        // kqueue 在 resume 之后才异步注册：这之前文件又被替换的话事件已经错过，fd 留在没人用的 inode 上，之后什么都收不到。注册完对一次路径
+        src.setRegistrationHandler { [weak self, fd] in
+            guard let self, !self.pathStillRefers(to: fd) else { return }
+            self.reopenSoon()
         }
         src.setCancelHandler { [fd] in if fd >= 0 { close(fd) } }
         source = src
         src.resume()
+    }
+
+    /// 文件被替换：稍后重新打开（新文件可能还没落盘）。这段时间旧 fd 看不到新文件，上一次通知读到的可能已经不是最新的（连续存储、切分支），所以打开之后再报一次
+    private func reopenSoon() {
+        queue.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self else { return }
+            self.stop(); self.start()
+            if self.fd >= 0 { self.fire() }
+        }
+    }
+
+    /// fd 打开的还是不是路径上现在这个文件（路径不在了也算不是）
+    private func pathStillRefers(to fd: Int32) -> Bool {
+        var opened = stat(), now = stat()
+        return fstat(fd, &opened) == 0 && stat(url.path, &now) == 0 && opened.st_ino == now.st_ino && opened.st_dev == now.st_dev
     }
 
     private func stop() {

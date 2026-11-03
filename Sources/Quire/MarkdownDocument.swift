@@ -221,6 +221,22 @@ class MarkdownDocument: NSDocument {
     /// 系统的询问就退回 app 级模态（答完文档又被标成未保存）；询问开着时等活动队列，AppKit 找不到 sheet，主线程真的死等，再也答不了
     override var windowForSheet: NSWindow? { super.windowForSheet ?? MainActor.assumeIsolated { workspace?.window } }
 
+    /// 一个窗口一次只能挂一个询问。窗口上已经有 sheet 时（别的标签正在问、开着导出面板）系统挂不上去：既不显示也不结束，这份文档的活动队列就卡住了，之后存储、关闭都死等。
+    /// 所以这时不问：按"没有解决"回话，活动正常结束，改动还在，排到这个 sheet 结束之后再问
+    override func presentError(_ error: any Error, modalFor window: NSWindow, delegate: Any?, didPresent didPresentSelector: Selector?, contextInfo: UnsafeMutableRawPointer?) {
+        let nsError = error as NSError
+        let cancelled = nsError.domain == NSCocoaErrorDomain && nsError.code == NSUserCancelledError   // 这个系统不显示，直接回话
+        guard MainActor.assumeIsolated({ window.attachedSheet != nil }), !cancelled else {
+            super.presentError(error, modalFor: window, delegate: delegate, didPresent: didPresentSelector, contextInfo: contextInfo)
+            return
+        }
+        if let target = delegate as? NSObject, let selector = didPresentSelector {
+            typealias Reply = @convention(c) (NSObject, Selector, Bool, UnsafeMutableRawPointer?) -> Void
+            unsafeBitCast(target.method(for: selector), to: Reply.self)(target, selector, false, contextInfo)
+        }
+        MainActor.assumeIsolated { workspace?.askAfterCurrentSheet(self) }
+    }
+
     /// 关闭前的询问：切到这份文档的标签，问的是它，sheet 要盖在它上面
     override func canClose(withDelegate delegate: Any, shouldClose shouldCloseSelector: Selector?, contextInfo: UnsafeMutableRawPointer?) {
         MainActor.assumeIsolated { if let ws = workspace, let t = ws.tab(for: self), ws.current !== t { ws.select(t) } }

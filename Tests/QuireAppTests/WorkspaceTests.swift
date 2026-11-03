@@ -1878,6 +1878,588 @@ final class WorkspaceTests: XCTestCase {
         }
     }
 
+    // MARK: 后台标签（只有当前标签有监视器，切过来时要补上这段时间磁盘上的变化）
+
+    private func external(_ text: String, to url: URL) throws { try text.write(to: url, atomically: true, encoding: .utf8) }
+
+    /// 以前显示旧内容、不提示；接着打字则自动保存失败（67000），约 15 s 后弹系统的 Save Anyway / Revert / Save As
+    func testSelectingBackgroundTabPicksUpExternalChange() async throws {
+        let a = try await openFile("a.md")
+        _ = try await openFile("b.md", in: a.ws)
+        try external("# theirs\n", to: a.url)
+        a.ws.select(try XCTUnwrap(a.ws.tab(for: a.doc)))
+        XCTAssertEqual(a.doc.source, "# theirs\n", "切过来这一刻就跟上（中间没让出主线程，不是监视器补的）")
+        a.doc.session.stopWatching()   // 只看切标签这一下：监视器晚到的事件会替没写对的地方补救
+        a.doc.replaceContents("# theirs\nmine\n")
+        let failure = try await autosave(a.doc)
+        XCTAssertNil(failure, "修改时间也要跟上，否则存不下去")
+        XCTAssertEqual(try disk(a.url), "# theirs\nmine\n")
+        XCTAssertNil(a.ws.window?.attachedSheet)
+    }
+
+    /// 编辑模式的后台标签：编辑器要跟上，重载不算用户的改动，之后照常打字、存储
+    func testSelectingBackgroundTabInEditorModeFollows() async throws {
+        let a = try await openFile("a.md")
+        a.ws.setModeEditor(nil)
+        let tv = try XCTUnwrap(a.ws.editorViewController.textView)
+        _ = try await openFile("b.md", in: a.ws)
+        try external("# theirs\n", to: a.url)
+        a.ws.select(try XCTUnwrap(a.ws.tab(for: a.doc)))
+        a.doc.session.stopWatching()   // 只看切标签这一下：监视器晚到的事件会替没写对的地方补救
+        XCTAssertEqual(tv.string, "# theirs\n")
+        try await Task.sleep(for: .milliseconds(50))   // 撤销组在 run loop 转一圈之后才关
+        XCTAssertFalse(a.doc.isDocumentEdited)
+        tv.setSelectedRange(NSRange(location: (tv.string as NSString).length, length: 0))
+        tv.insertText("typed", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(a.doc.isDocumentEdited)
+        let failure = try await autosave(a.doc)
+        XCTAssertNil(failure)
+        XCTAssertEqual(try disk(a.url), "# theirs\ntyped")
+    }
+
+    /// 切过来时的重载和监视器的重载走同一条路：窗格刚挂上就重载，不能跳回开头。
+    /// 只看没有回到开头。精确位置现在保不住：排好之后真实高度替换估算高度，滚动位置不动，内容就错开了（真实 App 上第 120 节跳到第 89 节，监视器的重载也一样，已知未修）
+    func testSelectingBackgroundTabDoesNotJumpToTheTop() async throws {
+        let body = (0..<200).map { "## Section \($0)\n\n" + String(repeating: "paragraph text ", count: 40) + "\n\n" }.joined()
+        try external(body, to: tmp.appendingPathComponent("long.md"))
+        let a = try await openFile("long.md")
+        a.ws.setModeReader(nil)
+        let tab = try XCTUnwrap(a.ws.tab(for: a.doc)), reader = tab.reader
+        let rendered = try await eventually { reader.textView.string.contains("Section 199") }
+        XCTAssertTrue(rendered)
+        reader.scroll(toBlock: 200)
+        let scrolled = try await eventually { (reader.textView.topVisibleBlockIndex() ?? 0) > 100 }
+        XCTAssertTrue(scrolled)
+        try await Task.sleep(for: .milliseconds(500))   // 滚动动画走完
+        _ = try await openFile("b.md", in: a.ws)
+        try external(body.replacingOccurrences(of: "## Section 5\n", with: "## Section five\n"), to: a.url)   // 改的是视口之前的块
+        a.ws.select(tab)
+        a.doc.session.stopWatching()   // 只看切标签这一下：监视器晚到的事件会替没写对的地方补救
+        let reloaded = try await eventually { reader.textView.string.contains("Section five") }
+        XCTAssertTrue(reloaded)
+        XCTAssertGreaterThan(reader.textView.topVisibleBlockIndex() ?? 0, 50)
+    }
+
+    /// touch 没有改内容：切过来之后存储不该报"文件被改过"（以前是假警报）
+    func testTouchWhileInBackgroundIsNotAChange() async throws {
+        let a = try await openFile("a.md")
+        _ = try await openFile("b.md", in: a.ws)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: 5)], ofItemAtPath: a.url.path)
+        a.ws.select(try XCTUnwrap(a.ws.tab(for: a.doc)))
+        a.doc.session.stopWatching()   // 只看切标签这一下：监视器晚到的事件会替没写对的地方补救
+        a.doc.replaceContents("# edited a\n")
+        let failure = try await autosave(a.doc)
+        XCTAssertNil(failure)
+        XCTAssertEqual(try disk(a.url), "# edited a\n")
+        XCTAssertNil(a.ws.window?.attachedSheet)
+    }
+
+    /// 有未保存改动的后台标签被外部改过：切过来也不打断，文字不动，切走再切回来也一样；下一次存储由系统问（标签在不在前台都一样，见下面）
+    func testDirtyBackgroundTabIsNotInterruptedWhenSelected() async throws {
+        let a = try await openFile("a.md")
+        let b = try await openFile("b.md", in: a.ws)
+        let tabA = try XCTUnwrap(a.ws.tab(for: a.doc)), tabB = try XCTUnwrap(a.ws.tab(for: b.doc))
+        a.ws.select(tabA)
+        a.doc.replaceContents("# mine\n")
+        a.ws.select(tabB)
+        try external("# theirs\n", to: a.url)
+        /// 切过去，只看这一下：监视器晚到的事件会替没写对的地方补救
+        func selectA() {
+            a.ws.select(tabA)
+            a.doc.session.stopWatching()
+        }
+        selectA()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNil(a.ws.window?.attachedSheet)
+        XCTAssertEqual(a.doc.source, "# mine\n", "问之前不动")
+        a.ws.select(tabB)
+        selectA()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNil(a.ws.window?.attachedSheet)
+        timerAutosave(a.doc)
+        try await answer(.revert, on: a.ws)
+        try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertEqual(a.doc.source, "# theirs\n")
+    }
+
+    /// 关掉当前标签：换上来的邻居同样是从后台回来的（同步走完，中间没让出主线程，不是监视器补的）
+    func testNeighbourSelectedByClosingATabCatchesUp() async throws {
+        let a = try await openFile("a.md")
+        let b = try await openFile("b.md", in: a.ws)
+        try external("# theirs\n", to: a.url)
+        b.doc.close()
+        XCTAssertTrue(a.ws.current.document === a.doc)
+        XCTAssertEqual(a.doc.source, "# theirs\n")
+    }
+
+    /// 再次打开已经开着的文件 = 切到它的标签：一样要跟上（同上，同步走完）
+    func testReopeningAFileInABackgroundTabCatchesUp() async throws {
+        let a = try await openFile("a.md")
+        _ = try await openFile("b.md", in: a.ws)
+        try external("# theirs\n", to: a.url)
+        NSDocumentController.shared.openDocument(withContentsOf: a.url, display: true) { _, already, _ in XCTAssertTrue(already) }
+        XCTAssertTrue(a.ws.current.document === a.doc)
+        XCTAssertEqual(a.doc.source, "# theirs\n")
+    }
+
+    /// 后台标签拆到新窗口（打开它所在的文件夹）：窗口显示的时候跟上
+    func testBackgroundTabMovedToANewWindowCatchesUp() async throws {
+        let (ws, _) = makeWorkspace(root: tmp.deletingLastPathComponent())
+        let openedA = await open(tmp.appendingPathComponent("a.md"), in: ws, ephemeral: false)
+        let doc = try XCTUnwrap(openedA)
+        _ = await open(tmp.appendingPathComponent("b.md"), in: ws, ephemeral: false)
+        try external("# theirs\n", to: tmp.appendingPathComponent("a.md"))
+        (NSDocumentController.shared as! QuireDocumentController).openFolder(tmp)
+        XCTAssertFalse(doc.workspace === ws)
+        XCTAssertEqual(doc.source, "# theirs\n")
+    }
+
+    /// 关了"自动重新载入"：切标签也不能替用户载入；再打开时补上
+    func testSelectingDoesNotReloadWithAutoReloadOff() async throws {
+        let saved = Preferences.shared.autoReload
+        Preferences.shared.autoReload = false
+        defer { Preferences.shared.autoReload = saved }
+        let a = try await openFile("a.md")
+        _ = try await openFile("b.md", in: a.ws)
+        let opened = try disk(a.url)
+        try external("# theirs\n", to: a.url)
+        a.ws.select(try XCTUnwrap(a.ws.tab(for: a.doc)))
+        XCTAssertEqual(a.doc.source, opened)
+        Preferences.shared.autoReload = true
+        try await Task.sleep(for: .milliseconds(50))   // 比监视器的防抖短：不是监视器补的
+        XCTAssertEqual(a.doc.source, "# theirs\n")
+    }
+
+    /// 有未保存改动的后台标签被外部改过，然后要关闭。关闭会先切过去（切过去时对磁盘，这时不能问）再 canClose：只有系统那一个问题
+    ///（第一个选项是 Save Anyway；各系统版本问不问、什么时候问不必一样，出现了才答）。答完这一轮关闭不再继续，是系统的行为，这里不管
+    private func closeDirtyStaleBackgroundTab(_ close: (WorkspaceWindowController, DocumentTab) -> Void) async throws {
+        let a = try await openFile("a.md")
+        let b = try await openFile("b.md", in: a.ws)
+        let tabA = try XCTUnwrap(a.ws.tab(for: a.doc))
+        a.ws.select(tabA)
+        a.doc.replaceContents("# mine\n")
+        a.ws.select(try XCTUnwrap(a.ws.tab(for: b.doc)))
+        try external("# theirs\n", to: a.url)
+        try await failingOnDeadlock {
+            close(a.ws, tabA)
+            for _ in 0..<150 where a.doc.isDocumentEdited {
+                if let sheet = a.ws.window?.attachedSheet, sheet.isVisible { a.ws.window?.endSheet(sheet, returnCode: .alertFirstButtonReturn) }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        if !a.doc.isDocumentEdited { XCTAssertEqual(try disk(a.url), "# mine\n", "选了 Save Anyway") }
+    }
+
+    func testClosingDirtyStaleBackgroundTabAsksOnce() async throws {
+        try await closeDirtyStaleBackgroundTab { ws, tab in ws.closeTab(tab) }
+    }
+
+    func testClosingOtherTabsWithADirtyStaleOneAsksOnce() async throws {
+        try await closeDirtyStaleBackgroundTab { ws, tab in ws.closeOtherTabs(keeping: ws.tabs.first { $0 !== tab }!) }
+    }
+
+    func testClosingWindowWithADirtyStaleTabAsksOnce() async throws {
+        try await closeDirtyStaleBackgroundTab { ws, _ in ws.window?.performClose(nil) }
+    }
+
+    private final class CloseDelegate: NSObject {
+        @objc func document(_ doc: NSDocument, shouldClose: Bool, contextInfo: UnsafeMutableRawPointer?) {}
+    }
+
+    /// 文档直接被问（AppKit 的路径）：文档自己切过去，同样只有系统那一个问题
+    func testAskingADirtyStaleBackgroundDocumentDirectlyAsksOnce() async throws {
+        let delegate = CloseDelegate()
+        defer { withExtendedLifetime(delegate) {} }
+        try await closeDirtyStaleBackgroundTab { _, tab in
+            tab.document.canClose(withDelegate: delegate, shouldClose: #selector(CloseDelegate.document(_:shouldClose:contextInfo:)), contextInfo: nil)
+        }
+    }
+
+    /// 合并窗口时一个个摘标签，中间的"选中邻居"会对磁盘：有未保存改动的不动也不问，合并过来之后下一次存储由系统问
+    func testMergingWindowsDoesNotAsk() async throws {
+        let a = try await openFile("a.md")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("quire-other-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let x = dir.appendingPathComponent("x.md"), y = dir.appendingPathComponent("y.md")
+        for u in [x, y] { try external("# \(u.lastPathComponent)\n", to: u) }
+        let openedX = await open(x, in: nil, ephemeral: false)
+        let other = try XCTUnwrap(openedX?.workspace)
+        XCTAssertFalse(other === a.ws)
+        let openedY = await open(y, in: other, ephemeral: false)
+        let docX = try XCTUnwrap(openedX), docY = try XCTUnwrap(openedY)
+        // 另一个窗口：[x 当前, y 有未保存改动且被外部改过]
+        docY.replaceContents("# mine\n")
+        other.select(try XCTUnwrap(other.tab(for: docX)))
+        try external("# theirs\n", to: y)
+        a.ws.mergeAllWindows(nil)
+        XCTAssertEqual(a.ws.tabs.count, 3)
+        XCTAssertTrue(docY.workspace === a.ws)
+        try await Task.sleep(for: .milliseconds(100))   // 排着的询问（如果有）轮到了
+        XCTAssertNil(NSApp.modalWindow)
+        XCTAssertNil(a.ws.window?.attachedSheet)
+        XCTAssertEqual(docY.source, "# mine\n")
+        timerAutosave(docY)
+        try await answer(.revert, on: a.ws)
+        try await failingOnDeadlock { while docY.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertEqual(docY.source, "# theirs\n")
+    }
+
+    // MARK: 后台标签的定时自动保存
+
+    /// 有未保存改动的后台标签被外部改过，一直不切过去，定时器到点：系统问，挂在窗口上，也不把用户切走。
+    /// 窗口控制器只挂在当前标签的文档上，以前这时 windowForSheet 是 nil，系统退回 app 级模态：挡住整个 App，答完文档又被标成未保存，之后就不跟磁盘了
+    func testAutosaveOfABackgroundTabAsksOnItsWindow() async throws {
+        let a = try await openFile("a.md")
+        let b = try await openFile("b.md", in: a.ws)
+        a.doc.replaceContents("# mine\n")
+        try external("# theirs\n", to: a.url)
+        timerAutosave(a.doc)
+        let sheet = try await visibleSheet(on: a.ws)
+        XCTAssertNil(NSApp.modalWindow)
+        XCTAssertTrue(a.ws.current.document === b.doc)
+        a.ws.window?.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+        try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertFalse(a.doc.isDocumentEdited, "答完又被标成未保存")
+        XCTAssertNil(a.ws.window?.attachedSheet)
+        XCTAssertEqual(try disk(a.url), "# mine\n")
+        // 问过就结束，之后照常存储
+        a.doc.replaceContents("# mine again\n")
+        let failure = try await autosave(a.doc)
+        XCTAssertNil(failure)
+        XCTAssertEqual(try disk(a.url), "# mine again\n")
+    }
+
+    /// 选 Revert：后台标签跟上磁盘（编辑器也是），不算用户的改动。切过去看到的就是这一版，不再问，之后照常打字、存储
+    func testRevertAnswerMakesABackgroundTabFollowTheDisk() async throws {
+        let a = try await openFile("a.md")
+        a.ws.setModeEditor(nil)
+        let tv = try XCTUnwrap(a.ws.editorViewController.textView)
+        _ = try await openFile("b.md", in: a.ws)
+        a.doc.replaceContents("# mine\n")
+        try external("# theirs\n", to: a.url)
+        timerAutosave(a.doc)
+        let sheet = try await visibleSheet(on: a.ws)
+        XCTAssertNil(NSApp.modalWindow)
+        a.ws.window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+        try await failingOnDeadlock { while a.doc.source != "# theirs\n" { try await Task.sleep(for: .milliseconds(20)) } }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertFalse(a.doc.isDocumentEdited)
+        XCTAssertEqual(tv.string, "# theirs\n")
+        XCTAssertEqual(try disk(a.url), "# theirs\n")
+        a.ws.select(try XCTUnwrap(a.ws.tab(for: a.doc)))
+        a.doc.session.stopWatching()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNil(a.ws.window?.attachedSheet)
+        tv.setSelectedRange(NSRange(location: (tv.string as NSString).length, length: 0))
+        tv.insertText("typed", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await Task.sleep(for: .milliseconds(50))
+        let failure = try await autosave(a.doc)
+        XCTAssertNil(failure)
+        XCTAssertEqual(try disk(a.url), "# theirs\ntyped")
+    }
+
+    /// 过了排队重存的时间（sheet 关闭动画 + 等待 + 存储）。这时弹了没人点的模态的话由看门狗收场
+    private func waitPastTheRetry() async throws { try await failingOnDeadlock { try await Task.sleep(for: .milliseconds(1200)) } }
+
+    /// 它的活动队列是通的：卡住的话，之后存储、关闭都死等（这里由看门狗收场）
+    private func assertActivityQueueIsFree(_ doc: MarkdownDocument) async throws {
+        nonisolated(unsafe) var free = false
+        doc.performActivity(withSynchronousWaiting: false) { done in free = true; done() }
+        try await failingOnDeadlock { while !free { try await Task.sleep(for: .milliseconds(20)) } }
+    }
+
+    /// 两个后台标签都到点，第一个的询问还开着：一个窗口一次只能挂一个。以前第二个系统既不显示也不结束，它的活动队列卡住，之后存储、关闭都死等。
+    /// 现在它先不问，第一个答完接着问，两边都存下来
+    func testSecondBackgroundTabAsksAfterTheFirstIsAnswered() async throws {
+        let a = try await openFile("a.md")
+        let c = try await openFile("c.md", in: a.ws)
+        _ = try await openFile("b.md", in: a.ws)
+        for d in [a, c] {
+            d.doc.replaceContents("# mine\n")
+            try external("# theirs\n", to: d.url)
+        }
+        timerAutosave(a.doc)
+        let first = try await visibleSheet(on: a.ws)
+        timerAutosave(c.doc)
+        try await assertActivityQueueIsFree(c.doc)
+        XCTAssertTrue(c.doc.isDocumentEdited)
+        XCTAssertEqual(a.ws.window?.attachedSheet, first)
+        a.ws.window?.endSheet(first, returnCode: .alertFirstButtonReturn)
+        try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        let second = try await visibleSheet(on: a.ws)
+        XCTAssertNotEqual(second, first)
+        XCTAssertNil(NSApp.modalWindow)
+        XCTAssertEqual(c.doc.source, "# mine\n", "问之前不动")
+        a.ws.window?.endSheet(second, returnCode: .alertFirstButtonReturn)
+        try await failingOnDeadlock { while c.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertNil(a.ws.window?.attachedSheet)
+        XCTAssertEqual(try disk(a.url), "# mine\n")
+        XCTAssertEqual(try disk(c.url), "# mine\n")
+    }
+
+    /// 窗口上开着别的 sheet（导出面板这一类，不在活动队列里），当前标签也一样存不下去：先不问，sheet 结束再问。
+    /// 那个 sheet 刚结束又来一个（选"存储为"之后的面板）就接着等，不抢在它前面：面板挂不上去就丢了
+    func testAutosaveFailingUnderAnotherSheetAsksAfterIt() async throws {
+        let a = try await openFile("a.md")
+        a.doc.session.stopWatching()
+        a.doc.replaceContents("# mine\n")
+        try external("# theirs\n", to: a.url)
+        let window = try XCTUnwrap(a.ws.window)
+        /// 挂上来的必须是它（询问抢在前面的话，它排在后面，由看门狗收场）
+        func unrelatedSheet() async throws -> NSWindow {
+            let alert = NSAlert()
+            alert.messageText = "unrelated"
+            alert.beginSheetModal(for: window) { _ in }
+            try await failingOnDeadlock { while window.attachedSheet !== alert.window { try await Task.sleep(for: .milliseconds(5)) } }
+            return alert.window
+        }
+        let other = try await unrelatedSheet()
+        timerAutosave(a.doc)
+        try await assertActivityQueueIsFree(a.doc)
+        XCTAssertEqual(window.attachedSheet, other)
+        window.endSheet(other)
+        try await failingOnDeadlock { while window.attachedSheet === other { try await Task.sleep(for: .milliseconds(5)) } }
+        try await Task.sleep(for: .milliseconds(50))
+        let next = try await unrelatedSheet()
+        try await waitPastTheRetry()
+        XCTAssertEqual(window.attachedSheet, next)
+        XCTAssertTrue(a.doc.isDocumentEdited)
+        window.endSheet(next)
+        try await failingOnDeadlock { while window.attachedSheet === next { try await Task.sleep(for: .milliseconds(5)) } }
+        let asked = try await visibleSheet(on: a.ws)
+        XCTAssertNotEqual(asked, next)
+        window.endSheet(asked, returnCode: .alertFirstButtonReturn)
+        try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertEqual(try disk(a.url), "# mine\n")
+    }
+
+    /// 系统的询问开着时，从外面打开（Finder、quire://）另一个排队的标签：它不抢在询问前面，答完第一个接着问它，两边都存下来
+    func testWaitingTabSelectedWhileAskingIsAskedAfterIt() async throws {
+        let a = try await openFile("a.md")
+        let c = try await openFile("c.md", in: a.ws)
+        _ = try await openFile("b.md", in: a.ws)
+        for d in [a, c] {
+            d.doc.replaceContents("# mine\n")
+            try external("# theirs\n", to: d.url)
+        }
+        timerAutosave(a.doc)
+        let first = try await visibleSheet(on: a.ws)
+        timerAutosave(c.doc)
+        try await assertActivityQueueIsFree(c.doc)
+        a.ws.select(try XCTUnwrap(a.ws.tab(for: c.doc)))
+        c.doc.session.stopWatching()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(a.ws.window?.attachedSheet, first)
+        a.ws.window?.endSheet(first, returnCode: .alertFirstButtonReturn)
+        try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        let second = try await visibleSheet(on: a.ws)
+        XCTAssertNotEqual(second, first)
+        a.ws.window?.endSheet(second, returnCode: .alertFirstButtonReturn)
+        try await failingOnDeadlock { while c.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertNil(a.ws.window?.attachedSheet)
+        XCTAssertEqual(try disk(a.url), "# mine\n")
+        XCTAssertEqual(try disk(c.url), "# mine\n")
+    }
+
+    /// 排队等着问的标签轮到时已经没有未保存改动：不用问，也不写盘
+    func testTabWithNothingLeftToSaveIsNotAskedWhenItsTurnComes() async throws {
+        let a = try await openFile("a.md")
+        let c = try await openFile("c.md", in: a.ws)
+        _ = try await openFile("b.md", in: a.ws)
+        for d in [a, c] {
+            d.doc.replaceContents("# mine\n")
+            try external("# theirs\n", to: d.url)
+        }
+        timerAutosave(a.doc)
+        let first = try await visibleSheet(on: a.ws)
+        timerAutosave(c.doc)
+        try await assertActivityQueueIsFree(c.doc)
+        c.doc.updateChangeCount(.changeCleared)
+        a.ws.window?.endSheet(first, returnCode: .alertSecondButtonReturn)
+        try await waitPastTheRetry()
+        XCTAssertNil(a.ws.window?.attachedSheet)
+        XCTAssertEqual(try disk(c.url), "# theirs\n")
+    }
+
+    /// 用户取消的操作（系统也用 presentError 回这个，不显示）：窗口忙也不排队，否则之后又问一遍用户刚取消的事
+    func testCancelledSaveIsNotAskedAgainAfterTheSheetEnds() async throws {
+        let a = try await openFile("a.md")
+        a.doc.session.stopWatching()
+        a.doc.replaceContents("# mine\n")
+        try external("# theirs\n", to: a.url)
+        let window = try XCTUnwrap(a.ws.window)
+        let alert = NSAlert()
+        alert.messageText = "unrelated"
+        alert.beginSheetModal(for: window) { _ in }
+        let other = try await visibleSheet(on: a.ws)
+        a.doc.presentError(NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError), modalFor: window, delegate: nil, didPresent: nil, contextInfo: nil)
+        window.endSheet(other)
+        try await waitPastTheRetry()
+        XCTAssertNil(window.attachedSheet)
+        XCTAssertTrue(a.doc.isDocumentEdited)
+        a.doc.updateChangeCount(.changeCleared)
+    }
+
+    /// 排队等着问的标签在轮到之前关掉了（文档 close 不问）：不再问，关掉的文档没有窗口，问就是没人点的模态
+    func testClosedTabIsNotAskedWhenItsTurnComes() async throws {
+        let a = try await openFile("a.md")
+        let c = try await openFile("c.md", in: a.ws)
+        _ = try await openFile("b.md", in: a.ws)
+        for d in [a, c] {
+            d.doc.replaceContents("# mine\n")
+            try external("# theirs\n", to: d.url)
+        }
+        timerAutosave(a.doc)
+        let first = try await visibleSheet(on: a.ws)
+        timerAutosave(c.doc)
+        try await assertActivityQueueIsFree(c.doc)
+        a.ws.window?.endSheet(first, returnCode: .alertSecondButtonReturn)
+        c.doc.close()
+        try await waitPastTheRetry()
+        XCTAssertNil(NSApp.modalWindow)
+        XCTAssertNil(a.ws.window?.attachedSheet)
+        XCTAssertEqual(a.doc.source, "# theirs\n")
+    }
+
+    /// 问着的时候又打开了别的文件（Finder、quire://），被问的标签到了后台：询问还在窗口上、还能答，追加（quire://append、快捷指令）和关闭都拒绝。
+    /// 以前追加看 windowForSheet，标签一到后台就放行，存储要等询问答完，AppKit 又找不到 sheet，主线程真的死等
+    func testTabBeingAskedRefusesAppendAfterGoingToTheBackground() async throws {
+        let a = try await openFile("a.md")
+        a.doc.session.stopWatching()
+        a.doc.replaceContents("# mine\n")
+        try external("# theirs\n", to: a.url)
+        timerAutosave(a.doc)
+        let asking = try await visibleSheet(on: a.ws)
+        let b = try await openFile("b.md", in: a.ws)
+        XCTAssertTrue(a.ws.current.document === b.doc)
+        XCTAssertEqual(a.ws.window?.attachedSheet, asking)
+        try await failingOnDeadlock {
+            XCTAssertFalse(URLScheme.appendText("x", to: a.url, external: false))
+            a.ws.closeTab(try XCTUnwrap(a.ws.tab(for: a.doc)))
+        }
+        XCTAssertEqual(a.ws.tabs.count, 2)
+        XCTAssertEqual(a.doc.source, "# mine\n")
+        a.ws.window?.endSheet(asking, returnCode: .alertSecondButtonReturn)
+        try await failingOnDeadlock { while a.doc.source != "# theirs\n" { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertFalse(a.doc.isDocumentEdited)
+    }
+
+    // MARK: 监视器停了就不再回调
+
+    /// 事件和防抖都已经走完、回主线程的那一跳还在排队时切走：这一跳不能再动已经切走的标签，切回来时才跟上
+    func testWatcherEventAlreadyOnItsWayDoesNotReachADeselectedTab() async throws {
+        let a = try await openFile("a.md")
+        let b = try await openFile("b.md", in: a.ws)
+        let tabA = try XCTUnwrap(a.ws.tab(for: a.doc))
+        a.ws.select(tabA)
+        try await Task.sleep(for: .milliseconds(100))   // 等 kqueue 注册好
+        let opened = try disk(a.url)
+        try external("# theirs\n", to: a.url)
+        usleep(400_000)   // 主线程不转：后台把事件、防抖走完，回主线程的那一跳排上队
+        a.ws.select(try XCTUnwrap(a.ws.tab(for: b.doc)))
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(a.doc.source, opened, "切走之后不动它，切回来再说")
+        a.ws.select(tabA)
+        XCTAssertEqual(a.doc.source, "# theirs\n")
+    }
+
+    /// 监视器回调里读文件：通知到的时候磁盘上是什么
+    private final class WatcherLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _calls = 0, _last: String?
+        func record(_ url: URL) {
+            let s = try? String(contentsOf: url, encoding: .utf8)
+            lock.withLock { _calls += 1; _last = s }
+        }
+        var calls: Int { lock.withLock { _calls } }
+        var last: String? { lock.withLock { _last } }
+    }
+
+    private func eventually(within seconds: TimeInterval = 3, _ condition: () -> Bool) async throws -> Bool {
+        let deadline = Date(timeIntervalSinceNow: seconds)
+        while !condition(), Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        return condition()
+    }
+
+    /// 放掉监视器时防抖里还排着一次：不能再回调
+    func testFileWatcherReleasedDuringDebounceStaysSilent() async throws {
+        let url = tmp.appendingPathComponent("a.md")
+        let log = WatcherLog()
+        var watcher: FileWatcher? = FileWatcher(url: url, debounce: 1) { log.record(url) }
+        XCTAssertNotNil(watcher)
+        try await Task.sleep(for: .milliseconds(100))   // 等 kqueue 注册好
+        try external("# theirs\n", to: url)
+        try await Task.sleep(for: .milliseconds(100))   // 事件到了，防抖还没到
+        watcher = nil
+        try await Task.sleep(for: .milliseconds(1200))
+        XCTAssertEqual(log.calls, 0)
+    }
+
+    /// 替换之后到重新打开之间（0.2 s）旧 fd 看不到新文件：这段时间又被替换（连续存储、切分支），第一次通知已经发过了，重新打开之后要再报一次
+    func testFileWatcherReportsAReplaceDuringItsReopen() async throws {
+        let url = tmp.appendingPathComponent("a.md")
+        let log = WatcherLog()
+        let watcher = FileWatcher(url: url, debounce: 0.02) { log.record(url) }
+        defer { withExtendedLifetime(watcher) {} }
+        try await Task.sleep(for: .milliseconds(100))   // 等 kqueue 注册好
+        try external("one", to: url)
+        let first = try await eventually { log.last == "one" }
+        XCTAssertTrue(first)
+        try external("two", to: url)
+        let second = try await eventually { log.last == "two" }
+        XCTAssertTrue(second, "停在了上一版")
+    }
+
+    /// 文件一直被替换时，重新打开的 open 和 kqueue 注册之间总会落上一次：fd 留在没人用的 inode 上，之后再也没有任何事件
+    func testFileWatcherSurvivesAStormOfReplaces() async throws {
+        let url = tmp.appendingPathComponent("a.md")
+        let log = WatcherLog()
+        let watcher = FileWatcher(url: url, debounce: 0.02) { log.record(url) }
+        defer { withExtendedLifetime(watcher) {} }
+        try await Task.sleep(for: .milliseconds(100))   // 等 kqueue 注册好
+        let temp = tmp.appendingPathComponent("a.md.tmp").path, path = url.path
+        await Task.detached {
+            let bytes = Data("storm".utf8)
+            let end = Date(timeIntervalSinceNow: 1.2)   // 够重新打开很多轮
+            while Date() < end {
+                FileManager.default.createFile(atPath: temp, contents: bytes)
+                rename(temp, path)
+            }
+        }.value
+        try await Task.sleep(for: .milliseconds(600))   // 等排着的重新打开都走完
+        try external("after", to: url)
+        let seen = try await eventually { log.last == "after" }
+        XCTAssertTrue(seen, "监视器已经瞎了")
+    }
+
+    /// 指向这个文件的 fd 数（打开着的监视器每个占一个）
+    private func descriptorCount(of url: URL) -> Int {
+        let suffix = url.pathComponents.suffix(2).joined(separator: "/")   // F_GETPATH 给的是解析过符号链接的路径（/private/var/…）
+        var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        return (0..<Int32(4096)).filter { fcntl($0, F_GETPATH, &path) == 0 && String(cString: path).hasSuffix(suffix) }.count
+    }
+
+    /// 文件不在时可能同时有几路在重试打开（移走又立刻删掉：两个事件各排一次重新打开）：文件回来之后只能留一个监视，多出来的 fd 永远关不掉
+    func testFileWatcherKeepsOneDescriptorWhenTheFileComesBack() async throws {
+        let url = tmp.appendingPathComponent("a.md"), moved = tmp.appendingPathComponent("moved.md")
+        let log = WatcherLog()
+        let watcher = FileWatcher(url: url, debounce: 0.02) { log.record(url) }
+        defer { withExtendedLifetime(watcher) {} }
+        try await Task.sleep(for: .milliseconds(100))   // 等 kqueue 注册好
+        try FileManager.default.moveItem(at: url, to: moved)
+        try await Task.sleep(for: .milliseconds(50))
+        try FileManager.default.removeItem(at: moved)
+        try await Task.sleep(for: .milliseconds(400))   // 排着的重新打开都走完，都在重试
+        try external("back", to: url)
+        let seen = try await eventually { log.last == "back" }
+        XCTAssertTrue(seen)
+        try await Task.sleep(for: .milliseconds(1500))   // 第二路重试也到了
+        XCTAssertEqual(descriptorCount(of: url), 1)
+    }
+
     // MARK: 标签条的鼠标（直接把事件交给视图：没有窗口时 locationInWindow 就是视图坐标）
 
     private func click(_ strip: TabStripView, at p: NSPoint, count: Int = 1) {

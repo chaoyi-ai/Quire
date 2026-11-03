@@ -244,7 +244,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         return tab
     }
 
-    /// 切到某个标签：换挂 document、换正文列的窗格、侧栏选中、标题 / 脏标记
+    /// 切到某个标签：换挂 document、换正文列的窗格、侧栏选中、标题 / 脏标记。
+    /// 这个标签在后台时没有监视器，开监视器时补上磁盘的变化
     func select(_ tab: DocumentTab) {
         guard tabs.contains(where: { $0 === tab }) else { return }
         let old = current
@@ -468,7 +469,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
                 if tab === self.current { self.sidebarViewController.currentURL = doc.presentedURL }
                 tab.editor?.documentURLDidChange(doc.fileURL)
                 // 未命名文档首次存储 / 存储为：监视新路径、相对图片按新目录解析
-                tab.reader.textView.baseURL = doc.fileURL
+                if tab.reader.isViewLoaded { tab.reader.textView.baseURL = doc.fileURL }   // 还没显示过的标签（合并过来的、恢复的）视图没加载，加载时自己取；系统的询问选"复原"也会走到这里
                 if tab === self.current, self.window?.isVisible == true { tab.session.startWatching() }
                 self.refreshStrip()
             }
@@ -538,6 +539,22 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     }
     func windowWillClose(_ notification: Notification) {
         for t in tabs { t.session.stopWatching() }
+    }
+
+    /// 一个窗口一次只能挂一个询问，轮不上的文档在这里等（`MarkdownDocument.presentError`）
+    private var waitingToAsk: [MarkdownDocument] = []
+    func askAfterCurrentSheet(_ doc: MarkdownDocument) { if !waitingToAsk.contains(doc) { waitingToAsk.append(doc) } }
+
+    /// sheet 结束了：再存一次，还存不下去系统就会问（它的定时器不会再问，它认为问过了）。第一个问上之后，后面的又回到队里等下一轮。
+    /// 不能抢在刚结束的询问的后续前面：选"存储为"时的面板挂不上去就丢了，那份文档也卡住。macOS 27 上面板在 sheet 结束的同一轮就挂上了，等这一下是给没验证过的系统版本留余地
+    func windowDidEndSheet(_ notification: Notification) {
+        guard !waitingToAsk.isEmpty else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, self.window?.attachedSheet == nil else { return }
+            let waiting = self.waitingToAsk
+            self.waitingToAsk = []
+            for doc in waiting where doc.isDocumentEdited && self.tab(for: doc) != nil { doc.save(nil) }
+        }
     }
 
     /// 窗口底色 = 铬色（透明标题栏透出来的就是它，工具栏行因此是铬色）；分隔线跟主题 border

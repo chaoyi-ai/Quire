@@ -252,16 +252,20 @@ final class DocumentSession {
 
     // MARK: - 文件监控
 
-    /// 可重复调用：路径变了 / 偏好变了就换监视器；关了偏好或没有路径就停
+    /// 可重复调用：路径变了 / 偏好变了就换监视器；关了偏好或没有路径就停。
+    /// 监视器只报开始之后的变化：真的新开了一个就对一次磁盘，补上没在监视的这段时间（只有当前标签有监视器）
     func startWatching() {
         guard Preferences.shared.autoReload, let url = document?.fileURL else { watcher = nil; watchedURL = nil; return }
         if watchedURL == url, watcher != nil { return }
         watchedURL = url
         watcher = FileWatcher(url: url) { [weak self] in
             Task { @MainActor [weak self] in
-                self?.document?.reloadFromDisk()
+                // 已经停了（切走 / 关闭）就不算数：这一跳可能早就排着了。切回来时会补上
+                guard let self, self.watchedURL == url else { return }
+                self.document?.reloadFromDisk()
             }
         }
+        document?.reloadFromDisk()
     }
 
     private var watchedURL: URL?
