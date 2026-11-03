@@ -10,7 +10,6 @@ final class FolderWatcherTests: XCTestCase {
     private var tmp: URL!
 
     override func setUp() async throws {
-        WorkspaceTests.bootApp()
         tmp = FileManager.default.temporaryDirectory.appendingPathComponent("quire-watcher-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
     }
