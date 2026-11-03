@@ -23,18 +23,43 @@ public final class HybridTextView: ReaderTextView, NSTextStorageDelegate {
     /// 激活块源码在 textStorage 里的范围（随编辑更新）
     public private(set) var activeRange = NSRange(location: 0, length: 0)
     private var activeLines: ClosedRange<Int> = 1...1
+    /// 激活时块占几行（离开时和现在比，就是这次造成的行数变化）
+    private var activatedLineCount = 1
+    /// 这次激活之后块里打过字
+    private var activeHasEdits = false
     private var suppressDelegate = false
+    /// 块表还没跟上的行数变化（块下标, 行数差）：离开块之后的重解析是异步的，这段时间点到别的块，块表里的行号已经不准。新块表到了就清掉
+    private var pendingLineChanges: [(block: Int, delta: Int)] = []
+    /// 源码被整体换掉、重渲染还没到：块表和源码对不上，算不出任何一块的行号，这段时间不进源码态
+    private var awaitingRerender = false
 
     // MARK: 激活 / 退出
 
     /// 把块 i 切成源码态。返回 false = 没有源码位置（如 front matter 之外的合成块）
     @discardableResult
     public func activate(block i: Int, caretAt offsetInSource: Int? = nil) -> Bool {
-        guard isHybridEnabled, let rendered, i < rendered.blocks.count, let ts = textStorage,
-              let lines = rendered.blocks[i].block.sourceRange?.lineRange else { return false }
+        guard isHybridEnabled, !awaitingRerender, let rendered, i < rendered.blocks.count, textStorage != nil, rendered.blocks[i].block.sourceRange != nil else { return false }
         if activeBlock == i { return true }
         deactivate(commit: true)   // 退出时已把上一块换回渲染串，textStorage 与 rendered 重新一致
-        guard let src = Self.sourceText(lines: lines, of: source) else { return false }
+        guard let lines = currentLines(ofBlock: i), let src = Self.sourceText(lines: lines, of: source) else { return false }
+        enterSourceForm(block: i, text: src, lines: lines, caretAt: offsetInSource)
+        return true
+    }
+
+    /// 块 i 现在在源码里的行号：块表里的行号加上它还没跟上的变化
+    private func currentLines(ofBlock i: Int) -> ClosedRange<Int>? {
+        guard let lines = rendered?.blocks[i].block.sourceRange?.lineRange else { return nil }
+        var start = lines.lowerBound, end = lines.upperBound
+        for change in pendingLineChanges {
+            if change.block < i { start += change.delta; end += change.delta }
+            else if change.block == i { end += change.delta }
+        }
+        return start...end
+    }
+
+    /// 把块 i 的渲染串换成源码 `src`（占 `lines` 这些行）
+    private func enterSourceForm(block i: Int, text src: String, lines: ClosedRange<Int>, caretAt offsetInSource: Int?) {
+        guard let rendered, let ts = textStorage else { return }
         let range = rendered.ranges[i]
         let attr = NSMutableAttributedString(attributedString: sourceAttributedString(src))
         let sourceLen = attr.length
@@ -52,12 +77,13 @@ public final class HybridTextView: ReaderTextView, NSTextStorageDelegate {
         activeRange = NSRange(location: range.location, length: sourceLen)
         previewLength = showsPreview ? attr.length - sourceLen : 0
         activeLines = lines
+        activatedLineCount = currentLines(ofBlock: i)?.count ?? lines.count
+        activeHasEdits = false
         ts.delegate = self
         isEditable = true
         let caret = min(activeRange.location + (offsetInSource ?? 0), activeRange.location + max(0, activeRange.length - 1))
         setSelectedRange(NSRange(location: caret, length: 0))
         window?.makeFirstResponder(self)
-        return true
     }
 
     /// 激活块下方预览的长度（0 = 无预览）
@@ -107,9 +133,10 @@ public final class HybridTextView: ReaderTextView, NSTextStorageDelegate {
     /// 以前只记一个 staleSourceForm 等重渲染时再换——源码没变时 diff 为空、不走 replaceBlocks，块就永远停在源码态。
     /// commit = 让宿主重解析 + 重渲染
     public func deactivate(commit: Bool) {
-        guard activeBlock != nil else { return }
+        guard let block = activeBlock else { return }
         previewWork?.cancel()
         restoreSourceForm(previous: rendered)
+        if activeLines.count != activatedLineCount { pendingLineChanges.append((block, activeLines.count - activatedLineCount)) }
         activeBlock = nil
         rangeShift = (Int.max, 0)
         isEditable = false
@@ -130,6 +157,12 @@ public final class HybridTextView: ReaderTextView, NSTextStorageDelegate {
     /// 宿主回写后更新激活块的行范围（块内新增 / 删除了行）
     public func activeLinesDidChange(to lines: ClosedRange<Int>) { activeLines = lines }
 
+    /// 源码被整体换掉（外部修改、重新载入、quire://append）：行号全部作废，这时打的字没有行可写。先退出源码态，重渲染到之前不再进
+    public func sourceWasReplaced(rerenderPending: Bool) {
+        deactivate(commit: false)
+        awaitingRerender = rerenderPending
+    }
+
     /// 当前激活块的源码（含末尾换行）
     public var activeSource: String? {
         guard activeBlock != nil, let ts = textStorage, activeRange.location + activeRange.length <= ts.length else { return nil }
@@ -149,6 +182,7 @@ public final class HybridTextView: ReaderTextView, NSTextStorageDelegate {
     public nonisolated func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions, range editedRange: NSRange, changeInLength delta: Int) {
         MainActor.assumeIsolated {
             guard !suppressDelegate, activeBlock != nil, editedMask.contains(.editedCharacters) else { return }
+            activeHasEdits = true
             activeRange.length += delta
             shiftRanges(after: activeBlock!, by: delta)
             if let i = activeBlock, let src = activeSource { onSourceEdit?(i, src, activeLines) }
@@ -241,8 +275,12 @@ public final class HybridTextView: ReaderTextView, NSTextStorageDelegate {
     }
 
     public override func setRendered(_ doc: RenderedDocument, style: RenderStyle) {
+        let droppedEdits = activeBlock != nil && activeHasEdits
         activeBlock = nil; rangeShift = (Int.max, 0); isEditable = false; textStorage?.delegate = nil
+        pendingLineChanges = []; awaitingRerender = false
         super.setRendered(doc, style: style)
+        // 块没走提交就被收起（换主题的结果到了）：这份渲染可能是打字之前的，再解析一次让显示追上源码
+        if droppedEdits { onDeactivate?() }
     }
 
     public override func replaceBlocks(with doc: RenderedDocument, diff: BlockDiff, previous: RenderedDocument) {
@@ -250,25 +288,36 @@ public final class HybridTextView: ReaderTextView, NSTextStorageDelegate {
         // 先换回上一版渲染串，替换完再把同一个块重新激活、光标放回原处——否则用户正在编辑的块会被重渲染"踢"回渲染态
         let wasActive = activeBlock
         let caretOffset = wasActive.map { _ in selectedRange().location - activeRange.location }
-        let keptLines = activeLines
+        let keptLineCount = activeLines.count
+        // 这份渲染基于提交那一刻的源码，之后在这个块里打的字它不知道：要原样放回块里，否则屏幕上看不见了，下一击还会把它们从源码里抹掉
+        let typed = wasActive != nil && activeHasEdits ? activeSource : nil
         restoreSourceForm(previous: previous)
         activeBlock = nil; rangeShift = (Int.max, 0); isEditable = false; textStorage?.delegate = nil
+        pendingLineChanges = []; awaitingRerender = false
         super.replaceBlocks(with: doc, diff: diff, previous: previous)
         guard let old = wasActive else { return }
-        // 旧下标 → 新下标：改动区之前不变，之后按块数差平移；落在改动区内的（就是刚提交的那块）不再激活
+        // 旧下标 → 新下标：改动区之前不变，之后按块数差平移；落在改动区内的（用户又回到了刚提交的那块）取改动区里同样位置的块
         let newIndex: Int?
         if old < diff.oldChanged.lowerBound { newIndex = old }
         else if old >= diff.oldChanged.upperBound { newIndex = old + (diff.newChanged.count - diff.oldChanged.count) }
-        else { newIndex = nil }
-        if let n = newIndex, n < doc.blocks.count, activate(block: n, caretAt: caretOffset), old < diff.oldChanged.lowerBound {
-            // 这块在改动区之前：行号不受影响，沿用本视图维护的行范围（用户可能已在块里加减了行，rendered 里的是旧的）。
-            // 在改动区之后的块行号已整体平移，以新 rendered 的为准
-            activeLines = keptLines
+        else { newIndex = diff.newChanged.isEmpty ? nil : diff.newChanged.lowerBound + min(old - diff.oldChanged.lowerBound, diff.newChanged.count - 1) }
+        if let n = newIndex, n < doc.blocks.count {
+            if let typed, let start = doc.blocks[n].block.sourceRange?.start.line {
+                // 打字只改这个块，块之前的内容和新块表一样：起始行以新块表为准，行数以打完字的为准
+                enterSourceForm(block: n, text: typed, lines: start...(start + keptLineCount - 1), caretAt: caretOffset)
+                activeHasEdits = true
+                return
+            }
+            if activate(block: n, caretAt: caretOffset) { return }
         }
+        if typed != nil { onDeactivate?() }   // 块已经不在了：打的字在源码里，让显示追上
     }
 
-    /// 仅换块表（diff 为空）：源码态的块已经在 deactivate 时换回渲染串，这里不用动 textStorage
-    public override func updateRendered(_ doc: RenderedDocument) { super.updateRendered(doc) }
+    /// 仅换块表（diff 为空）：textStorage 不用动，激活块的行号在激活时已经算上了提交造成的行数变化
+    public override func updateRendered(_ doc: RenderedDocument) {
+        pendingLineChanges = []; awaitingRerender = false
+        super.updateRendered(doc)
+    }
 
     // MARK: 源码外观
 
@@ -341,9 +390,10 @@ public final class HybridTextView: ReaderTextView, NSTextStorageDelegate {
 
 /// 混合模式击键回写：把源码第 `lines` 行替换成新文本。整篇按 "\n" 拆再拼是 O(n) 的字符串工作（1 MB ≈ 5 ms / 击键）；
 /// 这里只在一次激活的第一击扫一遍找到块的 UTF-16 区间，之后每击键只做一次区间替换（memcpy 级）。
-/// 块换块（`lines.lowerBound` 变了）、离开块、文档重载时区间失效（`reset`）。
+/// 块换块、块被重新激活成别的行范围（`lines` 和上一击写完的对不上）、离开块、文档重载时区间失效（`reset`）。
 public final class SourceLineSplicer {
     private var startLine = 0
+    private var lineCount = 0
     private var region: NSRange?
     public init() {}
     public func reset() { region = nil }
@@ -351,7 +401,7 @@ public final class SourceLineSplicer {
     /// 返回新源码与新文本的行数；行号越界返回 nil
     public func replace(lines: ClosedRange<Int>, in source: String, with text: String) -> (String, Int)? {
         let ns = source as NSString
-        if region == nil || startLine != lines.lowerBound || NSMaxRange(region!) > ns.length {
+        if region == nil || startLine != lines.lowerBound || lineCount != lines.count || NSMaxRange(region!) > ns.length {
             guard let r = Self.range(ofLines: lines, in: ns) else { return nil }
             region = r; startLine = lines.lowerBound
         }
@@ -365,6 +415,7 @@ public final class SourceLineSplicer {
         region = NSRange(location: r.location, length: (t as NSString).length)
         let body = text.hasSuffix("\n") ? String(text.dropLast()) : text
         let newLineCount = body.reduce(1) { $0 + ($1 == "\n" ? 1 : 0) }
+        lineCount = newLineCount
         return (out, newLineCount)
     }
 

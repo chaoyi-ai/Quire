@@ -13,6 +13,9 @@ final class QuickOpenPanel: NSPanel, NSTextFieldDelegate, NSTableViewDataSource,
     private var results: [(path: String, match: FuzzyMatcher.Match)] = []
     private var onOpen: (URL) -> Void
 
+    /// ⌘W 关面板（和 Esc 一样），不是穿过面板关掉后面的标签
+    @objc func closeCurrentTab(_ sender: Any?) { close() }
+
     static func present(for root: URL, over window: NSWindow?, onOpen: @escaping (URL) -> Void) {
         let p = QuickOpenPanel(index: FileIndex.index(for: root), onOpen: onOpen)
         if let window {

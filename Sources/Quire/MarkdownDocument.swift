@@ -206,7 +206,9 @@ class MarkdownDocument: NSDocument {
         LaunchClock.mark("makeWindowControllers begin")
         let target = (NSDocumentController.shared as! QuireDocumentController).takeTarget(for: self)
         linkURL = target.link
-        if let ws = target.workspace, ws.window != nil { ws.addTab(self, ephemeral: target.ephemeral) }
+        // 读文件期间目标窗口关了（恢复途中、侧栏单击后马上关）：这份文档也不另开窗口，它要去的地方用户刚关掉
+        if let ws = target.workspace, ws.isClosed { perform(#selector(NSDocument.close), with: nil, afterDelay: 0) }
+        else if let ws = target.workspace, ws.window != nil { ws.addTab(self, ephemeral: target.ephemeral) }
         else { _ = WorkspaceWindowController(document: self, root: target.newWindowRoot ?? presentedURL?.deletingLastPathComponent()) }
         LaunchClock.mark("makeWindowControllers end")
     }

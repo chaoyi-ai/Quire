@@ -259,14 +259,15 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
         tv.textContainerInset = CGSize(width: 0, height: 0)
         tv.setPrintingWidth(width)
         // 打印用同一份 Document 重新渲染（可能与屏幕缩放不同）
-        let rendered = DocumentRenderer(style: style).render(session.parsed)
+        let parsed = session.upToDateParsed()
+        let rendered = DocumentRenderer(style: style).render(parsed)
         tv.setRendered(rendered, style: style)
         tv.textContainerInset = CGSize(width: 0, height: 0)
         tv.setPrintingWidth(width)
         await tv.loadAllAttachmentsForExport()
         tv.layoutAllForPrinting()
         if let layout {
-            let title = session.parsed.outline.entries.first(where: { $0.level == 1 })?.title ?? document?.fileURL?.deletingPathExtension().lastPathComponent ?? ""
+            let title = parsed.outline.entries.first(where: { $0.level == 1 })?.title ?? document?.fileURL?.deletingPathExtension().lastPathComponent ?? ""
             let file = document?.fileURL?.lastPathComponent ?? ""
             let font = NSFont.systemFont(ofSize: 9)
             let color = NSColor(white: 0.45, alpha: 1)

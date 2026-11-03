@@ -23,7 +23,7 @@ final class TabStripView: NSView {
         var ephemeral: Bool
         var selected: Bool
     }
-    var items: [Item] = [] { didSet { if items != oldValue { needsDisplay = true } } }
+    var items: [Item] = [] { didSet { if items != oldValue { needsDisplay = true; refreshHover() } } }
     var onSelect: ((Int) -> Void)?
     var onClose: ((Int) -> Void)?
     var onPin: ((Int) -> Void)?
@@ -37,14 +37,15 @@ final class TabStripView: NSView {
     var increaseContrast = false { didSet { if increaseContrast != oldValue { needsDisplay = true } } }
 
     private enum Pressed: Equatable { case plus, close(Int) }
-    private var hoverIndex: Int?
+    private(set) var hoverIndex: Int?
     private var hoverClose = false
     private var hoverPlus = false
     private var pressed: Pressed?
     private var pressedInside = false
     private var draggingIndex: Int?
-    /// 刚点完 × / +：连按的下一下落到挪过来的东西上，不算数（否则窗口缩放、邻居被固定或被关）
-    private var ignoresRepeatClick = false
+    /// 刚点完 × / +：连按的下一下落到挪过来的东西上，不算数（否则窗口缩放、邻居被固定或被关）。按时间算：空白处的单击不经过这里，清不掉标记
+    private var ignoresRepeatClickUntil: TimeInterval = 0
+    private func isRepeatOfOwnClick(_ event: NSEvent) -> Bool { event.clickCount > 1 && event.timestamp < ignoresRepeatClickUntil }
     private var tracking: NSTrackingArea?
 
     private let plusGap: CGFloat = 4, plusWidth: CGFloat = 28
@@ -56,8 +57,21 @@ final class TabStripView: NSView {
     override var isOpaque: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     /// 这个视图在标题栏里：isOpaque = false 的视图默认算窗口拖动区，按住一动窗口就走，这里收不到 mouseDragged，拖动排序和"按下后拖出去取消"都没了。
-    /// 空白处和唯一的标签要拖窗口：mouseDown 里 performDrag
+    /// 唯一的临时标签要拖窗口：mouseDown 里 performDrag
     override var mouseDownCanMoveWindow: Bool { false }
+    /// 空白处就是标题栏：不接事件，单击拖窗口、双击（系统设置里的填充 / 缩放 / 最小化 / 不动）都由系统的标题栏处理。
+    /// 唯一的固定标签读作窗口标题，左键同样交给标题栏（× 除外；右键、中键还是它的）
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let p = convert(point, from: superview)
+        // 系统的双击在松开时才判定，会再问一次命中；Ctrl+点击是右键（菜单）
+        let click = NSApp.currentEvent.flatMap { [.leftMouseDown, .leftMouseUp].contains($0.type) && !$0.modifierFlags.contains(.control) ? $0 : nil }
+        if let click, isRepeatOfOwnClick(click) { return super.hitTest(point) }   // 连按的下一下落到空白处也不能变成标题栏双击（窗口缩放），在 mouseDown 里吃掉
+        if let i = index(at: p) {
+            let readsAsTitle = click != nil && isLone && !items[i].ephemeral && !(hoverIndex == i && closeRect(i)?.contains(p) == true)
+            return readsAsTitle ? nil : super.hitTest(point)
+        }
+        return plusRect.contains(p) ? super.hitTest(point) : nil
+    }
 
     // MARK: - 几何
 
@@ -199,26 +213,25 @@ final class TabStripView: NSView {
         case .close(let i): return items.indices.contains(i) ? closeRect(i) : nil
         }
     }
-    override func mouseMoved(with event: NSEvent) {
-        let p = convert(event.locationInWindow, from: nil)
-        let idx = index(at: p)
-        let close = idx.flatMap { closeRect($0) }?.contains(p) ?? false
-        let plus = plusRect.contains(p)
+    private func updateHover(at point: NSPoint?) {
+        let idx = point.flatMap { index(at: $0) }
+        let close = point.flatMap { p in idx.flatMap { closeRect($0) }?.contains(p) } ?? false
+        let plus = point.map { plusRect.contains($0) } ?? false
         if idx != hoverIndex || close != hoverClose || plus != hoverPlus { hoverIndex = idx; hoverClose = close; hoverPlus = plus; needsDisplay = true }
         toolTip = idx.map { items[$0].path ?? items[$0].title } ?? (plus ? L("新建标签页") : nil)
     }
-    override func mouseExited(with event: NSEvent) { hoverIndex = nil; hoverClose = false; hoverPlus = false; needsDisplay = true }
+    /// 标签在指针底下变了（关掉、拖动排序），或者菜单、按住期间指针走了：这些时候收不到 mouseMoved，按指针现在的位置重算，否则 × 留在原位或已经不存在的下标上
+    private func refreshHover() { updateHover(at: window.map { convert($0.mouseLocationOutsideOfEventStream, from: nil) }) }
+    override func mouseEntered(with event: NSEvent) { updateHover(at: convert(event.locationInWindow, from: nil)) }
+    override func mouseMoved(with event: NSEvent) { updateHover(at: convert(event.locationInWindow, from: nil)) }
+    override func mouseExited(with event: NSEvent) { updateHover(at: nil) }
+    override func didCloseMenu(_ menu: NSMenu, with event: NSEvent?) { super.didCloseMenu(menu, with: event); refreshHover() }
     override func mouseDown(with event: NSEvent) {
-        if event.clickCount > 1, ignoresRepeatClick { return }
-        ignoresRepeatClick = false
+        if isRepeatOfOwnClick(event) { return }
+        ignoresRepeatClickUntil = 0
         let p = convert(event.locationInWindow, from: nil)
         if plusRect.contains(p) { pressed = .plus; pressedInside = true; needsDisplay = true; return }
-        guard let i = index(at: p) else {
-            draggingIndex = nil
-            // 空白处就是标题栏：双击按系统设置（桌面与程序坞 → 连按窗口标题栏以…）缩放 / 最小化 / 不动；单击拖动窗口
-            if event.clickCount == 2 { Self.performTitlebarDoubleClick(window) } else { window?.performDrag(with: event) }
-            return
-        }
+        guard let i = index(at: p) else { return }
         if let cr = closeRect(i), hoverIndex == i, cr.contains(p) { pressed = .close(i); pressedInside = true; needsDisplay = true; return }
         if event.clickCount == 2 { onPin?(i); return }
         if isLone { window?.performDrag(with: event); return }   // 唯一的标签读作窗口标题：按住拖动窗口
@@ -237,23 +250,16 @@ final class TabStripView: NSView {
         if from != to { onMove?(from, to); draggingIndex = to }
     }
     override func mouseUp(with event: NSEvent) {
+        defer { refreshHover() }
         draggingIndex = nil
         guard let was = pressed else { return }
         let fire = pressedInside
         pressed = nil; pressedInside = false; needsDisplay = true
         guard fire else { return }   // 按下后拖出去 = 取消
-        ignoresRepeatClick = true
+        ignoresRepeatClickUntil = event.timestamp + NSEvent.doubleClickInterval
         switch was {
         case .plus: onNew?()
         case .close(let i): if items.indices.contains(i) { onClose?(i) }
-        }
-    }
-    /// `AppleActionOnDoubleClick`：Minimize / None / 其他（Maximize、Fill、未设置）= 缩放
-    static func performTitlebarDoubleClick(_ window: NSWindow?) {
-        switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
-        case "Minimize": window?.performMiniaturize(nil)
-        case "None": break
-        default: window?.performZoom(nil)
         }
     }
     override func menu(for event: NSEvent) -> NSMenu? {

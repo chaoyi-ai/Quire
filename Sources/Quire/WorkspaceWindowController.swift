@@ -48,7 +48,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
 
     /// 所有工作区窗口（前后顺序）
     static var all: [WorkspaceWindowController] {
-        NSApp.orderedWindows.compactMap { $0.windowController as? WorkspaceWindowController }
+        NSApp.orderedWindows.compactMap { $0.windowController as? WorkspaceWindowController }.filter { !$0.isClosed }
     }
     /// 当前（key / main）工作区
     static var key: WorkspaceWindowController? {
@@ -300,9 +300,19 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         guard tabs.contains(where: { $0 === tab }) else { return }
         if tabs.count == 1 { window?.performClose(nil); return }
         guard window?.attachedSheet == nil else { NSSound.beep(); return }   // canClose 要等 sheet 答完，主线程一等 sheet 就再也答不了（performClose 自己会拦）
-        askToClose([tab]) { [weak self] ok in if ok { self?.closeDocuments(of: [tab]) } }
+        // 询问要切到那个标签（sheet 才挂得对）；关的是后台标签就先切回来再关，选中不动，也不用先经过它的邻居
+        let previous = current
+        askToClose([tab]) { [weak self] ok in
+            guard let self else { return }
+            if let previous, previous !== tab, self.tabs.contains(where: { $0 === previous }) { self.select(previous) }
+            if ok { self.closeDocuments(of: [tab]) }
+        }
     }
-    @objc func closeCurrentTab(_ sender: Any?) { if let cur = current { closeTab(cur) } }
+    @objc func closeCurrentTab(_ sender: Any?) {
+        // 菜单动作沿响应链找，key 窗口是别的可关闭窗口（关于面板）时也落到主窗口的这里：⌘W 关用户看着的那个窗口，不是它后面的标签
+        if let key = NSApp.keyWindow, key !== window, key.sheetParent == nil, key.styleMask.contains(.closable) { key.performClose(sender); return }
+        if let cur = current { closeTab(cur) }
+    }
 
     /// 逐个询问未存储的文档（切到那个标签让 sheet 挂对窗口）：都同意才 done(true)，有一个取消就 done(false)。
     /// 这里不关任何文档，都问完才由调用方关：取消时所有标签都还在。
@@ -358,18 +368,25 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         tabStrip.items = tabs.enumerated().map { i, t in .init(title: titles[i], path: t.document.fileURL?.path, ephemeral: t.isEphemeral, selected: t === current) }
     }
 
-    /// 标签名去重：名字相同（不分大小写）的标签——同一文件夹里的（notes.md / notes.markdown）显示完整文件名，
-    /// 不同文件夹的（两个 README）后面加" — 上级文件夹名"。其余照旧（和侧栏同一条命名规则）
+    /// 标签名去重：名字相同（不分大小写）的标签——同一文件夹里的（notes.md / notes.markdown）显示完整文件名；
+    /// 还重名的（不同文件夹的两个 README）后面加" — 上级文件夹"，上级也同名（两个项目的 docs/README）就往上加到分得清为止，
+    /// 每个标签只加自己需要的层数。其余照旧（和侧栏同一条命名规则）
     nonisolated static func disambiguatedTitles(_ entries: [(title: String, url: URL?)]) -> [String] {
-        var counts: [String: Int] = [:]
-        for e in entries { counts[e.title.lowercased(), default: 0] += 1 }
-        return entries.enumerated().map { i, e in
-            guard counts[e.title.lowercased(), default: 0] > 1, let url = e.url else { return e.title }
-            let dir = url.deletingLastPathComponent().standardizedFileURL
+        func folder(_ url: URL?) -> [String]? { url?.deletingLastPathComponent().standardizedFileURL.pathComponents }
+        let names = entries.enumerated().map { i, e -> String in
+            guard let url = e.url else { return e.title }
             let sameFolder = entries.enumerated().contains { j, o in
-                j != i && o.title.lowercased() == e.title.lowercased() && o.url?.deletingLastPathComponent().standardizedFileURL == dir
+                j != i && o.title.lowercased() == e.title.lowercased() && folder(o.url) == folder(url)
             }
-            return sameFolder ? url.lastPathComponent : "\(e.title) — \(dir.lastPathComponent)"
+            return sameFolder ? url.lastPathComponent : e.title
+        }
+        return entries.indices.map { i in
+            let same = entries.indices.filter { $0 != i && names[$0].lowercased() == names[i].lowercased() }
+            guard !same.isEmpty, let mine = folder(entries[i].url) else { return names[i] }
+            let others = same.compactMap { folder(entries[$0].url) }
+            var depth = 1
+            while depth < mine.count, others.contains(where: { $0.suffix(depth) == mine.suffix(depth) }) { depth += 1 }
+            return "\(names[i]) — \(NSString.path(withComponents: Array(mine.suffix(depth))))"
         }
     }
 
@@ -427,7 +444,6 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         guard Self.all.allSatisfy({ $0.docCloseCallback == nil && $0.window?.attachedSheet == nil }) else { NSSound.beep(); return }
         for other in Self.all where other !== self {
             for t in other.tabs { other.detach(t); addTab(t.document, ephemeral: false, select: false) }
-            other.closeApproved = true
             other.window?.close()
         }
         window?.makeKeyAndOrderFront(nil)
@@ -522,24 +538,32 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     // MARK: - 窗口
 
     /// 关窗口：逐个问过所有未存储的标签，都同意才关，有一个取消就全部留着。这是关窗口唯一的询问入口（AppKit 默认只问窗口挂着的那一份，已在 MarkdownDocument.shouldCloseWindowController 放行）
-    private var closeApproved = false
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        if closeApproved || tabs.isEmpty { return true }
+        if isClosed || tabs.isEmpty { return true }
+        guard docCloseCallback == nil else { return false }
         let asked = tabs
+        isAskingToCloseWindow = true
         askToClose(asked) { [weak self] ok in
-            guard ok, let self else { return }
+            guard let self else { return }
+            self.isAskingToCloseWindow = false
+            guard ok else { return }
             // 询问期间开进来的标签（URL scheme、从 Finder 打开、新建）没问过，不能跟着关：只关问过的，窗口留给它们
             if self.tabs.contains(where: { t in !asked.contains { $0 === t } }) { self.closeDocuments(of: asked); return }
             // 最后问的那个是当前标签，它留给窗口带走（NSDocument 的默认路径），其余的先关
             for tab in self.tabs where tab !== self.current { tab.document.close() }
-            self.closeApproved = true
             self.window?.close()
         }
         return false
     }
     func windowWillClose(_ notification: Notification) {
+        isClosed = true
         for t in tabs { t.session.stopWatching() }
     }
+    /// 窗口关了就不再回来（最后一个文档已经跟着走了，标签表里留的是死标签）：不能再往里开标签，否则 showWindows 又把它显示出来
+    private(set) var isClosed = false
+    private var isAskingToCloseWindow = false
+    /// 恢复（WorkspaceState）看这个停手：询问期间开进来的标签会把窗口留住
+    var isClosingOrClosed: Bool { isClosed || isAskingToCloseWindow }
 
     /// 一个窗口一次只能挂一个询问，轮不上的文档在这里等（`MarkdownDocument.presentError`）
     private var waitingToAsk: [MarkdownDocument] = []
@@ -781,6 +805,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     func documentDidReload(_ doc: MarkdownDocument, _ source: String) {
         guard let tab = tab(for: doc) else { return }
         tab.hybridSplicer.reset()
+        if tab.reader.isViewLoaded, let hybrid = tab.reader.textView as? HybridTextView { hybrid.sourceWasReplaced(rerenderPending: tab.session.parsedSource != source) }
         guard tab.hasEditorPane else { return }
         tab.editor?.replaceSource(source)
     }

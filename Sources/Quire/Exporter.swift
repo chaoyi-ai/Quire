@@ -24,7 +24,7 @@ enum Exporter {
     static func html(for document: MarkdownDocument) -> String {
         var opts = HTMLRenderer.Options()
         opts.title = document.displayName
-        return HTMLRenderer(theme: ThemeManager.shared.currentTheme, options: opts).render(document.session.parsed)
+        return HTMLRenderer(theme: ThemeManager.shared.currentTheme, options: opts).render(document.session.upToDateParsed())
     }
 
     static func exportPDF(document: MarkdownDocument, from window: NSWindow) {

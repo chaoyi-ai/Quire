@@ -44,6 +44,8 @@ enum WorkspaceState {
         let dc = QuireDocumentController.shared as! QuireDocumentController
         let root = ws.root.map { URL(fileURLWithPath: $0) }
         func openTabs(_ i: Int, into target: WorkspaceWindowController?) {
+            // 第一个标签一开窗口就出来了，用户可以在恢复途中关它：这个窗口剩下的标签不开了，接着恢复下一个窗口
+            if let target, target.isClosingOrClosed { restore(rest); return }
             guard i < ws.tabs.count else {
                 // 全开完：选当前标签、恢复窗口位置 / 侧栏
                 if let target {
@@ -57,6 +59,7 @@ enum WorkspaceState {
             let t = ws.tabs[i]
             dc.open(URL(fileURLWithPath: t.path), in: target, ephemeral: t.ephemeral, newWindowRoot: target == nil ? root : nil) { doc in
                 let target = target ?? doc?.workspace
+                if let doc, let target, target.isClosingOrClosed, doc.workspace === target { doc.close() }   // 读文件的时候开始关的：这一个不留
                 if let doc, let tab = target?.tab(for: doc), let m = WorkspaceWindowController.Mode(rawValue: t.mode) { target?.setMode(m, of: tab) }
                 openTabs(i + 1, into: target)
             }

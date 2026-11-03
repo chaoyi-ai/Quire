@@ -3,7 +3,7 @@ import QuireCore
 import QuireRender
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func applicationWillFinishLaunching(_ notification: Notification) {
         LaunchClock.mark("willFinishLaunching")
         MainMenu.install()
@@ -71,6 +71,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    /// ⌘W 的响应链终点：key / main 窗口都不是工作区（设置窗口）时关当前窗口。工作区的控制器排在响应链前面，轮不到这里
+    @objc func closeCurrentTab(_ sender: Any?) { NSApp.keyWindow?.performClose(sender) }
+    func validateMenuItem(_ item: NSMenuItem) -> Bool { NSApp.keyWindow.map { $0.sheetParent == nil } ?? false }   // sheet 开着时灰掉：关闭要等 sheet 答完
 
     func application(_ application: NSApplication, open urls: [URL]) {
         LaunchClock.mark("application(open:)")

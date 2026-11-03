@@ -25,7 +25,7 @@ final class DocumentSession {
     /// 一次性等待：当前源码对应的渲染结果已发布就立刻回调，否则等下一次发布；`timeout` 秒内没等到回调 false。
     /// 给 URL scheme / Shortcuts / 跳行这类"打开后再做事"的路径用——以前用固定延时轮询，大文件（异步解析）下会带着空文档继续
     func whenRendered(timeout: TimeInterval = 15, _ body: @escaping @MainActor (Bool) -> Void) {
-        if rendered != nil, parsedSource == source { body(true); return }
+        if rendered != nil, parsedSource == source || renderDeferred { body(true); return }   // 混合模式块里打过字：离开块才会有新的发布，等也等不到
         renderWaiters.append(body)
         let gen = renderWaiterGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
@@ -155,11 +155,22 @@ final class DocumentSession {
     func updateSourceWithoutRendering(_ newSource: String) {
         source = newSource
         editDebounce?.cancel()
+        renderDeferred = true
+    }
+    private var renderDeferred = false
+
+    /// 和当前源码一致的解析结果（导出 / 打印用）：混合模式击键只更新 `source`、离开块才重解析，编辑器有防抖，这期间 `parsed` 是旧的
+    func upToDateParsed() -> Document {
+        if parsedSource == source { return parsed }
+        let doc = parser.parse(source)
+        guard let loader = transclusionLoader() else { return doc }
+        return Transclusion.expand(doc, parser: parser, fromPath: document?.fileURL?.path, loader: loader).document
     }
 
     func sourceDidChange(_ newSource: String, reason: ChangeReason) {
         source = newSource
         editDebounce?.cancel()
+        renderDeferred = false
         generation += 1
         let gen = generation
         let parser = self.parser

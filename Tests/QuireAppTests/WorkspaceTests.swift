@@ -312,7 +312,7 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertTrue(ws.current.document === cancels)
     }
 
-    /// 回调只有一格：面板开着时再来一轮询问，会把这个面板的答案交给下一个还没回答的文档
+   /// 回调只有一格：面板开着时再来一轮询问，会把这个面板的答案交给下一个还没回答的文档
     func testCloseRequestedWhileAPanelIsUpIsIgnored() async throws {
         let (ws, first) = makeWorkspace()
         let panelUp = scripted(in: ws, .later)
@@ -389,6 +389,115 @@ final class WorkspaceTests: XCTestCase {
         other.mergeAllWindows(nil)
         XCTAssertEqual(other.tabs.count, 3, "问完了就能合并")
     }
+
+    // MARK: 关后台标签：选中不动（点 ×、中键、右键菜单都走 closeTab）
+
+    func testClosingABackgroundTabKeepsTheSelection() {
+        let (ws, a) = makeWorkspace()
+        let b = untitled(), c = untitled()
+        ws.addTab(b, ephemeral: false)
+        ws.addTab(c, ephemeral: false)
+        let currentTab = ws.tab(for: a)!
+        ws.select(currentTab)
+        ws.closeTab(ws.tab(for: c)!)
+        XCTAssertEqual(ws.tabs.count, 2)
+        XCTAssertTrue(ws.current === currentTab, "关的是后台标签，选中不动（以前跳到被关标签的邻居）")
+        XCTAssertTrue(ws.document === a)
+    }
+
+    func testClosingAnEditedBackgroundTabSavesItAndKeepsTheSelection() async throws {
+        let a = try await openFile("a.md")
+        _ = try await openFile("b.md", in: a.ws)
+        let c = try await openFile("c.md", in: a.ws)
+        c.doc.replaceContents("# edited c\n")
+        let currentTab = try XCTUnwrap(a.ws.tab(for: a.doc))
+        a.ws.select(currentTab)
+        let closing = try XCTUnwrap(a.ws.tab(for: c.doc))
+        try await failingOnDeadlock {
+            a.ws.closeTab(closing)
+            while a.ws.tabs.count > 2 { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        XCTAssertTrue(a.ws.current === currentTab)
+        XCTAssertFalse(isOpen(c.doc))
+        XCTAssertEqual(try disk(c.url), "# edited c\n")
+    }
+
+    /// 要问的后台标签：问的时候切过去（面板要挂在它上面），答完回到原来的标签；取消也回去
+    func testAskingAboutABackgroundTabShowsItThenGoesBack() async throws {
+        let (ws, a) = makeWorkspace()
+        let asked = scripted(in: ws, .later)
+        _ = scripted(in: ws)
+        let currentTab = ws.tab(for: a)!
+        ws.select(currentTab)
+        ws.closeTab(ws.tab(for: asked)!)
+        try await waitUntilAsked(asked)
+        XCTAssertTrue(ws.current.document === asked, "面板挂在要关的标签上")
+        asked.reply?(false)
+        XCTAssertEqual(ws.tabs.count, 3)
+        XCTAssertTrue(ws.current === currentTab, "取消：回到原来的标签")
+
+        asked.reply = nil
+        asked.answer = .yes
+        ws.closeTab(ws.tab(for: asked)!)
+        XCTAssertEqual(ws.tabs.count, 2)
+        XCTAssertFalse(isOpen(asked))
+        XCTAssertTrue(ws.current === currentTab, "同意：同样回到原来的标签")
+    }
+
+    // MARK: 恢复途中关窗口
+
+    private func withSavedWorkspaces(_ list: [WorkspaceState.Workspace], _ body: () async throws -> Void) async throws {
+        let d = UserDefaults.standard
+        d.set(try JSONEncoder().encode(list), forKey: "workspaces.restore")
+        d.set(true, forKey: "NSQuitAlwaysKeepsWindows")   // 用户把"退出时关闭窗口"打开的机器上也要恢复
+        defer { d.removeObject(forKey: "workspaces.restore"); d.removeObject(forKey: "NSQuitAlwaysKeepsWindows") }
+        try await body()
+    }
+
+    /// 恢复是一个标签一个标签异步开的，第一个标签一开窗口就出来了，这时用户可以关它。
+    /// 以前后面的标签还往这个窗口里加：它自己又显示出来，再关的时候也不问了
+    func testWindowClosedDuringRestoreStaysClosed() async throws {
+        let names = (0..<8).map { "t\($0).md" }
+        for n in names { try "# \(n)\n".write(to: tmp.appendingPathComponent(n), atomically: true, encoding: .utf8) }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("quire-next-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let next = dir.appendingPathComponent("next.md")
+        try "# next\n".write(to: next, atomically: true, encoding: .utf8)
+        let first = WorkspaceState.Workspace(root: tmp.path, tabs: names.map { .init(path: tmp.appendingPathComponent($0).path, ephemeral: false, mode: 0) }, current: 0, frame: "0 0 800 600", sidebarCollapsed: false)
+        let second = WorkspaceState.Workspace(root: dir.path, tabs: [.init(path: next.path, ephemeral: false, mode: 0)], current: 0, frame: "0 0 800 600", sidebarCollapsed: false)
+        try await withSavedWorkspaces([first, second]) {
+            XCTAssertTrue(WorkspaceState.restoreIfNeeded())
+            var restoring: WorkspaceWindowController?
+            try await failingOnDeadlock {
+                while restoring == nil { restoring = WorkspaceWindowController.all.first; await Task.yield() }
+            }
+            let ws = try XCTUnwrap(restoring)
+            XCTAssertLessThan(ws.tabs.count, names.count, "要在恢复途中关")
+            await waitForWindowClose(of: ws) { ws.window?.performClose(nil) }
+            // 等下一个工作区恢复出来：说明这个工作区的步骤都走完了
+            try await failingOnDeadlock {
+                while !NSDocumentController.shared.documents.contains(where: { $0.fileURL?.lastPathComponent == "next.md" }) { try await Task.sleep(for: .milliseconds(20)) }
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertEqual(ws.window?.isVisible, false, "关掉的窗口不能自己再出来")
+            XCTAssertEqual(NSDocumentController.shared.documents.map { $0.fileURL?.lastPathComponent }, ["next.md"], "这个窗口剩下的标签不再打开，也不留没有窗口的文档")
+            XCTAssertEqual(WorkspaceWindowController.all.count, 1, "下一个工作区照常恢复")
+        }
+    }
+
+    /// 读文件期间目标窗口被关掉（恢复、侧栏单击之后马上关）：不能把关掉的窗口重新显示出来，也不另开窗口
+    func testFileArrivingAfterItsWorkspaceClosedDoesNotReopenIt() async throws {
+        let a = try await openFile("a.md")
+        await waitForWindowClose(of: a.ws) { a.ws.window?.performClose(nil) }
+        _ = await open(tmp.appendingPathComponent("b.md"), in: a.ws, ephemeral: false)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(a.ws.window?.isVisible, false)
+        XCTAssertTrue(WorkspaceWindowController.all.isEmpty)
+        XCTAssertTrue(NSDocumentController.shared.documents.isEmpty, "没有窗口的文档也不留")
+    }
+
+    // MARK: 存储与撤销
 
     /// 脏标记靠撤销组关闭驱动，打字又合并在同一个撤销组里：存储之后接着打的字要重新标脏，否则不再自动保存、关闭时直接丢
     func testTypingAfterAutosaveMarksEditedAndIsSavedOnClose() async throws {
@@ -502,6 +611,172 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertFalse(a.ws.hasEditorPane)
         a.ws.toggleImmersive(nil)
         XCTAssertFalse(a.ws.isImmersive)
+    }
+
+    // MARK: 混合模式：离开块之后的重解析是异步的，这段时间里块表还是旧的
+
+    private struct HybridDoc { let doc: MarkdownDocument; let ws: WorkspaceWindowController; let url: URL; let view: HybridTextView }
+
+    private func openHybrid(_ text: String) async throws -> HybridDoc {
+        try text.write(to: tmp.appendingPathComponent("hybrid.md"), atomically: true, encoding: .utf8)
+        let a = try await openFile("hybrid.md")
+        a.ws.setModeHybrid(nil)
+        let view = try XCTUnwrap(a.ws.readerViewController.textView as? HybridTextView)
+        try await failingOnDeadlock { while view.rendered == nil { try await Task.sleep(for: .milliseconds(10)) } }
+        return HybridDoc(doc: a.doc, ws: a.ws, url: a.url, view: view)
+    }
+
+    /// 在激活块末尾（块尾换行之前）打字，走和键盘一样的路
+    private func type(_ text: String, in v: HybridTextView) {
+        v.setSelectedRange(NSRange(location: v.activeRange.location + v.activeRange.length - 1, length: 0))
+        v.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+    }
+
+    /// 从提交到这里都没让出主线程，所以重渲染一定还没到；这里才等它到
+    private func waitForRerender(of h: HybridDoc, containing text: String) async throws {
+        try await failingOnDeadlock { while !h.doc.session.parsedSource.contains(text) { try await Task.sleep(for: .milliseconds(5)) } }
+    }
+
+    /// 块里打了字、还没离开块：导出 / 打印要有这些字（击键只更新源码，不重解析）
+    func testExportAndPrintWhileABlockIsActiveHaveTheTypedText() async throws {
+        let h = try await openHybrid("# T\n\nbody\n")
+        XCTAssertTrue(h.view.activate(block: 1))
+        type("XYZ", in: h.view)
+        XCTAssertEqual(h.doc.source, "# T\n\nbodyXYZ\n")
+        XCTAssertTrue(Exporter.html(for: h.doc).contains("bodyXYZ"), "HTML 导出")
+        let reader = try XCTUnwrap(h.doc.readerViewController)
+        let forPDF = await reader.printableView(width: 400, layout: PDFLayout.load(), document: h.doc)
+        XCTAssertTrue(forPDF.string.contains("bodyXYZ"), "PDF / 打印")
+        let forImage = await reader.printableView(width: 400)
+        XCTAssertTrue(forImage.string.contains("bodyXYZ"), "图片")
+        XCTAssertEqual(h.view.activeBlock, 1, "导出不把人从块里踢出来")
+        XCTAssertEqual(h.view.activeSource, "bodyXYZ\n")
+    }
+
+    /// quire://export、快捷指令先等渲染：块里打过字时不会有新的发布，等也等不到，15 s 后报导出失败
+    func testWaitingForARenderDoesNotHangWhileABlockHasEdits() async throws {
+        let h = try await openHybrid("# T\n\nbody\n")
+        XCTAssertTrue(h.view.activate(block: 1))
+        type("XYZ", in: h.view)
+        nonisolated(unsafe) var answer: Bool?
+        h.doc.session.whenRendered(timeout: 0.3) { answer = $0 }
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(answer, true)
+    }
+
+    /// 改了块 B、点回前面的块 A：B 的重渲染还在路上，这时在 A 里加一行。
+    /// 重渲染到达后这一行还在块里，下一击也不能把它从源码里抹掉（以前都丢）
+    func testLineAddedBeforeTheRerenderSurvivesInAnEarlierBlock() async throws {
+        let h = try await openHybrid("A\n\nB\n\nC\n")
+        XCTAssertTrue(h.view.activate(block: 1))
+        type("b", in: h.view)
+        XCTAssertTrue(h.view.activate(block: 0))
+        type("\nsecond", in: h.view)
+        XCTAssertEqual(h.doc.source, "A\nsecond\n\nBb\n\nC\n")
+        try await waitForRerender(of: h, containing: "Bb")
+        XCTAssertEqual(h.view.activeBlock, 0)
+        XCTAssertEqual(h.view.activeSource, "A\nsecond\n", "打的字还在块里")
+        type("!", in: h.view)
+        XCTAssertEqual(h.doc.source, "A\nsecond!\n\nBb\n\nC\n", "下一击不能把它从源码里抹掉")
+    }
+
+    /// 同上，块在改动区之后（以前行号取新块表的，缓存的区间却还是两行，下一击把第二行吃掉）
+    func testLineAddedBeforeTheRerenderSurvivesInALaterBlock() async throws {
+        let h = try await openHybrid("A\n\nB\n\nC\n")
+        XCTAssertTrue(h.view.activate(block: 0))
+        type("a", in: h.view)
+        XCTAssertTrue(h.view.activate(block: 1))
+        type("\nsecond", in: h.view)
+        XCTAssertEqual(h.doc.source, "Aa\n\nB\nsecond\n\nC\n")
+        try await waitForRerender(of: h, containing: "Aa")
+        XCTAssertEqual(h.view.activeBlock, 1)
+        XCTAssertEqual(h.view.activeSource, "B\nsecond\n")
+        type("!", in: h.view)
+        XCTAssertEqual(h.doc.source, "Aa\n\nB\nsecond!\n\nC\n")
+    }
+
+    /// 提交之后马上回到同一块接着打字：它在改动区里，以前重渲染一到就被踢出源码态，后面的字没处去，显示也停在旧的
+    func testTypingInTheJustCommittedBlockBeforeItsRerenderKeepsTheBlock() async throws {
+        let h = try await openHybrid("A\n\nB\n")
+        XCTAssertTrue(h.view.activate(block: 0))
+        type("1", in: h.view)
+        h.view.deactivate(commit: true)
+        XCTAssertTrue(h.view.activate(block: 0))
+        type("2", in: h.view)
+        try await waitForRerender(of: h, containing: "A1")
+        XCTAssertEqual(h.view.activeBlock, 0, "还在块里")
+        XCTAssertEqual(h.view.activeSource, "A12\n")
+        type("3", in: h.view)
+        XCTAssertEqual(h.doc.source, "A123\n\nB\n")
+    }
+
+    /// 回车加一个空行：块内容没变，diff 为空（走 updateRendered），只有后面的块行号变了。
+    /// 重渲染到之前点到后面的块：显示的要是它自己的源码，打字要写到它自己的行上
+    func testBlockActivatedAfterAnEmptyDiffCommitWritesToItsOwnLine() async throws {
+        let h = try await openHybrid("A\n\nB\n")
+        XCTAssertTrue(h.view.activate(block: 0))
+        type("\n", in: h.view)
+        XCTAssertEqual(h.doc.source, "A\n\n\nB\n")
+        XCTAssertTrue(h.view.activate(block: 1))
+        XCTAssertEqual(h.view.activeSource, "B\n", "块表还没换，行号要算上刚才加的行")
+        type("x", in: h.view)
+        XCTAssertEqual(h.doc.source, "A\n\n\nBx\n")
+        try await waitForRerender(of: h, containing: "A\n\n\nB")
+        XCTAssertEqual(h.view.activeBlock, 1)
+        type("y", in: h.view)
+        XCTAssertEqual(h.doc.source, "A\n\n\nBxy\n", "diff 为空时行号同样要对")
+        h.view.deactivate(commit: true)
+        XCTAssertEqual(h.doc.source, "A\n\n\nBxy\n")
+    }
+
+    /// 删掉几行再点后面的块，走真实的编辑路径（块数不变）：重渲染到之前打字不能写到别的块上（"End" 被盖掉）
+    func testBlockActivatedBeforeTheRerenderOfALineDeletionWritesToItsOwnLine() async throws {
+        let h = try await openHybrid("- a\n- b\n- c\n\nPara\n\nEnd\n")
+        XCTAssertTrue(h.view.activate(block: 0))
+        let start = h.view.activeRange.location
+        h.view.insertText("- a\n", replacementRange: NSRange(location: start, length: ("- a\n- b\n- c" as NSString).length))
+        XCTAssertEqual(h.doc.source, "- a\n\n\nPara\n\nEnd\n")
+        XCTAssertTrue(h.view.activate(block: 1))
+        XCTAssertEqual(h.view.activeSource, "Para\n")
+        type("!", in: h.view)
+        XCTAssertEqual(h.doc.source, "- a\n\n\nPara!\n\nEnd\n")
+    }
+
+    /// 一个块里的多行被重新激活成一行时，缓存的区间不能还盖着两行（重渲染换块表之后，回写把下一行吃掉）
+    func testSplicerDoesNotReuseARegionForDifferentLines() {
+        let sp = SourceLineSplicer()
+        var cur = "a\nb\nc\n"
+        cur = sp.replace(lines: 1...2, in: cur, with: "a\nb!\n")!.0
+        XCTAssertEqual(cur, "a\nb!\nc\n")
+        cur = sp.replace(lines: 1...1, in: cur, with: "A\n")!.0
+        XCTAssertEqual(cur, "A\nb!\nc\n")
+    }
+
+    /// 外部修改 / quire://append 把源码整体换掉：块表要等重渲染。这段时间激活着的块、或者刚点进去的块打字，都会按旧行号写进新内容
+    func testTypingBetweenAReplaceAndItsRerenderDoesNotWriteToStaleLines() async throws {
+        let h = try await openHybrid("A\n\nB\n")
+        XCTAssertTrue(h.view.activate(block: 1))
+        let replaced = "X\nX\nX\nX\n\nA\n\nB\n"
+        h.doc.replaceContents(replaced)
+        h.view.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(h.doc.source, replaced, "激活着的块")
+        h.view.activate(block: 0)
+        h.view.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(h.doc.source, replaced, "刚点进去的块")
+        try await waitForRerender(of: h, containing: "X\nX")
+        XCTAssertTrue(h.view.activate(block: 0), "重渲染到了就能进了")
+        XCTAssertEqual(h.view.activeSource, "X\nX\nX\nX\n")
+    }
+
+    /// 块没走提交就被收起（换主题的结果到了，它基于打字之前的解析）：显示要追上源码，否则一直停在旧的，直到下一次提交
+    func testDisplayCatchesUpWhenABlockWithEditsIsDroppedByAFullRender() async throws {
+        let h = try await openHybrid("A\n\nB\n")
+        XCTAssertTrue(h.view.activate(block: 1))
+        type("typed", in: h.view)
+        h.view.setRendered(try XCTUnwrap(h.view.rendered), style: h.view.style)
+        XCTAssertNil(h.view.activeBlock)
+        try await waitForRerender(of: h, containing: "Btyped")
+        XCTAssertTrue(h.view.string.contains("Btyped"))
     }
 
     // MARK: 外部修改
@@ -2481,6 +2756,46 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertFalse(strip(width: 400, titles: ["a", "b"]).mouseDownCanMoveWindow, "否则窗口服务器直接拖窗口，这里收不到 mouseDragged")
     }
 
+    /// 让 hitTest 看到一次真的按下（NSApp.currentEvent）
+    private func withCurrentLeftMouseDown(clickCount: Int, timestamp: TimeInterval = 0, modifierFlags: NSEvent.ModifierFlags = [], _ body: () -> Void) {
+        NSApp.postEvent(NSEvent.mouseEvent(with: .leftMouseDown, location: .zero, modifierFlags: modifierFlags, timestamp: timestamp, windowNumber: 0, context: nil, eventNumber: 0, clickCount: clickCount, pressure: 1)!, atStart: true)
+        _ = NSApp.nextEvent(matching: .leftMouseDown, until: nil, inMode: .default, dequeue: true)
+        body()
+    }
+
+    /// 空白处不接事件，交给系统的标题栏：拖窗口、双击都按系统设置（Fill 的再次双击不还原、全屏里不响，照抄总有对不上的）
+    func testBlankPartOfTheStripIsLeftToTheTitleBar() {
+        let s = strip(width: 800, titles: ["a", "b"])   // 单元宽 200，+ 在 404–432
+        XCTAssertNil(s.hitTest(NSPoint(x: 600, y: 14)), "空白")
+        XCTAssertNil(s.hitTest(NSPoint(x: 402, y: 14)), "标签和 + 之间的缝")
+        XCTAssertTrue(s.hitTest(NSPoint(x: 100, y: 14)) === s, "标签")
+        XCTAssertTrue(s.hitTest(NSPoint(x: 418, y: 14)) === s, "+")
+    }
+
+    /// 唯一的固定标签读作窗口标题：左键交给标题栏；临时标签双击要固定，× 要能点，右键菜单不在这里判断
+    func testLonePinnedTabReadsAsTitleForTheLeftButton() {
+        let s = strip(width: 800, titles: ["a"])
+        XCTAssertTrue(s.hitTest(NSPoint(x: 30, y: 14)) === s, "不是左键按下（右键、悬停时的命中检查）：还是它的")
+        withCurrentLeftMouseDown(clickCount: 1, modifierFlags: .control) { XCTAssertTrue(s.hitTest(NSPoint(x: 30, y: 14)) === s, "Ctrl+点击是右键菜单") }
+        withCurrentLeftMouseDown(clickCount: 1) {
+            XCTAssertNil(s.hitTest(NSPoint(x: 30, y: 14)))
+            s.items[0].ephemeral = true
+            XCTAssertTrue(s.hitTest(NSPoint(x: 30, y: 14)) === s, "临时标签：双击固定")
+        }
+    }
+
+    /// 刚点完 × 标签挪了位置，连按的第二下可能落到空白处：不能变成标题栏双击（窗口缩放）。过了连按时间的双击照常给标题栏
+    func testRepeatClickAfterCloseIsNotLeftToTheTitleBar() {
+        let s = strip(width: 800, titles: ["a", "b", "c"])
+        var closed = 0
+        s.onClose = { _ in closed += 1 }
+        click(s, at: NSPoint(x: 82, y: 14))   // 第一个标签的 ×（单元宽 200，标题居中，× 紧贴标题左边）
+        XCTAssertEqual(closed, 1)
+        let blank = NSPoint(x: 700, y: 14)
+        withCurrentLeftMouseDown(clickCount: 2) { XCTAssertTrue(s.hitTest(blank) === s, "这一下归条子，在 mouseDown 里吃掉") }
+        withCurrentLeftMouseDown(clickCount: 2, timestamp: NSEvent.doubleClickInterval + 1) { XCTAssertNil(s.hitTest(blank), "空白处的单击清不掉标记：过了连按时间的双击也要给标题栏") }
+    }
+
     func testPlusStaysInsideANarrowStripWithALongLoneTitle() {
         let s = strip(width: 150, titles: [String(repeating: "很长的文件名", count: 10)])
         var created = 0
@@ -2505,6 +2820,28 @@ final class WorkspaceTests: XCTestCase {
         click(s, at: NSPoint(x: 150, y: 14), count: 1)
         click(s, at: NSPoint(x: 150, y: 14), count: 2)
         XCTAssertEqual(pinned, [0], "正常的双击照常固定")
+    }
+
+    /// 标签在指针底下挪动时鼠标没动、收不到 mouseMoved：× 和提亮要跟着指针现在压着的标签走，否则 × 留在原来的位置（或者已经不存在的下标上）
+    func testHoverFollowsTabsMovingUnderAStillPointer() {
+        let s = strip(width: 400, titles: ["a", "b", "c"])
+        let w = NSWindow(contentRect: s.frame, styleMask: .borderless, backing: .buffered, defer: true)
+        w.contentView = s
+        /// 把窗口摆到真实指针底下，让指针压在条内 p 处（不用上屏，也不碰指针）
+        func pointer(at p: NSPoint) {
+            let m = NSEvent.mouseLocation
+            w.setFrameOrigin(NSPoint(x: m.x - p.x, y: m.y - (s.bounds.height - p.y)))
+        }
+        // 三个标签时单元宽 122：x = 300 在第三个上
+        pointer(at: NSPoint(x: 300, y: 14))
+        s.mouseMoved(with: NSEvent.mouseEvent(with: .mouseMoved, location: w.mouseLocationOutsideOfEventStream, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!)
+        XCTAssertEqual(s.hoverIndex, 2)
+        s.items.removeLast()   // 关掉它：两个标签时单元宽 184，指针压到了第二个上
+        XCTAssertEqual(s.hoverIndex, 1)
+        s.items.swapAt(0, 1)   // 拖动排序
+        XCTAssertEqual(s.hoverIndex, 1)
+        s.items.removeLast()   // 只剩一个：标签贴着名字，指针在空白处
+        XCTAssertNil(s.hoverIndex, "下标不能留在已经不存在的标签上")
     }
 
     func testDetachAndMerge() {
@@ -2568,6 +2905,24 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(t, ["README — a", "README — b", "notes.md", "notes.markdown", "THEMES", "Untitled"])
         // 大小写不同也算重名
         XCTAssertEqual(WorkspaceWindowController.disambiguatedTitles([("Readme", a), ("README", b)]), ["Readme — a", "README — b"])
+    }
+
+    /// 上级文件夹也同名（两个项目的 docs/README）：只加一层还是分不清，要一直往上加到分得清为止，每个标签只加自己需要的那么多层
+    func testDuplicateTitlesInSameNamedFoldersGoUpUntilTheyDiffer() {
+        func titles(_ paths: String...) -> [String] {
+            WorkspaceWindowController.disambiguatedTitles(paths.map { p in
+                let u = URL(fileURLWithPath: p)
+                return (u.deletingPathExtension().lastPathComponent, u)
+            })
+        }
+        XCTAssertEqual(titles("/w/a/docs/README.md", "/w/b/docs/README.md"), ["README — a/docs", "README — b/docs"])
+        XCTAssertEqual(titles("/w/a/docs/README.md", "/w/b/docs/README.md", "/w/c/README.md"), ["README — a/docs", "README — b/docs", "README — c"])
+        XCTAssertEqual(titles("/p/x/y/z/n.md", "/q/x/y/z/n.md"), ["n — p/x/y/z", "n — q/x/y/z"])
+        // 一个的上级路径是另一个的后缀：到根为止
+        XCTAssertEqual(titles("/x/n.md", "/y/x/n.md"), ["n — /x", "n — y/x"])
+        // 两个文件夹里都有 notes.md 和 notes.markdown：完整文件名也重名
+        XCTAssertEqual(titles("/w/a/notes.md", "/w/a/notes.markdown", "/w/b/notes.md", "/w/b/notes.markdown"),
+                       ["notes.md — a", "notes.markdown — a", "notes.md — b", "notes.markdown — b"])
     }
 
     func testTabTitleDropsMarkdownExtensionLikeSidebar() {
