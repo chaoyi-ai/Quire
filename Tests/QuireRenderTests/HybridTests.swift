@@ -194,9 +194,7 @@ final class HybridPolishTests: XCTestCase {
         // 编辑源码后预览刷新（150 ms）
         let r = v.activeRange
         v.insertText("3", replacementRange: NSRange(location: r.location + r.length - 3, length: 0))
-        let exp = expectation(description: "preview")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { exp.fulfill() }
-        wait(for: [exp], timeout: 2)
+        waitUntil("预览刷新") { v.textStorage!.string.components(separatedBy: "23").count == 3 }
         XCTAssertEqual(v.textStorage!.string.components(separatedBy: "23").count, 3, "源码里一次 + 预览镜像里一次")
         // 退出 + 重渲染后没有残片
         v.deactivate(commit: false)

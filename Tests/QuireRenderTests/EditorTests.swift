@@ -409,6 +409,19 @@ final class FormatActionTests: XCTestCase {
     }
 }
 
+extension XCTestCase {
+    /// 等后台结果落地：轮询到条件成立，不猜固定时长（高负载下 0.6 s 等不到 NLTagger）。条件只是"结果到了"的信号，对错仍由后面的断言判定。
+    /// 结果一到就返回，只有真坏了才等满时限；时限按实测定：后台 QoS + 同时在编译时最慢 52 s
+    @MainActor
+    func waitUntil(_ what: String, timeout: TimeInterval = 60, file: StaticString = #filePath, line: UInt = #line, _ condition: () -> Bool) {
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while !condition() {
+            guard Date() < deadline else { XCTFail("等不到：\(what)", file: file, line: line); return }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+        }
+    }
+}
+
 @MainActor
 final class POSTests: XCTestCase {
     func testEnglishWordsGetColoredAndChineseLeftAlone() {
@@ -416,21 +429,19 @@ final class POSTests: XCTestCase {
         let e = EditorTextView(style: RenderStyle(theme: theme))
         let sv = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 400)); sv.documentView = e
         e.setSource("The quick brown fox jumps over the lazy dog.\n\n我们今天在公园里跑步。\n\n```\nlet code = 1\n```\n")
-        e.posMode = .all
-        let exp = expectation(description: "pos")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { exp.fulfill() }
-        wait(for: [exp], timeout: 3)
         let ns = e.textStorage!.string as NSString
         func color(_ w: String) -> NSColor? { e.textStorage!.attribute(.foregroundColor, at: ns.range(of: w).location, effectiveRange: nil) as? NSColor }
+        e.posMode = .all
+        // 整批结果在主线程一次写完：英文着色出现了，下面"中文 / 代码块不动"才不是没等就过
+        waitUntil("英文着色") { color("fox") == .systemBlue && color("jumps") == .systemRed && color("quick") == .systemGreen }
         XCTAssertEqual(color("fox"), .systemBlue)
         XCTAssertEqual(color("jumps"), .systemRed)
         XCTAssertEqual(color("quick"), .systemGreen)
         XCTAssertEqual(color("跑步"), e.style.foreground, "中文不着色")
         XCTAssertEqual(color("code"), e.style.theme.colors.editor.markdownCode.nsColor, "代码块不动")
         e.posMode = .verbs
-        let exp2 = expectation(description: "verbs")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { exp2.fulfill() }
-        wait(for: [exp2], timeout: 3)
+        // 切模式先同步清色：fox 一清就是正文色，只有 jumps 重新变红才说明新一批到了
+        waitUntil("动词着色") { color("jumps") == .systemRed }
         XCTAssertEqual(color("jumps"), .systemRed)
         XCTAssertEqual(color("fox"), e.style.foreground)
         e.posMode = .off
@@ -445,13 +456,13 @@ final class StyleCheckViewTests: XCTestCase {
         let e = EditorTextView(style: RenderStyle(theme: theme))
         let sv = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 400)); sv.documentView = e
         e.setSource("Basically this is ~~gone~~ fine.\n\n众所周知，好。\n")
-        e.styleChecker = StyleChecker()
-        let exp = expectation(description: "sc"); DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { exp.fulfill() }; wait(for: [exp], timeout: 3)
         let ns = e.textStorage!.string as NSString
         func strike(_ w: String) -> (Int?, NSColor?) {
             let a = e.textStorage!.attributes(at: ns.range(of: w).location, effectiveRange: nil)
             return (a[.strikethroughStyle] as? Int, a[.strikethroughColor] as? NSColor)
         }
+        e.styleChecker = StyleChecker()
+        waitUntil("文风标记") { strike("Basically").1 == EditorTextView.styleCheckColor && strike("众所周知").1 == EditorTextView.styleCheckColor }
         XCTAssertEqual(strike("Basically").1, EditorTextView.styleCheckColor)
         XCTAssertEqual(strike("众所周知").1, EditorTextView.styleCheckColor)
         XCTAssertNotEqual(strike("gone").1, EditorTextView.styleCheckColor, "Markdown 删除线不受影响")

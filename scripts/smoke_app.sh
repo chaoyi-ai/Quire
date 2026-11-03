@@ -1,13 +1,28 @@
 #!/bin/zsh
-# 冒烟：模拟"别人的机器"——App 拷到临时目录、沙盒禁止读本仓库的 .build，然后打开一个带公式 / 表格 / 中文的文档并导出 PDF。
+# 冒烟：模拟"别人的机器"——App 拷到临时目录、换成独立的 bundle id（偏好从空白开始，也不写本机真实的偏好）、沙盒禁止读本仓库的 .build，然后打开一个带公式 / 表格 / 中文的文档并导出 PDF。
 # 任何一步失败（fatalError、导出失败、PDF 太小）都以非零退出，让 build_app.sh / release.sh 停下来。
 # 用法：scripts/smoke_app.sh dist/Quire.app
 set -euo pipefail
 cd "$(dirname "$0")/.."
 APP=${1:-dist/Quire.app}
+SMOKE_ID=com.korako.quire.smoke
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 WORK=$(mktemp -d -t quire-smoke)
-trap 'rm -rf "$WORK"' EXIT
+forget_prefs() {
+  defaults delete "$SMOKE_ID" 2>/dev/null || true   # 域不存在时会报错，那正好
+  rm -f "$HOME/Library/Preferences/$SMOKE_ID.plist"   # delete 只清内容，还留个空文件
+}
+cleanup() {
+  # App 一启动就被 LaunchServices 记下。必须在删目录之前注销：路径没了，lsregister -u 就摘不掉这条记录了
+  [ -z "${PID:-}" ] || "$LSREGISTER" -u "$WORK/Quire.app" || echo "⚠️ 没能从 LaunchServices 注销冒烟副本：$WORK/Quire.app"
+  forget_prefs
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
+forget_prefs   # 上次被中断可能留下旧偏好（zsh 被 Ctrl-C / kill 杀掉时不跑 EXIT trap）
 cp -R "$APP" "$WORK/Quire.app"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $SMOKE_ID" "$WORK/Quire.app/Contents/Info.plist"
+codesign --force --deep --sign - "$WORK/Quire.app"   # 改了 Info.plist，签名要跟着重做
 cat > "$WORK/doc.md" <<'MD'
 # 冒烟测试
 

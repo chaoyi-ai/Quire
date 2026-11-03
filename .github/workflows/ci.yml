@@ -20,6 +20,9 @@ jobs:
             advisory: true
     runs-on: ${{ matrix.runner }}
     continue-on-error: ${{ matrix.advisory }}
+    # 正常一条腿最长约 4.5 分钟（步骤最长约 2 分钟）。主力是下面各步的 15 分钟：步骤超时算失败，提示腿的 continue-on-error 接得住，
+    # 整个 run 仍是 success，release.sh 不被挡。job 级超时算取消（不算失败），只兜底没单独限时的步骤（checkout、缓存等）
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode
@@ -33,14 +36,18 @@ jobs:
           key: spm-${{ matrix.runner }}-${{ hashFiles('Package.resolved') }}
           restore-keys: spm-${{ matrix.runner }}-
       - name: Build (release)
+        timeout-minutes: 15
         run: swift build -c release
       - name: Test
+        timeout-minutes: 15
         run: swift test
       - name: Bench
+        timeout-minutes: 15
         run: swift run -c release quire-bench all > bench.json && cat bench.json
       - name: Bench budget gate
         run: scripts/bench_gate.sh bench.json 3
       - name: Build app bundle (with isolated-.build smoke test)
+        timeout-minutes: 15
         run: scripts/build_app.sh --no-mermaid && ls -la dist/
       - name: Verify bundle contents
         run: |
