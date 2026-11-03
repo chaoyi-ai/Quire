@@ -4,6 +4,17 @@ import AppKit
 import QuireCore
 import QuireRender
 
+/// CI 把所有测试目标合成一个测试包，NSApp 在前面的用例里就建好了。之后 XCTWaiter 等 async 用例时跑事件循环，AppKit 随时可能走启动收尾
+/// （_DPSNextEvent → _sendFinishLaunchingNotification → _reopenWindowsAsNecessary…），那里读共享控制器，没有就建默认的。
+/// 所以要赶在所有用例之前建：XCTest 枚举测试类时（任何用例开始之前）读 defaultTestSuite，这个类没有用例，只借这个时机。
+/// 不能写在 WorkspaceTests 上：覆写了它的类，swift test --filter / --skip 会选中 0 个用例，还是绿的
+final class AppBootSentinel: XCTestCase {
+    override class var defaultTestSuite: XCTestSuite {
+        MainActor.assumeIsolated { WorkspaceTests.bootController() }
+        return XCTestSuite(name: "AppBootSentinel")
+    }
+}
+
 /// 工作区窗口模型（ADR-18）：标签的增删选、临时标签替换 / 固定、document 换挂、文档控制器的去向判断、状态存取。
 /// 在 xctest 进程里真建窗口（不显示到屏幕的也能建），不弹任何 sheet（只用没改过的文档，或改过但有文件、就地自动保存的文档；要取消就用 ScriptedDocument 替面板回答）。
 @MainActor
@@ -11,11 +22,20 @@ final class WorkspaceTests: XCTestCase {
     private var tmp: URL!
     private var hangWatchdog: DispatchWorkItem?
     nonisolated(unsafe) private static var booted = false
+    /// 共享控制器建好时的类型：断言失败时分得清是一开始就输了，还是建好之后被换掉
+    nonisolated(unsafe) private static var sharedAtBoot = "未建"
 
-    /// 同一个测试进程只能建一次（所有测试类都走这里）：macOS 26 上再建一个 QuireDocumentController，共享控制器就变回系统默认的
+    /// 所有测试类都走这里。共享控制器先到先得：已经有默认的，QuireDocumentController() 拿到的还是默认的。所以要赶在所有用例之前（AppBootSentinel）
+    static func bootController() {
+        guard !booted else { return }
+        booted = true
+        _ = QuireDocumentController()
+        sharedAtBoot = "\(Swift.type(of: NSDocumentController.shared))"
+    }
+
     static func bootApp() {
-        // 和 main.swift 一样的顺序：先建 QuireDocumentController（NSApplication.shared 会顺手建默认的文档控制器）
-        if !booted { _ = QuireDocumentController(); _ = NSApplication.shared; booted = true }
+        bootController()
+        _ = NSApplication.shared
     }
 
     override func setUp() async throws {
@@ -24,7 +44,7 @@ final class WorkspaceTests: XCTestCase {
         DispatchQueue.global().asyncAfter(deadline: .now() + 120, execute: watchdog)
         hangWatchdog = watchdog
         Self.bootApp()
-        XCTAssertTrue(NSDocumentController.shared is QuireDocumentController, "QuireDocumentController 必须是共享控制器（在任何 NSDocumentController.shared 之前建）")
+        XCTAssertTrue(NSDocumentController.shared is QuireDocumentController, "QuireDocumentController 必须是共享控制器：建好时是 \(Self.sharedAtBoot)，现在是 \(Swift.type(of: NSDocumentController.shared))")
         tmp = FileManager.default.temporaryDirectory.appendingPathComponent("quire-ws-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         for n in ["a", "b", "c"] { try "# \(n)\n\ntext\n".write(to: tmp.appendingPathComponent("\(n).md"), atomically: true, encoding: .utf8) }
