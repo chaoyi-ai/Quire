@@ -597,6 +597,61 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertTrue(a.doc.source.contains("typed"))
     }
 
+    /// 在编辑器里打一段字：撤销记录在文档的 undoManager 上，目标是这个编辑器的文本
+    private func typeInEditor(_ doc: MarkdownDocument, _ text: String) async throws {
+        let ws = try XCTUnwrap(doc.workspace)
+        ws.select(try XCTUnwrap(ws.tab(for: doc)))
+        ws.setModeEditor(nil)
+        let tv: NSTextView = try XCTUnwrap(ws.editorViewController.textView)
+        tv.setSelectedRange(NSRange(location: (tv.string as NSString).length, length: 0))
+        tv.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await Task.sleep(for: .milliseconds(50))
+    }
+
+    /// 移走之后旧编辑器没了，它留下的撤销不能再用（⌘Z 崩溃，或者文档变干净、内容没存）：文档还是脏的、内容还在，新编辑器的撤销照常
+    private func assertUndoStartsOverAfterMove(_ doc: MarkdownDocument, keeps text: String) async throws {
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(doc.undoManager?.canUndo, false, "旧编辑器的撤销要作废")
+        XCTAssertTrue(doc.isDocumentEdited)
+        XCTAssertTrue(doc.source.contains(text))
+        guard doc.undoManager?.canUndo == false else { return }   // 不清就别按：会把整轮测试崩掉
+        try await typeInEditor(doc, "after")
+        XCTAssertEqual(doc.undoManager?.canUndo, true)
+        doc.undoManager?.undo()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertFalse(doc.source.contains("after"))
+        XCTAssertTrue(doc.source.contains(text))
+        XCTAssertTrue(doc.isDocumentEdited, "撤销的只是移动之后打的字，移动之前打的还没存")
+    }
+
+    func testUndoStartsOverAfterMovingATabToANewWindow() async throws {
+        let a = try await openFile("a.md")
+        _ = try await openFile("b.md", in: a.ws)
+        try await typeInEditor(a.doc, "typed")
+        XCTAssertEqual(a.doc.undoManager?.canUndo, true)
+        a.ws.select(try XCTUnwrap(a.ws.tab(for: a.doc)))
+        a.ws.moveTabToNewWindow(nil)
+        XCTAssertFalse(a.doc.workspace === a.ws)
+        try await assertUndoStartsOverAfterMove(a.doc, keeps: "typed")
+    }
+
+    func testUndoStartsOverAfterMergingWindows() async throws {
+        let a = try await openFile("a.md")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("quire-other-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let x = dir.appendingPathComponent("x.md")
+        try external("# x\n", to: x)
+        let opened = await open(x, in: nil, ephemeral: false)
+        let docX = try XCTUnwrap(opened)
+        XCTAssertFalse(docX.workspace === a.ws)
+        try await typeInEditor(docX, "typed")
+        XCTAssertEqual(docX.undoManager?.canUndo, true)
+        a.ws.mergeAllWindows(nil)
+        XCTAssertTrue(docX.workspace === a.ws)
+        try await assertUndoStartsOverAfterMove(docX, keeps: "typed")
+    }
+
     /// 块没走 onDeactivate 就被收起（主题变化等）之后切回编辑器：编辑器要跟上文档，否则接着打字会盖掉混合模式的改动
     func testEditorCatchesUpWhenHybridBlockWasDroppedWithoutCommit() async throws {
         let (a, tv, hybrid) = try await editInHybridAfterEditor()

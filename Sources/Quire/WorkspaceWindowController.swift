@@ -355,6 +355,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         tabs.remove(at: i)
         tab.fileURLObserver = nil
         tab.document.workspace = nil
+        // 撤销记录的目标是这个标签的编辑器，标签没了它也没了：留着 ⌘Z 会崩溃，或者文档变干净、改动没存。别的窗口会建新编辑器，撤销从头开始
+        tab.document.undoManager?.removeAllActions()
         if current === tab {
             current = nil
             if let next = tabs[safe: min(i, tabs.count - 1)] { select(next, catchUp: catchUp) }
