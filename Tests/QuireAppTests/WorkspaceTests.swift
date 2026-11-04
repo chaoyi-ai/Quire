@@ -2001,8 +2001,7 @@ final class WorkspaceTests: XCTestCase {
             XCTAssertEqual(try? disk(url), "# changed\n", "\(name) \(operation)", file: file, line: line)
             if let neighbour { XCTAssertEqual(try? disk(folder.appendingPathComponent(neighbour)), "# neighbour\n", "\(name) \(operation)", file: file, line: line) }
             XCTAssertFalse(doc.isDocumentEdited, "\(name) \(operation)", file: file, line: line)
-            // 不在这里关，tearDown 统一关：NSDocument 存完之后在后台线程保留旧版本，最后读 windowControllers（不加锁），
-            // 紧接着关（摘窗口控制器）在 macOS 15 上撞过 NSRangeException，整轮测试一起崩
+            doc.close()
         }
     }
 
@@ -2036,6 +2035,44 @@ final class WorkspaceTests: XCTestCase {
     func testSavingWritesTheFileItselfWhenItsMdNamesakeExists() async throws {
         try await assertSavingKeepsName("y.txt", beside: "y.md")
         try await assertSavingKeepsName("NOTES", beside: "NOTES.md")
+    }
+
+    /// 数后台线程读了几次 windowControllers。后台那次只记数、返回空：这里不撞崩溃，只看读没读
+    private final class WindowControllersReadDocument: MarkdownDocument {
+        private let lock = NSLock()
+        nonisolated(unsafe) private var reads = 0, invalidations = 0
+        var offMainReads: Int { lock.withLock { reads } }
+        var offMainInvalidations: Int { lock.withLock { invalidations } }
+
+        nonisolated override var windowControllers: [NSWindowController] {
+            guard Thread.isMainThread else { lock.withLock { reads += 1 }; return [] }
+            return MainActor.assumeIsolated { super.windowControllers }
+        }
+        nonisolated override func invalidateRestorableState() {
+            super.invalidateRestorableState()
+            if !Thread.isMainThread { lock.withLock { invalidations += 1 } }
+        }
+    }
+
+    /// NSDocument 存完之后在后台线程保留旧版本，最后调 invalidateRestorableState，默认实现读 windowControllers 不加锁：
+    /// 主线程同时摘窗口控制器（切标签、关闭）就 NSRangeException，整个进程崩掉。撞上全凭运气，后台线程读没读是必现的
+    func testSavingDoesNotReadWindowControllersOffTheMainThread() async throws {
+        let url = tmp.appendingPathComponent("a.md")
+        let doc = WindowControllersReadDocument()
+        doc.fileURL = url
+        doc.fileType = QuireDocumentController.markdownType
+        NSDocumentController.shared.addDocument(doc)
+        try doc.read(from: Data(contentsOf: url), ofType: QuireDocumentController.markdownType)
+        doc.fileModificationDate = try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+
+        doc.replaceContents("# changed\n")
+        let error = try await save(doc, .saveOperation)
+        XCTAssertNil(error)
+        // 版本是在存储回调前后才在后台保留的，要等它走完
+        let deadline = Date().addingTimeInterval(10)
+        while doc.offMainInvalidations == 0, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertGreaterThan(doc.offMainInvalidations, 0, "系统不再从后台调 invalidateRestorableState：这个测试测不到东西了，连同 MarkdownDocument 里的 override 一起重新看")
+        XCTAssertEqual(doc.offMainReads, 0)
     }
 
     /// 存储为 .txt 之后也一样：扩展名是用户刚选的

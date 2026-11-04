@@ -220,6 +220,16 @@ class MarkdownDocument: NSDocument {
         super.close()
     }
 
+    /// NSDocument 存完之后在后台线程保留旧版本，最后调到这里，默认实现不加锁地读 windowControllers：主线程同时摘窗口控制器（切标签、关闭）就是 NSRangeException，整个进程崩掉。回主线程再做。
+    /// `nonisolated`：SDK 把 NSDocument 标成主线程的，不写的话 Swift 6 在入口断言主线程，后台这一调必崩
+    nonisolated override func invalidateRestorableState() {
+        guard Thread.isMainThread else {
+            performSelector(onMainThread: #selector(NSDocument.invalidateRestorableState), with: nil, waitUntilDone: false)
+            return
+        }
+        MainActor.assumeIsolated { super.invalidateRestorableState() }
+    }
+
     /// 文档的窗口就是工作区的窗口，标签在不在前台都一样。窗口控制器只挂在当前标签的文档上，默认实现对后台标签返回 nil：
     /// 系统的询问就退回 app 级模态（答完文档又被标成未保存）；询问开着时等活动队列，AppKit 找不到 sheet，主线程真的死等，再也答不了
     override var windowForSheet: NSWindow? { super.windowForSheet ?? MainActor.assumeIsolated { workspace?.window } }
