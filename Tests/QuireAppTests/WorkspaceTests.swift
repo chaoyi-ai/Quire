@@ -2630,27 +2630,164 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(try disk(a.url), "# theirs\ntyped")
     }
 
-    /// 切过来时的重载和监视器的重载走同一条路：窗格刚挂上就重载，不能跳回开头。
-    /// 只看没有回到开头。精确位置现在保不住：排好之后真实高度替换估算高度，滚动位置不动，内容就错开了（真实 App 上第 120 节跳到第 89 节，监视器的重载也一样，已知未修）
-    func testSelectingBackgroundTabDoesNotJumpToTheTop() async throws {
+    /// 切过来时的重载和监视器的重载走同一条路：窗格刚挂上就重载，不能跳回开头，也不能跳到别的章节。
+    /// 要等全文排完再看：重载后的高度先是估算的，排好之后真实高度替换估算高度，以前滚动位置不动，内容就错开了（第 120 节跳到第 89 节）。
+    /// 文档前后几处都要看：越靠后，目标 y 越容易超过估算的文档底被夹住（每批放回之前不先排一次视口，后四分之一就保不住：第 170 节 → 第 129 节）；
+    /// 滚到底的那一处要求顶部还是同一块、块内偏移不变（也就还在底）
+    func testSelectingBackgroundTabKeepsTheReadingPosition() async throws { try await assertSelectingBackgroundTabKeepsTheReadingPosition(at: 240) }   // 第 120 节
+    func testSelectingBackgroundTabKeepsTheReadingPositionLateInTheDocument() async throws { try await assertSelectingBackgroundTabKeepsTheReadingPosition(at: 340) }
+    func testSelectingBackgroundTabKeepsTheReadingPositionNearTheEnd() async throws { try await assertSelectingBackgroundTabKeepsTheReadingPosition(at: 390) }
+    func testSelectingBackgroundTabKeepsTheReadingPositionAtTheEnd() async throws { try await assertSelectingBackgroundTabKeepsTheReadingPosition(at: nil) }
+
+    private func assertSelectingBackgroundTabKeepsTheReadingPosition(at block: Int?) async throws {
+        try await assertReloadKeepsTheReadingPosition(at: block) { a, tab, changed in
+            _ = try await self.openFile("b.md", in: a.ws)
+            try self.external(changed, to: a.url)
+            a.ws.select(tab)
+            a.doc.session.stopWatching()   // 只看切标签这一下：监视器晚到的事件会替没写对的地方补救
+        }
+    }
+
+    /// 监视器的重载：同上
+    func testWatcherReloadKeepsTheReadingPosition() async throws { try await assertWatcherReloadKeepsTheReadingPosition(at: 240) }
+    func testWatcherReloadKeepsTheReadingPositionLateInTheDocument() async throws { try await assertWatcherReloadKeepsTheReadingPosition(at: 340) }
+    func testWatcherReloadKeepsTheReadingPositionNearTheEnd() async throws { try await assertWatcherReloadKeepsTheReadingPosition(at: 390) }
+    func testWatcherReloadKeepsTheReadingPositionAtTheEnd() async throws { try await assertWatcherReloadKeepsTheReadingPosition(at: nil) }
+
+    private func assertWatcherReloadKeepsTheReadingPosition(at block: Int?) async throws {
+        try await assertReloadKeepsTheReadingPosition(at: block) { a, _, changed in try self.external(changed, to: a.url) }
+    }
+
+    private func assertReloadKeepsTheReadingPosition(
+        at block: Int?,
+        reload: @MainActor (_ a: (doc: MarkdownDocument, ws: WorkspaceWindowController, url: URL), _ tab: DocumentTab, _ changed: String) async throws -> Void
+    ) async throws {
+        let (a, tab, body) = try await openLongDocumentInReader(width: 800)   // 估算误差随宽度变：900 宽时 0.10.3 在第 120 节恰好不跳，800 宽跳到第 95 节
+        let tv = tab.reader.textView!
+        let (top, offset) = try await scrollLongDocument(tv, to: block)
+        try await reload(a, tab, body.replacingOccurrences(of: "## Section 5\n", with: "## Section five\n"))   // 改的是视口之前的块
+        let reloaded = try await eventually { tv.string.contains("Section five") }
+        XCTAssertTrue(reloaded)
+        let relaidOut = try await eventually { tv.isFullyLaidOut }
+        XCTAssertTrue(relaidOut)
+        try await Task.sleep(for: .milliseconds(100))   // 排完之后的下一轮
+        XCTAssertEqual(tv.topVisibleBlockIndex(), top)
+        XCTAssertEqual(tv.scrollOffset(withinBlock: top), offset, accuracy: 2)
+    }
+
+    /// 全文排版途中，眼前的内容也不能换成别的章节再换回来（排到视口那一批，文档高度还是估算的，滚动位置会被夹住一批）。
+    /// 每一轮主队列看一次（全文排版的每一批也是一轮主队列，两条链交替排队），只看排好的片段，不触发排版
+    func testWatcherReloadKeepsTheReadingPositionBetweenLayoutBatches() async throws { try await assertWatcherReloadKeepsTheReadingPositionBetweenLayoutBatches(at: 240) }
+    func testWatcherReloadKeepsTheReadingPositionBetweenLayoutBatchesLateInTheDocument() async throws { try await assertWatcherReloadKeepsTheReadingPositionBetweenLayoutBatches(at: 340) }
+    func testWatcherReloadKeepsTheReadingPositionBetweenLayoutBatchesNearTheEnd() async throws { try await assertWatcherReloadKeepsTheReadingPositionBetweenLayoutBatches(at: 390) }
+    func testWatcherReloadKeepsTheReadingPositionBetweenLayoutBatchesAtTheEnd() async throws { try await assertWatcherReloadKeepsTheReadingPositionBetweenLayoutBatches(at: nil) }
+
+    private func assertWatcherReloadKeepsTheReadingPositionBetweenLayoutBatches(at block: Int?) async throws {
+        let (a, tab, body) = try await openLongDocumentInReader(width: 800)   // 估算误差随宽度变：900 宽时 0.10.3 在第 120 节恰好不跳，800 宽跳到第 95 节
+        let tv = tab.reader.textView!
+        let (top, _) = try await scrollLongDocument(tv, to: block)
+        try external(body.replacingOccurrences(of: "## Section 5\n", with: "## Section five\n"), to: a.url)
+        let reloaded = try await eventually { tv.string.contains("Section five") }
+        XCTAssertTrue(reloaded)
+        var tops: [Int] = []
+        var finished = false   // 排版排不完（回归）时取样也要停，不能拖进后面的测试
+        func sample() {
+            guard let tlm = tv.textLayoutManager, let cs = tv.textContentStorage, let sv = tv.enclosingScrollView, let rendered = tv.rendered else { return }
+            if let vr = tlm.textViewportLayoutController.viewportRange {
+                let y = sv.contentView.bounds.minY + sv.contentInsets.top + 12 - tv.textContainerInset.height   // 和 topVisibleBlockIndex 一样取在留白之下
+                var hit: NSTextLayoutFragment?
+                tlm.enumerateTextLayoutFragments(from: vr.location, options: []) { f in
+                    if f.layoutFragmentFrame.maxY > y { hit = f }
+                    return hit == nil
+                }
+                if let hit, hit.state == .layoutAvailable, let i = rendered.blockIndex(at: cs.offset(from: cs.documentRange.location, to: hit.rangeInElement.location)) { tops.append(i) }
+            }
+            if !tv.isFullyLaidOut && !finished { DispatchQueue.main.async { sample() } }
+        }
+        sample()
+        let relaidOut = try await eventually { tv.isFullyLaidOut }
+        finished = true
+        XCTAssertTrue(relaidOut)
+        let runs = tops.reduce(into: [(Int, Int)]()) { r, t in if r.last?.0 == t { r[r.count - 1].1 += 1 } else { r.append((t, 1)) } }
+        XCTAssertEqual(Set(tops), [top], "排版途中可见区顶部换过块（块 × 次数）：\(runs)")
+    }
+
+    /// 200 节（400 块）的长文，阅读视图，等全文排完。窗口尺寸是记住的：宽高都显式定下，不靠之前留下的窗口状态
+    private func openLongDocumentInReader(width: CGFloat) async throws -> (a: (doc: MarkdownDocument, ws: WorkspaceWindowController, url: URL), tab: DocumentTab, body: String) {
         let body = (0..<200).map { "## Section \($0)\n\n" + String(repeating: "paragraph text ", count: 40) + "\n\n" }.joined()
         try external(body, to: tmp.appendingPathComponent("long.md"))
         let a = try await openFile("long.md")
         a.ws.setModeReader(nil)
-        let tab = try XCTUnwrap(a.ws.tab(for: a.doc)), reader = tab.reader
-        let rendered = try await eventually { reader.textView.string.contains("Section 199") }
+        let tab = try XCTUnwrap(a.ws.tab(for: a.doc)), tv = tab.reader.textView!
+        let rendered = try await eventually { tv.string.contains("Section 199") }
         XCTAssertTrue(rendered)
-        reader.scroll(toBlock: 200)
-        let scrolled = try await eventually { (reader.textView.topVisibleBlockIndex() ?? 0) > 100 }
-        XCTAssertTrue(scrolled)
-        try await Task.sleep(for: .milliseconds(500))   // 滚动动画走完
-        _ = try await openFile("b.md", in: a.ws)
-        try external(body.replacingOccurrences(of: "## Section 5\n", with: "## Section five\n"), to: a.url)   // 改的是视口之前的块
-        a.ws.select(tab)
-        a.doc.session.stopWatching()   // 只看切标签这一下：监视器晚到的事件会替没写对的地方补救
-        let reloaded = try await eventually { reader.textView.string.contains("Section five") }
-        XCTAssertTrue(reloaded)
-        XCTAssertGreaterThan(reader.textView.topVisibleBlockIndex() ?? 0, 50)
+        try await Task.sleep(for: .milliseconds(200))   // 切模式之后窗口宽度的校正在下一轮
+        let w = try XCTUnwrap(tv.window)
+        w.setContentSize(NSSize(width: width, height: 700))
+        w.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        let laidOut = try await eventually { tv.isFullyLaidOut }
+        XCTAssertTrue(laidOut)
+        return (a, tab, body)
+    }
+
+    /// 滚到块顶（nil = 滚到底），返回可见区顶部的块和块内偏移
+    private func scrollLongDocument(_ tv: ReaderTextView, to block: Int?) async throws -> (top: Int, offset: CGFloat) {
+        let sv = try XCTUnwrap(tv.enclosingScrollView), clip = sv.contentView
+        if let block { tv.scroll(toBlock: block, offset: 0) } else {
+            clip.setBoundsOrigin(CGPoint(x: 0, y: tv.frame.height + sv.contentInsets.bottom - clip.bounds.height))
+            sv.reflectScrolledClipView(clip)
+        }
+        try await Task.sleep(for: .milliseconds(200))   // 滚动的第二轮校正
+        let top = try XCTUnwrap(tv.topVisibleBlockIndex())
+        if let block { XCTAssertEqual(top, block) } else { XCTAssertTrue(isScrolledToEnd(tv)) }
+        return (top, tv.scrollOffset(withinBlock: top))
+    }
+
+    private func isScrolledToEnd(_ tv: ReaderTextView) -> Bool {
+        guard let sv = tv.enclosingScrollView else { return false }
+        return sv.contentView.bounds.maxY >= tv.frame.height + sv.contentInsets.bottom - 1
+    }
+
+    /// 阅读视图变宽：内容列宽变了，排好的高度作废，顶部还是那一块。宽度一变先按估算位置放回去（不放的话文档后部会被夹在估算的文档底：
+    /// 第 170 节 → 第 197 节），全文排版再按真实位置放；全文排版开始之前也要在原处。滚到底的要求还在底
+    func testReaderWidthChangeKeepsTheReadingPosition() async throws { try await assertReaderWidthChangeKeepsTheReadingPosition(at: 240) }   // 第 120 节
+    func testReaderWidthChangeKeepsTheReadingPositionLateInTheDocument() async throws { try await assertReaderWidthChangeKeepsTheReadingPosition(at: 340) }
+    func testReaderWidthChangeKeepsTheReadingPositionNearTheEnd() async throws { try await assertReaderWidthChangeKeepsTheReadingPosition(at: 390) }
+    func testReaderWidthChangeKeepsTheReadingPositionAtTheEnd() async throws { try await assertReaderWidthChangeKeepsTheReadingPosition(at: nil) }
+
+    private func assertReaderWidthChangeKeepsTheReadingPosition(at block: Int?) async throws {
+        let (_, tab, _) = try await openLongDocumentInReader(width: 520)   // 先放窄，变宽时内容列宽才会变（宽了有上限）
+        let tv = tab.reader.textView!, w = try XCTUnwrap(tv.window)
+        let top = try await scrollLongDocument(tv, to: block).top
+        let width = tv.textContainer?.size.width ?? 0
+        w.setContentSize(NSSize(width: 820, height: 700))
+        w.layoutIfNeeded()
+        XCTAssertNotEqual(tv.textContainer?.size.width ?? 0, width, accuracy: 1)
+        XCTAssertFalse(tv.isFullyLaidOut)
+        try await Task.sleep(for: .milliseconds(150))   // 全文排版 0.5 s 后才开始：这之间按估算位置放着，眼前也不能换章节
+        if !tv.isFullyLaidOut {   // 机器忙、睡过了头，全文已经排完的话，这一步查不到"开始之前"，只查下面排完之后
+            if block == nil { XCTAssertTrue(isScrolledToEnd(tv)) } else { XCTAssertEqual(tv.topVisibleBlockIndex(), top, "全文排版开始之前") }
+        }
+        let done = try await eventually { tv.isFullyLaidOut }
+        XCTAssertTrue(done)
+        try await Task.sleep(for: .milliseconds(300))
+        // 滚到底的：变宽之后文档变短，最后一屏装得下更多块，顶部那一块放回原处就超过了文档底，停在底
+        if block == nil { XCTAssertTrue(isScrolledToEnd(tv)) } else { XCTAssertEqual(tv.topVisibleBlockIndex(), top) }
+    }
+
+    /// 窗口已经宽过最大列宽：再变宽，内容列宽不变，TextKit 照样把排好的版作废（高度回到估算值），顶部也还是那一块
+    func testReaderWidthChangeBeyondTheMaxColumnWidthKeepsTheReadingPosition() async throws {
+        let (_, tab, _) = try await openLongDocumentInReader(width: 1300)
+        let tv = tab.reader.textView!, w = try XCTUnwrap(tv.window)
+        let (top, offset) = try await scrollLongDocument(tv, to: 340)
+        let width = try XCTUnwrap(tv.textContainer?.size.width)
+        w.setContentSize(NSSize(width: 1400, height: 700))
+        w.layoutIfNeeded()
+        XCTAssertEqual(tv.textContainer?.size.width ?? 0, width, accuracy: 0.5)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(tv.topVisibleBlockIndex(), top)
+        XCTAssertEqual(tv.scrollOffset(withinBlock: top), offset, accuracy: 0.5)
     }
 
     /// touch 没有改内容：切过来之后存储不该报"文件被改过"（以前是假警报）

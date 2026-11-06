@@ -129,6 +129,8 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
 
     private var lastFittedWidth: CGFloat = 0
     public override func setFrameSize(_ newSize: NSSize) {
+        // 宽度变了先记下顶部块：排好的版作废、高度回到估算值，文档后部的滚动 y 会超过估算的文档底被夹住（第 170 节跳到第 197 节）
+        let anchor = abs(newSize.width - frame.width) > 0.5 ? captureScrollAnchor() : nil
         super.setFrameSize(newSize)
         updateContentInsets()
         // 宽度变化：把超宽的图片 / Mermaid 附件重新缩放到内容列宽
@@ -137,6 +139,9 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
             fitAttachmentsToWidth()
             startProgressiveLayout(delay: 0.5)   // 换行位置全变，排好的高度作废
         }
+        // 按估算位置放回去（和重载一样），之后全文排版每批再按真实位置放。不放在上面的分支里：
+        // 内容列宽不变（窗口已经宽过最大列宽）TextKit 也把排好的版作废了；列宽变了的那次也可能是 super 里重入的 setFrameSize 处理的
+        if let anchor { scroll(toBlock: anchor.0, offset: anchor.1) }
     }
 
     /// 块级图片的显示尺寸：作者指定宽度（HTML width / {width=…}）优先，再不超过内容列宽；`apply(image:)` 与 `fitAttachmentsToWidth` 共用这一个算法
@@ -723,7 +728,7 @@ public class ReaderTextView: NSTextView, @preconcurrency NSTextLayoutManagerDele
 
     // MARK: - 渐进式全文排版（见 ProgressiveLayout.swift）
 
-    private lazy var progressiveLayout = ProgressiveLayout(textView: self)
+    private lazy var progressiveLayout = ProgressiveLayout(textView: self, anchorsTop: true)   // 重载后排完不跳（见 ProgressiveLayout）
     public var progressiveLayoutEnabled = true
     /// 超过这个字符数不做全文排版：排好的片段每 1 MB 文本约占 330 MB 内存（1 MB 文档实测 RSS 90 → 420 MB），
     /// 200 KB 以内（绝大多数笔记 / 文章）换滚动条稳定值得，再大就只排视口（滚动条会随估算修正而跳）
