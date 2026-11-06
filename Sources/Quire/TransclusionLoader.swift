@@ -42,7 +42,7 @@ enum TransclusionLoader {
             if DropSupport.imageExtensions.contains(e) { return (abs, .image(path: abs, alt: (abs as NSString).lastPathComponent)) }
             let size = (try? FileManager.default.attributesOfItem(atPath: abs)[.size] as? Int) ?? 0
             guard size <= Transclusion.maxBytes else { return (abs, .unavailable("文件太大")) }
-            guard let data = FileManager.default.contents(atPath: abs), let text = String(data: data, encoding: .utf8) else { return (abs, .unavailable("无法读取")) }
+            guard let data = FileManager.default.contents(atPath: abs), let text = MarkdownDocument.utf8Text(data) else { return (abs, .unavailable("无法读取")) }
             if csvExtensions.contains(e) { return (abs, .csv(text)) }
             if QuireDocumentController.markdownExtensions.contains(e) { return (abs, .markdown(text)) }
             return (abs, .unavailable("不支持的类型"))

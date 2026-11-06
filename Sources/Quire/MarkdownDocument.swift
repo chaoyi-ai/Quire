@@ -298,7 +298,7 @@ class MarkdownDocument: NSDocument {
     /// UTF-16 只认 BOM：几乎任何字节都能当成无 BOM 的大端 UTF-16 解开（奇数长度还丢掉最后一个字节），GBK 短文和 Latin-1 全被截走，存一次文件就毁了。
     /// 代价：真正无 BOM 的 UTF-16 显示成乱码（其中大端的以前能读对），但存储时字节原样写回，不再加 BOM、反转字节序
     nonisolated static func decode(_ data: Data) -> (text: String, encoding: String.Encoding)? {
-        if let s = String(data: data, encoding: .utf8) { return (s, .utf8) }
+        if let s = utf8Text(data) { return (s, .utf8) }
         let bigEndian = data.starts(with: [0xFE, 0xFF])
         if bigEndian || data.starts(with: [0xFF, 0xFE]) {
             let order: String.Encoding = bigEndian ? .utf16BigEndian : .utf16LittleEndian
@@ -310,6 +310,15 @@ class MarkdownDocument: NSDocument {
         if looksLikeGB18030(data), let s = String(data: data, encoding: gb) { return (s, gb) }
         if let s = String(data: data, encoding: .isoLatin1) { return (s, .isoLatin1) }
         return nil
+    }
+
+    /// UTF-8 字节 → 文字，开头的一个 BOM 不算正文（存储时也不写回）。`String(data:encoding: .utf8)` 从 macOS 26 起自己去掉一个，macOS 15 留着：
+    /// 第一行 `# 标题` 前面多一个 U+FEFF 就不是标题了，加了 BOM 的外部修改也认不出只是字节变了。两边都按新系统来：只去一个，第二个留着。
+    /// 去没去看长度：合法的 UTF-8 解出来字节不变，还和原来一样长就是 BOM 还在
+    nonisolated static func utf8Text(_ data: Data) -> String? {
+        guard let s = String(data: data, encoding: .utf8) else { return nil }
+        guard data.starts(with: [0xEF, 0xBB, 0xBF]), s.utf8.count == data.count else { return s }
+        return String(s.unicodeScalars.dropFirst())
     }
 
     /// 文字 → 字节，`decode` 的反方向：存储、往没打开的文件追加时改写整个文件都走这里。

@@ -21,7 +21,10 @@ enum StyleRulesStore {
     @MainActor static func checker() -> StyleChecker {
         var text = ""
         if FileManager.default.fileExists(atPath: url.path) {
-            do { text = try String(contentsOf: url, encoding: .utf8) }
+            do {   // 和打开文档一样去掉开头的 BOM（`MarkdownDocument.utf8Text`）：macOS 15 留着它，第一行规则就对不上了
+                guard let t = MarkdownDocument.utf8Text(try Data(contentsOf: url)) else { throw CocoaError(.fileReadInapplicableStringEncoding, userInfo: [NSFilePathErrorKey: url.path]) }
+                text = t
+            }
             catch { warn(String(format: L("读不了文风规则文件 %@：%@"), url.path, error.localizedDescription)) }
         }
         let c = StyleChecker.load(userRules: text)

@@ -1525,6 +1525,24 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(MarkdownDocument.decode(try Data(contentsOf: a.url))?.text, "Señor\nINFORMAÇÃO")
     }
 
+    /// UTF-8 开头的一个 BOM 不算正文，两个系统一样：macOS 27 的 `String(data:encoding:)` 自己去掉一个，macOS 15 留着（CI 上第一行 `# x` 不是标题，加 BOM 的外部修改被当成改了文字）。第二个 BOM 两边都留着
+    func testUTF8BOMIsNotPartOfTheText() async throws {
+        let bom = Data([0xEF, 0xBB, 0xBF])
+        XCTAssertEqual(MarkdownDocument.decode(bom + Data("# bom\n".utf8))?.text, "# bom\n")
+        XCTAssertEqual(MarkdownDocument.decode(bom + Data("# bom\n".utf8))?.encoding, .utf8)
+        XCTAssertEqual(MarkdownDocument.decode(bom + bom + Data("A".utf8))?.text, "\u{FEFF}A", "只去一个")
+        XCTAssertEqual(MarkdownDocument.decode(bom)?.text, "")
+        XCTAssertEqual(MarkdownDocument.decode(Data("A\u{FEFF}".utf8))?.text, "A\u{FEFF}", "不在开头的不动")
+
+        let signed = withAuthorship("# signed\n\nbody\n")
+        let a = try await openBytes(bom + Data(signed.utf8), named: "bom-signed.md")
+        a.doc.session.stopWatching()
+        XCTAssertEqual(a.doc.source, "# signed\n\nbody\n")
+        XCTAssertNotNil(a.doc.authorship, "归属块照样拆出来")
+        XCTAssertFalse(a.doc.authorshipMismatch)
+        XCTAssertEqual(a.doc.encoding, .utf8)
+    }
+
     func testUTF16WithBOMOpensAndStaysUTF16() async throws {
         let text = "# 标题 😀\n\nbody\n"
         for (name, bigEndian) in [("le.md", false), ("be.md", true)] {
