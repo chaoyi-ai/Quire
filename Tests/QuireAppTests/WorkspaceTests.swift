@@ -1525,7 +1525,7 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(MarkdownDocument.decode(try Data(contentsOf: a.url))?.text, "Señor\nINFORMAÇÃO")
     }
 
-    /// UTF-8 开头的一个 BOM 不算正文，两个系统一样：macOS 27 的 `String(data:encoding:)` 自己去掉一个，macOS 15 留着（CI 上第一行 `# x` 不是标题，加 BOM 的外部修改被当成改了文字）。第二个 BOM 两边都留着
+    /// UTF-8 开头的一个 BOM 不算正文，两个系统一样：macOS 26 起 `String(data:encoding:)` 自己去掉一个，macOS 15 留着（CI 上第一行 `# x` 不是标题，加 BOM 的外部修改被当成改了文字）。第二个 BOM 两边都留着
     func testUTF8BOMIsNotPartOfTheText() async throws {
         let bom = Data([0xEF, 0xBB, 0xBF])
         XCTAssertEqual(MarkdownDocument.decode(bom + Data("# bom\n".utf8))?.text, "# bom\n")
@@ -1884,7 +1884,7 @@ final class WorkspaceTests: XCTestCase {
             let name = "utf8-\(i).md"
             XCTAssertEqual(try appendWithoutOpening("中", to: s.old, named: name), s.expected, name)
             // BOM 留不留不归这里管，只要求和直接解一样；内存里一律 LF
-            let text = try XCTUnwrap(String(data: s.expected, encoding: .utf8)).replacingOccurrences(of: "\r\n", with: "\n")
+            let text = try XCTUnwrap(MarkdownDocument.decode(s.expected)?.text).replacingOccurrences(of: "\r\n", with: "\n")   // 系统的解码在 macOS 15 上留着 BOM
             try await assertOpens(name, as: text, encoding: .utf8)
         }
     }
@@ -2805,7 +2805,7 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(tv.textContainer?.size.width ?? 0, width, accuracy: 0.5)
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(tv.topVisibleBlockIndex(), top)
-        XCTAssertEqual(tv.scrollOffset(withinBlock: top), offset, accuracy: 0.5)
+        XCTAssertEqual(tv.scrollOffset(withinBlock: top), offset, accuracy: 2)   // 和别的阅读位置测试一样 ±2：CI 上差 1 pt 的取整
     }
 
     /// touch 没有改内容：切过来之后存储不该报"文件被改过"（以前是假警报）
