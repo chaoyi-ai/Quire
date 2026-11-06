@@ -1,4 +1,5 @@
 import XCTest
+import os
 import AppKit
 @testable import Quire
 import QuireCore
@@ -1184,6 +1185,147 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(try disk(url), "one\r\ntwo\r\nthree\r\nfour\r\n")
     }
 
+    /// 文字没变、只有字节变了（dos2unix、加了 BOM、别的编辑器在归属块后面补了空行）：不用重载，但要记下磁盘上的这份，换行跟着磁盘走。
+    /// 以前修改时间留在旧值，接着打字就被问"已被其他程序修改"；选"仍要保存"还按 CRLF 写回去，把转换撤销了
+    func testExternalChangeOfOnlyTheBytesIsFollowed() async throws {
+        func external(_ data: Data, over a: Opened) throws {
+            try data.write(to: a.url, options: .atomic)
+            try touch(a.url)
+            XCTAssertEqual(a.doc.reloadFromDisk(), .current)
+            XCTAssertEqual(a.doc.fileModificationDate, try FileManager.default.attributesOfItem(atPath: a.url.path)[.modificationDate] as? Date, a.url.lastPathComponent)
+        }
+        let crlf = try await openBytes(Data("one\r\ntwo\r\n".utf8), named: "crlf.md")
+        crlf.doc.session.stopWatching()   // 只看这里调的：监视器晚到的事件不能替它补
+        try external(Data("one\ntwo\n".utf8), over: crlf)
+        try await typeAtEndAndAutosave("three\n", in: crlf)
+        XCTAssertEqual(try Data(contentsOf: crlf.url), Data("one\ntwo\nthree\n".utf8), "换行跟着磁盘走")
+
+        let bom = try await openBytes(Data("# bom\n".utf8), named: "bom.md")
+        bom.doc.session.stopWatching()
+        try external(Data([0xEF, 0xBB, 0xBF]) + Data("# bom\n".utf8), over: bom)
+        try await typeAtEndAndAutosave("more\n", in: bom)
+        XCTAssertEqual(MarkdownDocument.decode(try Data(contentsOf: bom.url))?.text, "# bom\nmore\n")
+
+        let signed = withAuthorship("# signed\n\nbody\n")
+        let a = try await openBytes(Data(signed.utf8), named: "signed.md")
+        a.doc.session.stopWatching()
+        try external(Data((signed + "\n").utf8), over: a)
+        try await typeAtEndAndAutosave("more\n", in: a)
+        XCTAssertEqual(Authorship.split(try disk(a.url)).body, "# signed\n\nbody\nmore\n")
+    }
+
+    /// 只采用了字节（dos2unix）之后打字，再来一次只 touch 的事件或 ⌘R：磁盘还是采用的那份，只是有未保存改动，不是冲突。
+    /// 不记下采用的字节的话按旧字节比对不上，当成冲突：⌘R 不问就存（应该响一声）
+    func testAdoptedBytesAreTheKnownDiskBytes() async throws {
+        let a = try await openBytes(Data("one\r\ntwo\r\n".utf8), named: "crlf.md")
+        a.doc.session.stopWatching()   // 只看这里调的：监视器晚到的事件不能替它补
+        try Data("one\ntwo\n".utf8).write(to: a.url, options: .atomic)
+        try touch(a.url)
+        XCTAssertEqual(a.doc.reloadFromDisk(), .current)
+        a.doc.replaceContents("one\ntwo\nthree\n")
+        try touch(a.url)
+        XCTAssertEqual(a.doc.reloadFromDisk(), .unsavedEdits, "磁盘上还是采用的那份")
+        XCTAssertFalse(a.doc.reloadCommand(), "⌘R 响一声，不存")
+        XCTAssertEqual(try Data(contentsOf: a.url), Data("one\ntwo\n".utf8))
+    }
+
+    /// 正文没变、归属块被外部删了或改了：不是"只有字节变了"，磁盘上的才是真相（没有注释块就是没有归属），要重载。
+    /// 以前当成没变、还记下了字节和修改时间，下次存储静默把 Quire 的旧归属块写回去，盖掉外部的改动
+    func testExternalChangeOfOnlyTheAuthorshipBlockIsReloaded() async throws {
+        let body = "# signed\n\nbody\n"
+        let stripped = try await openBytes(Data(withAuthorship(body).utf8), named: "stripped.md")
+        stripped.doc.session.stopWatching()   // 只看这里调的：监视器晚到的事件不能替它补
+        try Data(body.utf8).write(to: stripped.url, options: .atomic)
+        try touch(stripped.url)
+        XCTAssertEqual(stripped.doc.reloadFromDisk(), .reloaded)
+        XCTAssertNil(stripped.doc.authorship)
+        stripped.doc.replaceContents(body + "more\n")
+        let error = try await autosave(stripped.doc)
+        XCTAssertNil(error)
+        XCTAssertEqual(try disk(stripped.url), body + "more\n", "不把旧归属块写回去")
+
+        let theirs = Authorship(spans: [.init(author: "me", start: 0, length: 8)])
+        let changed = try await openBytes(Data(withAuthorship(body).utf8), named: "changed.md")
+        changed.doc.session.stopWatching()
+        try Data(theirs.embed(into: body).utf8).write(to: changed.url, options: .atomic)
+        try touch(changed.url)
+        XCTAssertEqual(changed.doc.reloadFromDisk(), .reloaded)
+        XCTAssertEqual(changed.doc.authorship?.spans, theirs.spans)
+        changed.doc.replaceContents(body + "more\n")
+        let error2 = try await autosave(changed.doc)
+        XCTAssertNil(error2)
+        let saved = Authorship.split(try disk(changed.url))
+        XCTAssertEqual(saved.body, body + "more\n")
+        XCTAssertEqual(saved.authorship?.spans, theirs.spans, "存的是磁盘上的那份归属")
+    }
+
+    /// 有未保存改动、文字没变、只是换了编码（iconv 转成 GB18030）：是冲突，由系统问。
+    /// 以前当成只有字节变了，记下了字节和修改时间、编码却没跟上，下次存储静默按 UTF-8 写回去
+    func testReencodingWithSameTextAndUnsavedEditsAsks() async throws {
+        let text = "# 中文笔记\n"
+        let a = try await openBytes(Data(text.utf8), named: "note.md")
+        a.doc.session.stopWatching()
+        a.doc.replaceContents(text)
+        XCTAssertTrue(a.doc.isDocumentEdited)
+        try text.data(using: gb18030)!.write(to: a.url, options: .atomic)
+        try touch(a.url)
+        XCTAssertEqual(a.doc.reloadFromDisk(), .conflict)
+        XCTAssertEqual(a.doc.encoding, .utf8, "问之前不动")
+        timerAutosave(a.doc)
+        try await answer(.revert, on: a.ws)
+        try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
+        XCTAssertEqual(a.doc.source, text)
+        XCTAssertEqual(a.doc.encoding, gb18030)
+        XCTAssertEqual(try Data(contentsOf: a.url), text.data(using: gb18030)!)
+    }
+
+    /// 同上，带著作归属块：正文、归属都一样，只是换了编码，有未保存改动也是冲突，不能当成只有字节变了
+    func testReencodingSignedFileWithSameTextAndUnsavedEditsAsks() async throws {
+        let signed = withAuthorship("# 中文笔记\n")
+        let a = try await openBytes(Data(signed.utf8), named: "signed.md")
+        a.doc.session.stopWatching()
+        a.doc.replaceContents(a.doc.source)
+        XCTAssertTrue(a.doc.isDocumentEdited)
+        try signed.data(using: gb18030)!.write(to: a.url, options: .atomic)
+        try touch(a.url)
+        XCTAssertEqual(a.doc.reloadFromDisk(), .conflict)
+        XCTAssertEqual(a.doc.encoding, .utf8, "问之前不动")
+    }
+
+    /// UTF-16 换了字节序（小端改写成大端，文字一样）也是换了编码：String.Encoding 两种都是 .utf16，存储只按一种字节序写。
+    /// 当成只有字节变了的话，有未保存改动时不问，下次存储静默把字节序换回去
+    func testUTF16ByteOrderChangeIsAReencoding() async throws {
+        let text = "# 你好\n"
+        let clean = try await openBytes(utf16(text), named: "clean.md")
+        clean.doc.session.stopWatching()
+        try utf16(text, bigEndian: true).write(to: clean.url, options: .atomic)
+        try touch(clean.url)
+        XCTAssertEqual(clean.doc.reloadFromDisk(), .reloaded)
+
+        let dirty = try await openBytes(utf16(text), named: "dirty.md")
+        dirty.doc.session.stopWatching()
+        dirty.doc.replaceContents(text)
+        XCTAssertTrue(dirty.doc.isDocumentEdited)
+        try utf16(text, bigEndian: true).write(to: dirty.url, options: .atomic)
+        try touch(dirty.url)
+        XCTAssertEqual(dirty.doc.reloadFromDisk(), .conflict)
+    }
+
+    /// 打开时归属块就对不上（已经提示过"著作归属标记已丢弃"），之后只有字节变了（别的编辑器在块后面补了空行）：内存里就是对不上时留下的那份，照样采用。
+    /// 当成归属被改了的话会重载、再弹一次提示，占掉窗口唯一的 sheet 位置
+    func testOnlyTheBytesOfAStaleAuthorshipBlockChangedIsFollowed() async throws {
+        let stale = withAuthorship("# a\n\nbody\n").replacingOccurrences(of: "body", with: "theirs")
+        let a = try await openBytes(Data(stale.utf8), named: "stale.md")
+        a.doc.session.stopWatching()
+        let notice = try await visibleSheet(on: a.ws)
+        a.ws.window?.endSheet(notice)
+        try Data((stale + "\n").utf8).write(to: a.url, options: .atomic)
+        try touch(a.url)
+        XCTAssertEqual(a.doc.reloadFromDisk(), .current)
+        XCTAssertNil(a.ws.window?.attachedSheet, "已经提示过了")
+        XCTAssertEqual(a.doc.fileModificationDate, try FileManager.default.attributesOfItem(atPath: a.url.path)[.modificationDate] as? Date)
+    }
+
     /// 外部改了又改回去（切分支再切回来）：每次都要跟上。比较用的字节不跟着更新的话，改回去时会被当成"没变"，文档停在中间那版，下次存储还会盖回磁盘
     func testExternalChangeAndBackIsFollowed() async throws {
         let a = try await openFile("a.md")
@@ -1221,6 +1363,39 @@ final class WorkspaceTests: XCTestCase {
         try Data(body.utf8).write(to: url)
         a.doc.reloadFromDisk()
         XCTAssertEqual(a.doc.source, body)
+    }
+
+    /// 修改时间和字节同一时刻取，先取时间再读字节：反过来的话，中间落下的那次写入记下了时间、字节却是上一版，下次存储把它静默盖掉。
+    /// 后台不停地原子替换文件（每版的修改时间各不相同，替换前就设好），主线程不停地重载：记下的修改时间永远不能比读到的那版新。顺序反过来时 1.5 s 内必中
+    func testRecordedModificationDateIsNeverNewerThanTheBytesRead() async throws {
+        let a = try await openFile("a.md")
+        a.doc.session.stopWatching()
+        // 每版的修改时间从整秒的未来开始：比打开时那版新，按纳秒存也不差
+        let url = a.url, base = Date(timeIntervalSince1970: (Date().timeIntervalSince1970 + 1000).rounded()), deadline = Date(timeIntervalSinceNow: 1.5)
+        let finished = OSAllocatedUnfairLock(initialState: false)
+        DispatchQueue.global().async {
+            let next = url.deletingLastPathComponent().appendingPathComponent(".next.md")
+            var version = 1
+            while Date() < deadline {
+                try? Data("# v\(version)\n".utf8).write(to: next)
+                try? FileManager.default.setAttributes([.modificationDate: base + Double(version)], ofItemAtPath: next.path)
+                rename(next.path, url.path)
+                version += 1
+            }
+            finished.withLock { $0 = true }
+        }
+        var checks = 0, caught = false
+        while !caught, !finished.withLock({ $0 }) {
+            a.doc.reloadFromDisk()
+            guard let version = Int(a.doc.source.dropFirst(3).dropLast()), let date = a.doc.fileModificationDate else { continue }   // 还是打开时那版
+            checks += 1
+            if date > base + Double(version) {
+                XCTFail("记下的修改时间是第 \(Int(date.timeIntervalSince(base))) 版的，读到的字节是第 \(version) 版")
+                caught = true
+            }
+        }
+        try await failingOnDeadlock { while !finished.withLock({ $0 }) { try await Task.sleep(for: .milliseconds(20)) } }   // tearDown 删目录之前停下
+        if !caught { XCTAssertGreaterThan(checks, 100, "后台替换和重载没交错起来，什么也没测到") }
     }
 
     /// 打开之后不能留着文件映射（NSDocument 给的 Data 可能是映射）：卷卸不掉，强行卸掉后再比较字节还会崩
@@ -1932,6 +2107,32 @@ final class WorkspaceTests: XCTestCase {
         try await answer(.revert, on: a.ws)
         try await failingOnDeadlock { while a.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) } }
         XCTAssertEqual(a.doc.source, "# theirs\n")
+    }
+
+    /// 开着的时候文件被换成了符号链接（dotfile 管理工具把它挪进仓库、原地留个链接）：和经链接打开一样，落到它指向的文件上。
+    /// 以前 fileURL 还是链接：外部修改按链接自己的修改时间看不出来，自动保存静默失败（"文件不存在"），改动只在内存里
+    func testFileReplacedBySymlinkWhileOpenSavesToTheFileItPointsTo() async throws {
+        let a = try await openFile("a.md")
+        a.doc.session.stopWatching()   // 只看这里调的：监视器晚到的事件会替没写对的地方补救
+        let fm = FileManager.default
+        try fm.createDirectory(at: tmp.appendingPathComponent("store"), withIntermediateDirectories: true)
+        let real = tmp.appendingPathComponent("store/a.md")
+        try fm.moveItem(at: a.url, to: real)
+        try symlink("a.md", to: "store/a.md")
+        XCTAssertEqual(a.doc.reloadFromDisk(), .current)
+        XCTAssertEqual(a.doc.fileURL?.path, real.resolvingSymlinksInPath().path, "NSDocument 拿到的是真实文件")
+        XCTAssertEqual(a.doc.fileModificationDate, try fm.attributesOfItem(atPath: real.path)[.modificationDate] as? Date, "修改时间是真实文件的，不是链接自己的")
+        XCTAssertEqual(a.doc.presentedURL?.standardizedFileURL, a.url.standardizedFileURL, "界面还是原来的名字")
+        XCTAssertEqual(a.ws.tab(for: a.doc)?.title, "a")
+
+        try "# theirs\n".write(to: real, atomically: true, encoding: .utf8)
+        XCTAssertEqual(a.doc.reloadFromDisk(), .reloaded, "外部修改按真实文件看")
+        a.doc.replaceContents("# mine\n")
+        let error = try await autosave(a.doc)
+        XCTAssertNil(error)
+        XCTAssertFalse(a.doc.isDocumentEdited)
+        XCTAssertEqual(try disk(real), "# mine\n")
+        XCTAssertEqual(try fm.destinationOfSymbolicLink(atPath: a.url.path), "store/a.md", "链接还是原来的链接")
     }
 
     /// 界面还是用户点的那个：链接指向根外时，侧栏不能跳到那个文件夹，也不另开窗口

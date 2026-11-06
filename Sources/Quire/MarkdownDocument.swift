@@ -450,6 +450,12 @@ class MarkdownDocument: NSDocument {
     /// 有未保存改动时不覆盖、不写盘，也不打断：修改时间留在旧值，下一次存储被 NSDocument 拦下，由系统问一次（DESIGN §9）
     @discardableResult
     func reloadFromDisk() -> ReloadResult {
+        // 开着的时候文件被换成了符号链接（dotfile 管理工具把它挪进仓库、原地留个链接）：和经链接打开一样，落到它指向的文件上（DESIGN §9）。
+        // 不换的话修改时间是链接自己的，存储走 replaceItem 报"文件不存在"，自动保存静默失败
+        if let url = fileURL, case let file = QuireDocumentController.followingSymlink(url), file != url {
+            if presentedURL == url { linkURL = url }   // 界面还叫原来的名字；本来就是经链接打开的，还是那个链接
+            fileURL = file
+        }
         guard let disk = readDisk() else { return .unreadable }
         let (known, writing) = diskDataLock.withLock { (knownDiskData, writingDiskData) }
         // 先按字节比
@@ -464,17 +470,38 @@ class MarkdownDocument: NSDocument {
         // 被别的工具换了编码：文字没变也要跟上，否则下次存储又按旧编码写回去。有未保存改动就往下走，由系统问
         if decoded.encoding != encoding, !isDocumentEdited { applyReloaded(decoded, disk); return .reloaded }
         let raw = decoded.text
-        guard raw != sourceForDisk else { return .current }
+        // 编码不同只会在有未保存改动时到这里：文字一样也是冲突，由系统问；采用了字节的话下次存储就静默按旧编码写回去。
+        // UTF-16 换了字节序（BOM）也算换了编码：两种都是 .utf16，存储只按一种字节序写；干净的文档往下走就是重载
+        let sameEncoding = decoded.encoding == encoding && (encoding != .utf16 || known?.prefix(2) == disk.data.prefix(2))
+        guard raw != sourceForDisk || !sameEncoding else { return adoptDiskBytes(raw, disk) }
         let s = raw.contains("\r\n") ? raw.replacingOccurrences(of: "\r\n", with: "\n") : raw
-        guard s != source else { return .current }
-        // 自己刚写盘的（正文相同、只是多了归属块 / 尾换行）也不算外部修改
-        if authorship != nil || s.contains(Authorship.marker) {
+        guard s != source || !sameEncoding || !diskAuthorshipMatches(s) else { return adoptDiskBytes(raw, disk) }
+        // 自己刚写盘的（正文相同、只是多了归属块 / 尾换行）也不算外部修改；归属块被外部改了或删了不算（磁盘上的才是真相，见 splitAuthorship）
+        if sameEncoding, authorship != nil || s.contains(Authorship.marker) {
             let diskBody = Authorship.split(s).body
-            if diskBody == source || diskBody == source + "\n" { return .current }
+            if diskBody == source || diskBody == source + "\n", diskAuthorshipMatches(s) { return adoptDiskBytes(raw, disk) }
         }
         if isDocumentEdited { return .conflict }
         applyReloaded(decoded, disk)
         return .reloaded
+    }
+
+    /// 磁盘上的归属和内存里的一样：没有注释块 ⇔ 没有要存的归属，有的话区间和作者表都一样（`s` 已统一成 LF）。
+    /// 哈希对不上的块：读入时内存里就是 split 给的那份（只剩作者表），还一样就是没变；否则只动字节也重载，再弹一次"著作归属标记已丢弃"
+    private func diskAuthorshipMatches(_ s: String) -> Bool {
+        let mine = authorship?.isWorthPersisting == true ? authorship : nil
+        guard s.contains(Authorship.marker) else { return mine == nil }
+        let (_, theirs, mismatch) = Authorship.split(s)
+        return mismatch ? theirs == authorship : theirs == mine
+    }
+
+    /// 正文、归属、编码都没变，只是字节变了（dos2unix、加了 BOM、归属块后面补了空行）：不用重载，但磁盘上的这份要记下，换行跟着磁盘走。
+    /// 不记的话修改时间留在旧值，接着打字系统就问"已被其他程序修改"；选"仍要保存"还按旧换行写回去，把转换撤销了
+    private func adoptDiskBytes(_ raw: String, _ disk: (data: Data, date: Date)) -> ReloadResult {
+        diskDataLock.withLock { knownDiskData = disk.data }
+        fileModificationDate = disk.date
+        usesCRLF = raw.contains("\r\n")
+        return .current
     }
 
     /// ⌘R：用户自己要的，和监视器不一样。和未保存改动冲突就立刻问（走存储，系统问的就是那一问），之前问过也问；做不到要有回应。返回 false = 做不到，响过一声
