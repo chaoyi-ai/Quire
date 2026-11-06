@@ -855,6 +855,50 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertTrue(h.view.string.contains("Btyped"))
     }
 
+    /// 块 A 里加了一行、没离开块就把标签搬走：新窗口要有这一行，点 B 打开的要是 B 自己的源码、打的字写在 B 上。
+    /// 以前搬走不提交：新窗口的阅读视图拿到的是打字之前的渲染，没跟上的行数变化留在旧视图里，B 打开的是空行
+    private func assertLineAddedInABlockFollowsTheTab(_ doc: MarkdownDocument, from old: WorkspaceWindowController) async throws {
+        let ws = try XCTUnwrap(doc.workspace)
+        XCTAssertFalse(ws === old)
+        ws.select(try XCTUnwrap(ws.tab(for: doc)))
+        let view = try XCTUnwrap(ws.readerViewController.textView as? HybridTextView)
+        XCTAssertEqual(doc.source, "A\nsecond\n\nB\n")
+        // 重渲染还没到：块表是旧的，进得去的话也要是 B 自己的行
+        if view.activate(block: 1) { XCTAssertEqual(view.activeSource, "B\n", "重渲染到之前"); view.deactivate(commit: false) }
+        for _ in 0..<100 where !view.string.contains("second") { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertTrue(view.string.contains("second"), "新窗口要显示加的那一行")
+        XCTAssertTrue(view.activate(block: 1))
+        XCTAssertEqual(view.activeSource, "B\n")
+        type("!", in: view)
+        XCTAssertEqual(doc.source, "A\nsecond\n\nB!\n")
+    }
+
+    func testLineAddedInABlockSurvivesMovingTheTabToANewWindow() async throws {
+        let h = try await openHybrid("A\n\nB\n")
+        _ = try await openFile("b.md", in: h.ws)
+        h.ws.select(try XCTUnwrap(h.ws.tab(for: h.doc)))
+        XCTAssertTrue(h.view.activate(block: 0))
+        type("\nsecond", in: h.view)
+        h.ws.moveTabToNewWindow(nil)
+        try await assertLineAddedInABlockFollowsTheTab(h.doc, from: h.ws)
+    }
+
+    func testLineAddedInABlockSurvivesMergingWindows() async throws {
+        let h = try await openHybrid("A\n\nB\n")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("quire-other-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let x = dir.appendingPathComponent("x.md")
+        try external("# x\n", to: x)
+        let opened = await open(x, in: nil, ephemeral: false)
+        let other = try XCTUnwrap(opened?.workspace)
+        XCTAssertFalse(other === h.ws)
+        XCTAssertTrue(h.view.activate(block: 0))
+        type("\nsecond", in: h.view)
+        other.mergeAllWindows(nil)
+        try await assertLineAddedInABlockFollowsTheTab(h.doc, from: h.ws)
+    }
+
     // MARK: 外部修改
 
     /// touch、Finder 标签、备份工具只动属性，监视器同样会响：内容没变就不是外部修改，不能问"已被其他程序修改，要不要丢弃改动"

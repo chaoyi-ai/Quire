@@ -81,7 +81,11 @@ final class ReaderViewController: NSViewController, NSTextViewDelegate {
         session.onRendered = { [weak self] doc, style, reason, diff in
             self?.apply(doc, style: style, reason: reason, diff: diff)
         }
-        if let r = session.rendered { apply(r, style: session.style, reason: .opened, diff: nil) }
+        if let r = session.rendered {
+            apply(r, style: session.style, reason: .opened, diff: nil)
+            // 源码比这份渲染新（标签刚从别的窗口搬来，提交的重渲染还在路上）：块表的行号不准，到之前不进源码态
+            if session.parsedSource != session.source { (textView as? HybridTextView)?.sourceWasReplaced(rerenderPending: true) }
+        }
     }
 
     deinit {

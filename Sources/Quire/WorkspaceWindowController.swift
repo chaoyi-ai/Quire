@@ -352,6 +352,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     /// 把标签从工作区摘掉但不关文档（移到别的窗口 / 关闭前）：选中相邻的
     func detach(_ tab: DocumentTab, catchUp: Bool = true) {
         guard let i = tabs.firstIndex(where: { $0 === tab }) else { return }
+        // 混合模式块里打的字还没提交：先提交（重解析 + 重渲染）。否则别的窗口的阅读视图拿到的是打字之前的渲染，没跟上的行数变化也留在这边的视图里
+        if tab.reader.isViewLoaded, let hybrid = tab.reader.textView as? HybridTextView { hybrid.deactivate(commit: true) }
         tabs.remove(at: i)
         tab.fileURLObserver = nil
         tab.document.workspace = nil
