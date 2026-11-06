@@ -102,13 +102,18 @@ enum URLScheme {
     }
 
     /// 往没打开的文件追加：用打开文件时的解码器判断编码，按原编码只写新文字，旧字节一个不动。
-    /// 原编码装不下，或者追加之后读回来不是这些字（会被认成别的编码）：和已打开的文档存储时一样，整个文件改存 UTF-8，不留混合编码
+    /// 原编码装不下，或者追加之后读回来不是这些字（会被认成别的编码）：和已打开的文档存储时一样（同一个 `MarkdownDocument.encode`），整个文件改存 UTF-8，不留混合编码。
+    /// 文件尾有著作归属注释块：和已打开的文档一样插在注释块前面、哈希重算，整个文件按存储的规矩改写（大端 UTF-16 变成本机字节序，UTF-8 的 BOM 丢掉）
     static func appendToClosedFile(_ text: String, at url: URL) throws {
         // 先拿写权限：只读、锁定的文件在这里就报错，不靠下面的替换来拦（macOS 27 的 replaceItemAt 也会拒绝，旧系统没验证；.atomic 写不拒绝，rename 只看目录）
         let h = try FileHandle(forUpdating: url)
         let data = try h.readToEnd() ?? Data()
         guard let old = MarkdownDocument.decode(data) else {
             throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownStringEncodingError, userInfo: [NSLocalizedDescriptionKey: L("无法识别文件编码")])
+        }
+        if let whole = appendingBeforeAuthorship(text, to: old.text) {
+            try h.close()
+            return try rewrite(url, with: whole, encoding: old.encoding)
         }
         // 按字节比：Swift 把 "\r\n" 当一个字符，hasSuffix("\n") 不成立
         let endsLine = old.text.isEmpty || old.text.utf8.last == 0x0A
@@ -124,13 +129,41 @@ enum URLScheme {
             return
         }
         try h.close()
-        // 真文件的路径：replaceItemAt 对符号链接报 ENOENT，.atomic 写会把链接换成普通文件、真文件不动。权限、扩展属性由 replaceItemAt 带过去
+        try rewrite(url, with: whole, encoding: old.encoding)
+    }
+
+    /// 和打开、存储文档一样处理注释块：先统一成 LF 再拆（read → normalizeLineEndings → splitAuthorship），正文后面追加（replaceContents），再拼回去、还原 CRLF（sourceForDisk）。
+    /// 没有注释块、打开时也不拆（`shouldSplitAuthorship`，64 MB 以上）、注释块解析不了：返回 nil，只在文件尾追加。
+    /// 解析不了的"注释块"可能是正文里提到了标记（最后一行是别的注释），拆剩的正文缺了后半截。
+    /// 哈希对不上（正文被外部改过）：和打开的文档一样，区间丢掉，照样插在注释块前面；加过作者的留着作者表，没加过的不再写注释块（`isWorthPersisting`）。只追加的话新文字落在注释块后面，下次打开整个注释块成了正文。
+    /// 文件没打开，不能像打开的文档那样提示一次：区间是悄悄丢掉的
+    private static func appendingBeforeAuthorship(_ text: String, to old: String) -> String? {
+        // 标记里没有 CR / LF：先在原文里找，没有就不必为统一换行整篇复制一遍
+        guard old.contains(Authorship.marker) else { return nil }
+        let crlf = old.contains("\r\n")
+        let lf = crlf ? old.replacingOccurrences(of: "\r\n", with: "\n") : old
+        guard MarkdownDocument.shouldSplitAuthorship(lf), case let (body, a?, _, true) = Authorship.splitReportingParse(lf) else { return nil }
+        var s = body
+        if !s.isEmpty, !s.hasSuffix("\n") { s += "\n" }
+        s += text
+        var authorship = a
+        // 和 replaceContents 一样维护区间。只在正文尾追加，区间都在插入点前面，现在不会变；留着和打开的路径一致
+        if !authorship.spans.isEmpty { authorship.realign(from: body, to: s, author: nil) }
+        let whole = authorship.embed(into: s)
+        return crlf ? whole.replacingOccurrences(of: "\n", with: "\r\n") : whole
+    }
+
+    /// 整个文件换成新内容。真文件的路径：replaceItemAt 对符号链接报 ENOENT，.atomic 写会把链接换成普通文件、真文件不动。权限、扩展属性由 replaceItemAt 带过去
+    private static func rewrite(_ url: URL, with whole: String, encoding: String.Encoding) throws {
+        guard let (bytes, _) = MarkdownDocument.encode(whole, preferring: encoding) else {
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteInapplicableStringEncodingError)
+        }
         let target = url.resolvingSymlinksInPath()
         let fm = FileManager.default
         let dir = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: target, create: true)
         defer { try? fm.removeItem(at: dir) }
         let replacement = dir.appendingPathComponent(target.lastPathComponent)
-        try Data(whole.utf8).write(to: replacement)
+        try bytes.write(to: replacement)
         _ = try fm.replaceItemAt(target, withItemAt: replacement)
     }
 

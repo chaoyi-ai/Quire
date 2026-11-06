@@ -312,6 +312,13 @@ class MarkdownDocument: NSDocument {
         return nil
     }
 
+    /// 文字 → 字节，`decode` 的反方向：存储、往没打开的文件追加时改写整个文件都走这里。
+    /// 原编码装不下（Latin-1 文件里打了个中文），或者写下去读回来不是这些字（`Señor` 的文件打了 `INFORMAÇÃO`，下次被认成 GB18030）：改用 UTF-8。UTF-8 优先解，一定读得回来
+    nonisolated static func encode(_ text: String, preferring encoding: String.Encoding) -> (data: Data, encoding: String.Encoding)? {
+        if encoding != .utf8, let d = text.data(using: encoding), decode(d)?.text == text { return (d, encoding) }
+        return text.data(using: .utf8).map { ($0, .utf8) }
+    }
+
     /// 字节里有没有西文 Latin-1 几乎不会出现的序列：GB2312 的符号区和一级汉字（首字节 A1–A9 / B0–D7，尾字节 ≥ A1），或者四字节序列。
     /// 只看"解得开"分不出来：重音字母后面跟字母也是合法的 GB18030（Señor → Se駉r，德语几乎都这样）。
     /// 代价：完全没有常用字的 GBK 短文（這個）会被当成 Latin-1，显示成乱码
@@ -353,10 +360,15 @@ class MarkdownDocument: NSDocument {
         source = source.replacingOccurrences(of: "\r\n", with: "\n")
     }
 
+    /// 要不要找著作归属注释块（`source` 已统一成 LF）：64 MB 以上的不拆，整个算正文。打开和往没打开的文件追加（`URLScheme.appendingBeforeAuthorship`）共用这一条
+    nonisolated static func shouldSplitAuthorship(_ source: String) -> Bool {
+        source.utf8.count < 64 * 1024 * 1024 && source.contains(Authorship.marker)
+    }
+
     /// 把文件尾的著作归属注释块从 `source` 里拆出来
     nonisolated private func splitAuthorship() {
         // 磁盘上的内容是唯一真相：没有注释块就是没有归属（外部工具可能把它删了；留着旧区间只会错位）
-        guard source.utf8.count < 64 * 1024 * 1024, source.contains(Authorship.marker) else { authorship = nil; authorshipMismatch = false; return }
+        guard Self.shouldSplitAuthorship(source) else { authorship = nil; authorshipMismatch = false; return }
         let (body, a, mismatch) = Authorship.split(source)
         source = body
         authorship = a
@@ -371,12 +383,11 @@ class MarkdownDocument: NSDocument {
 
     /// 只序列化：这时还没写，不能算磁盘上的内容（只把字节交给进行中的那次写盘，writeSafely 成功才转正）。`nonisolated`：写盘可能不在主线程
     nonisolated override func data(ofType typeName: String) throws -> Data {
-        let source = sourceForDisk
-        // 原编码装不下新内容（Latin-1 文件里打了个中文）：改用 UTF-8，并记住——磁盘上已经是 UTF-8 了，之后都按它写
-        if source.data(using: encoding) == nil { encoding = .utf8 }
-        guard let d = source.data(using: encoding) ?? source.data(using: .utf8) else {
+        // 改用 UTF-8 时要记住：磁盘上已经是 UTF-8 了，之后都按它写
+        guard let (d, used) = Self.encode(sourceForDisk, preferring: encoding) else {
             throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteInapplicableStringEncodingError)
         }
+        encoding = used
         diskDataLock.withLock { if isWritingDisk { writingDiskData = d } }
         return d
     }

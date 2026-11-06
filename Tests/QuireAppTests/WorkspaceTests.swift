@@ -1514,6 +1514,17 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(a.doc.source, "café au lait\n中")
     }
 
+    /// 装得下，但存下去读回来是别的编码（Ç Ã 的字节落在 GB18030 的常用区）：以前照 Latin-1 写，重新打开、复原都是 Se駉r。和往没打开的文件追加一样改存 UTF-8
+    func testLatin1SaveThatWouldReadAsAnotherEncodingSwitchesToUTF8() async throws {
+        let a = try await openBytes("Señor\n".data(using: .isoLatin1)!)
+        a.doc.session.stopWatching()
+        try await typeAtEndAndAutosave("INFORMAÇÃO", in: a)
+        XCTAssertEqual(a.doc.encoding, .utf8)
+        XCTAssertEqual(try Data(contentsOf: a.url), Data("Señor\nINFORMAÇÃO".utf8))
+        // 按磁盘字节重新解：reloadFromDisk 见字节和刚存的一样就不解，测不出来
+        XCTAssertEqual(MarkdownDocument.decode(try Data(contentsOf: a.url))?.text, "Señor\nINFORMAÇÃO")
+    }
+
     func testUTF16WithBOMOpensAndStaysUTF16() async throws {
         let text = "# 标题 😀\n\nbody\n"
         for (name, bigEndian) in [("le.md", false), ("be.md", true)] {
@@ -1527,14 +1538,16 @@ final class WorkspaceTests: XCTestCase {
         }
     }
 
-    /// BOM 后面不是完整的 UTF-16（奇数长度、孤立代理项）：不能照 UTF-16 解，那样最后一个字节存一次就没了
+    /// BOM 后面不是完整的 UTF-16（奇数长度、孤立代理项）：不能照 UTF-16 解，那样最后一个字节存一次就没了。
+    /// 奇数长度的再多一个字节就成了完整的 UTF-16，照原样写下次就解成「# a砊」：和往没打开的文件追加一样改存 UTF-8
     func testBrokenUTF16AfterBOMKeepsEveryByte() async throws {
-        let samples = [("odd", bytes("fffe2300200061000a")), ("lone-surrogate", bytes("fffe230000d820006100")), ("odd-be", bytes("feff002300200a"))]
-        for (name, data) in samples {
+        let odd = bytes("fffe2300200061000a"), oddBE = bytes("feff002300200a"), lone = bytes("fffe230000d820006100")
+        let samples = [("odd", odd, Data((String(data: odd, encoding: .isoLatin1)! + "x").utf8)), ("lone-surrogate", lone, lone + Data("x".utf8)), ("odd-be", oddBE, Data((String(data: oddBE, encoding: .isoLatin1)! + "x").utf8))]
+        for (name, data, expected) in samples {
             let a = try await openBytes(data, named: "\(name).md")
             XCTAssertNotEqual(a.doc.encoding, .utf16, name)
             try await typeAtEndAndAutosave("x", in: a)
-            XCTAssertEqual(try Data(contentsOf: a.url), data + Data("x".utf8), name)
+            XCTAssertEqual(try Data(contentsOf: a.url), expected, name)
         }
     }
 
@@ -1792,6 +1805,53 @@ final class WorkspaceTests: XCTestCase {
         try await assertOpens("broken.md", as: expected, encoding: .utf8)
     }
 
+    /// 文件尾有著作归属注释块：插在注释块前面，哈希跟着正文重算。以前写在注释块后面，下次打开注释块成了正文，归属也没了
+    func testAppendToClosedFileWithAuthorshipInsertsBeforeTheTrailer() async throws {
+        let body = "# 标题\n\n我写的\n"
+        let a = Authorship(spans: [Authorship.Span(author: Authorship.me.id, start: 6, length: 3)])
+        for (name, crlf) in [("authorship.md", false), ("authorship-crlf.md", true)] {
+            var old = a.embed(into: body), expected = a.embed(into: body + "追加")
+            if crlf { old = old.replacingOccurrences(of: "\n", with: "\r\n"); expected = expected.replacingOccurrences(of: "\n", with: "\r\n") }
+            XCTAssertEqual(try appendWithoutOpening("追加", to: Data(old.utf8), named: name), Data(expected.utf8), name)
+            let opened = try await openFile(name)
+            XCTAssertEqual(opened.doc.source, body + "追加\n", "\(name)：注释块前面补的换行算正文（哈希算的就是它）")
+            XCTAssertEqual(opened.doc.authorship?.spans, a.spans, name)
+            XCTAssertFalse(opened.doc.authorshipMismatch, name)
+        }
+    }
+
+    /// 正文里提到标记、最后一行是别的注释：拆出来的"注释块"解析不了，可能根本不是注释块，不能拿拆剩的正文改写（以前「更多正文」整段没了）。只在文件尾多新字节
+    func testAppendToClosedFileWithUnparsableTrailerOnlyAddsTheNewBytes() throws {
+        let mentions = Data("# 格式\n\n注释块以 <!-- quire-authorship 开头。\n\n更多正文\n<!-- end -->\n".utf8)
+        XCTAssertEqual(try appendWithoutOpening("追加", to: mentions, named: "mentions.md"), mentions + Data("追加".utf8))
+    }
+
+    /// 注释块解析得了、哈希对不上（正文被外部改过）：和文档开着时一样插在注释块前面，区间丢掉、作者表留着。
+    /// 以前只在文件尾追加，新文字落在注释块后面：下次打开整个注释块成了正文，不提示对不上，加过的作者也没了
+    func testAppendToClosedFileWithMismatchedTrailerMatchesTheOpenDocument() async throws {
+        var a = Authorship(spans: [Authorship.Span(author: Authorship.me.id, start: 0, length: 1)])
+        a.addAuthor(named: "Editor")
+        let old = Data(a.embed(into: "a\n").replacingOccurrences(of: "a\n\n<!--", with: "b\n\n<!--").utf8)
+        let closed = try appendWithoutOpening("追加", to: old, named: "edited-closed.md")
+        let opened = try await openBytes(old, named: "edited-open.md")
+        try await failingOnDeadlock {
+            XCTAssertTrue(URLScheme.appendText("追加", to: opened.url, external: false))
+            while opened.doc.isDocumentEdited { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        XCTAssertEqual(closed, try Data(contentsOf: opened.url))
+        XCTAssertEqual(closed, Data(Authorship(authors: a.authors, spans: []).embed(into: "b\n追加").utf8))
+    }
+
+    /// 64 MB 以上的文件打开时不拆注释块（整个算正文）：没打开时追加也照这个规矩，只在文件尾多新字节，不插到注释块前面重算哈希。
+    /// 注释块从小样本上借，哈希换成大正文的：对不上的也会拆（插在前面），那就测不出是不是 64 MB 这一条拦下的
+    func testAppendToClosedHugeFileWithAuthorshipTreatsTheTrailerAsBody() throws {
+        let body = Data(repeating: UInt8(ascii: "a"), count: 64 * 1024 * 1024) + Data("\n".utf8)
+        let small = Authorship(spans: [Authorship.Span(author: Authorship.me.id, start: 0, length: 1)]).embed(into: "a\n")
+        let trailer = small.dropFirst(2).replacingOccurrences(of: "hash=\(Authorship.hash("a\n"))", with: "hash=\(Authorship.hash(String(decoding: body, as: UTF8.self)))")
+        let old = body + Data(trailer.utf8)
+        XCTAssertEqual(try appendWithoutOpening("追加", to: old, named: "huge.md"), old + Data("追加".utf8))
+    }
+
     /// UTF-8 文件还是只多新字节；Swift 里 "\r\n" 是一个字符，hasSuffix("\n") 不成立，不能因此多补一个换行
     func testAppendToClosedUTF8FileOnlyAddsTheNewBytes() async throws {
         let bom = bytes("efbbbf")
@@ -1811,8 +1871,15 @@ final class WorkspaceTests: XCTestCase {
         }
     }
 
-    /// 同样的字节追加同样的文字，文档开着和没开着，磁盘上要一样（大端 UTF-16 例外：存储一直按本机字节序写，没打开时只追加，字节序不变）
+    /// 同样的字节追加同样的文字，文档开着和没开着，磁盘上要一样。
+    /// 有注释块的文件没打开时也整个改写，和存储一样：大端 UTF-16 变成本机字节序、UTF-8 的 BOM 丢掉（没有注释块的大端 UTF-16 例外：存储按本机字节序写，没打开时只追加，字节序不变）
     func testAppendGivesTheSameBytesWhetherTheFileIsOpenOrNot() async throws {
+        // 别的编辑器把注释块贴在正文最后一行后面（哈希照贴上后的正文算）：拆出来的正文没有尾换行，要先补一个再追加
+        let glued = Authorship(spans: [Authorship.Span(author: Authorship.me.id, start: 0, length: 1)]).embed(into: "b\n")
+            .replacingOccurrences(of: "b\n\n\(Authorship.marker) v1 hash=\(Authorship.hash("b\n"))", with: "b\(Authorship.marker) v1 hash=\(Authorship.hash("b"))")
+        XCTAssertTrue(glued.hasPrefix("b\(Authorship.marker)"))
+        let mismatched = "b" + Authorship(spans: [Authorship.Span(author: Authorship.me.id, start: 0, length: 1)]).embed(into: "a\n").dropFirst()
+        XCTAssertEqual(try appendWithoutOpening("追加", to: Data(mismatched.utf8), named: "mismatched.md"), Data("b\n追加".utf8))
         let samples: [(old: Data, text: String)] = [
             (bytes(gbkNoteBytes), "追加"),
             ("# 中文标题".data(using: gb18030)!, "😀"),
@@ -1822,6 +1889,17 @@ final class WorkspaceTests: XCTestCase {
             (utf16("# 标题\n"), "x"),
             (Data("a".utf8), "中"),
             (Data("a\r\n".utf8), "中"),
+            ("Señor\n".data(using: .isoLatin1)!, "INFORMAÇÃO"),
+            (Data(Authorship(spans: [Authorship.Span(author: Authorship.me.id, start: 0, length: 1)]).embed(into: "a\n").utf8), "中"),
+            // 有注释块要整个改写：还按原编码写，不是一律 UTF-8
+            (Authorship(spans: [Authorship.Span(author: Authorship.me.id, start: 0, length: 2)]).embed(into: "中文标题\n").data(using: gb18030)!, "追加"),
+            (utf16(Authorship(spans: [Authorship.Span(author: Authorship.me.id, start: 0, length: 2)]).embed(into: "# 标题\n")), "x"),
+            (utf16(Authorship(spans: [Authorship.Span(author: Authorship.me.id, start: 0, length: 2)]).embed(into: "# 标题\n"), bigEndian: true), "x"),
+            (bytes("efbbbf") + Data(Authorship(spans: [Authorship.Span(author: Authorship.me.id, start: 0, length: 1)]).embed(into: "a\n").utf8), "中"),
+            (Data(glued.utf8), "中"),
+            // 哈希对不上（正文被外部改过）、没加过作者：区间丢掉，注释块不写了
+            (Data(mismatched.utf8), "追加"),
+            (Data(mismatched.replacingOccurrences(of: "\n", with: "\r\n").utf8), "追加"),
         ]
         for (i, s) in samples.enumerated() {
             let closed = try appendWithoutOpening(s.text, to: s.old, named: "closed-\(i).md")

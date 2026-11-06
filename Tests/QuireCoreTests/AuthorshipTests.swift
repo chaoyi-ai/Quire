@@ -78,6 +78,21 @@ final class AuthorshipTests: XCTestCase {
         XCTAssertEqual(b2, "x\n"); XCTAssertTrue(m2); XCTAssertEqual(p2?.spans.count, 0)
     }
 
+    /// `parsed` 分开两种 mismatch：JSON 解得开、只是哈希对不上（是真注释块，作者表留着），和解不开（可能根本不是注释块）
+    func testSplitReportingParseTellsUnparsableFromHashMismatch() {
+        var a = Authorship(spans: [.init(author: "me", start: 0, length: 1)])
+        a.addAuthor(named: "Editor")
+        let tampered = a.embed(into: "a\n").replacingOccurrences(of: "a\n\n<!--", with: "b\n\n<!--")
+        let m = Authorship.splitReportingParse(tampered)
+        XCTAssertEqual(m.body, "b\n"); XCTAssertTrue(m.mismatch); XCTAssertTrue(m.parsed)
+        XCTAssertEqual(m.authorship?.authors.last?.name, "Editor"); XCTAssertEqual(m.authorship?.spans, [])
+        let mentions = Authorship.splitReportingParse("注释块以 <!-- quire-authorship 开头。\n\n更多正文\n<!-- end -->\n")
+        XCTAssertTrue(mentions.mismatch); XCTAssertFalse(mentions.parsed)
+        let ok = Authorship.splitReportingParse(a.embed(into: "a\n"))
+        XCTAssertFalse(ok.mismatch); XCTAssertTrue(ok.parsed)
+        XCTAssertFalse(Authorship.splitReportingParse("plain\n").parsed)
+    }
+
     func testNoSpansNoTrailer_andPlainFilesUntouched() {
         XCTAssertEqual(Authorship().embed(into: "x\n"), "x\n")
         let (b, a, m) = Authorship.split("plain <!-- comment -->\n")

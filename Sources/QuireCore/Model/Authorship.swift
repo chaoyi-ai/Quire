@@ -115,10 +115,16 @@ public struct Authorship: Codable, Equatable, Sendable {
 
     /// 把正文与注释块分开。`mismatch`：有注释块但哈希对不上（正文被外部改过）→ 返回的 authorship 只保留作者表、区间清空
     public static func split(_ source: String) -> (body: String, authorship: Authorship?, mismatch: Bool) {
-        guard let r = source.range(of: marker, options: .backwards) else { return (source, nil, false) }
+        let r = splitReportingParse(source)
+        return (r.body, r.authorship, r.mismatch)
+    }
+
+    /// 同 `split`，多一个 `parsed`：注释块的 JSON 解得开（哈希对不上也算）。解不开的"注释块"可能根本不是注释块（正文里提到了标记、最后一行是别的注释），拆剩的正文缺了后半截
+    public static func splitReportingParse(_ source: String) -> (body: String, authorship: Authorship?, mismatch: Bool, parsed: Bool) {
+        guard let r = source.range(of: marker, options: .backwards) else { return (source, nil, false, false) }
         // 别的编辑器可能在文件尾补了空行
         let tail = source[r.lowerBound...].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard tail.hasSuffix("-->") else { return (source, nil, false) }
+        guard tail.hasSuffix("-->") else { return (source, nil, false, false) }
         var body = String(source[..<r.lowerBound])
         if body.hasSuffix("\n\n") { body.removeLast() }   // embed 时在正文后加的那个空行
         // 首行：<!-- quire-authorship v1 hash=XXXX
@@ -127,13 +133,13 @@ public struct Authorship: Codable, Equatable, Sendable {
         let hash = header.split(separator: " ").first { $0.hasPrefix("hash=") }.map { String($0.dropFirst(5)) }
         let json = lines.count >= 3 ? lines[1..<(lines.count - 1)].joined(separator: "\n").replacingOccurrences(of: "-->", with: "") : ""
         // 注释块在但解析不了（版本 / 手改坏了）：当"对不上"处理——丢区间、提示，而不是悄悄把块吞掉
-        guard let data = json.data(using: .utf8), let a = try? JSONDecoder().decode(Authorship.self, from: data) else { return (body, Authorship(), true) }
+        guard let data = json.data(using: .utf8), let a = try? JSONDecoder().decode(Authorship.self, from: data) else { return (body, Authorship(), true, false) }
         if let hash, hash != Self.hash(body) {
-            return (body, Authorship(authors: a.authors, spans: []), true)
+            return (body, Authorship(authors: a.authors, spans: []), true, true)
         }
         var fixed = a
         fixed.normalize(textLength: (body as NSString).length)
-        return (body, fixed, false)
+        return (body, fixed, false, true)
     }
 
     /// 有没有值得存的东西：区间，或改过的作者表（添加过作者）。都没有就不往干净文件里塞注释块

@@ -239,6 +239,7 @@ enum Block: Hashable {
 - 区间按 UTF-16 偏移，与 NSTextView 一致；在 `NSTextStorageDelegate.willProcessEditing`（只看 `.editedCharacters`）处按 `(editedRange, delta)` 增量维护，撤销 / 重做 / 程序插入都经过这里；`setSource` 整体替换不经过（那是磁盘重载，重新 split）
 - 哈希对不上（正文被外部改过）：区间整体丢弃、作者表保留、提示一次——错位的归属比没有更糟
 - 没有区间就不写注释块：不往干净文件里塞东西
+- 往没打开的文件追加（`quire://append`、快捷指令"追加"）也插在注释块前面、重算哈希，和开着的文档存储一样（`URLScheme.appendingBeforeAuthorship`）：整个文件改写，大端 UTF-16 变成本机字节序、UTF-8 的 BOM 丢掉。哈希对不上时也一样插在前面（区间丢掉；加过作者的留着作者表，没加过的不再写注释块），但文件没打开、没法提示，区间是悄悄丢的；注释块解析不了时不改写，只在文件尾追加
 
 ## 7.5 资源 bundle 与打印管线（2026-08 review 后补）
 
